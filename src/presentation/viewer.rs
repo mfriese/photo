@@ -107,7 +107,10 @@ fn viewer_controls(
     use crate::commands::Command;
     let mut actions = ViewerActions::default();
     egui::Frame::group(ui.style())
-        .inner_margin(10.)
+        .fill(crate::theme::CANVAS)
+        .stroke(egui::Stroke::new(1_f32, crate::theme::BORDER))
+        .corner_radius(6)
+        .inner_margin(6.)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             let cell_width =
@@ -116,42 +119,42 @@ fn viewer_controls(
             ui.horizontal(|ui| {
                 actions.previous = ui
                     .add_enabled_ui(position.is_some_and(|p| p > 0), |ui| {
-                        ui.add_sized([cell_width, 30.], button("← Zurück"))
+                        ui.add_sized([cell_width, 28.], button("← Zurück"))
                     })
                     .inner
                     .on_hover_text("Vorheriges Medium · Pfeiltaste links")
                     .clicked();
                 actions.next = ui
                     .add_enabled_ui(position.is_some_and(|p| p + 1 < total), |ui| {
-                        ui.add_sized([cell_width, 30.], button("Weiter →"))
+                        ui.add_sized([cell_width, 28.], button("Weiter →"))
                     })
                     .inner
                     .on_hover_text("Nächstes Medium · Pfeiltaste rechts")
                     .clicked();
                 actions.external = ui
-                    .add_sized([cell_width, 30.], button("Extern öffnen"))
+                    .add_sized([cell_width, 28.], button("Extern öffnen"))
                     .on_hover_text("Im Standardprogramm öffnen")
                     .clicked();
                 let position = position
                     .map(|p| format!("{} / {total}", p + 1))
                     .unwrap_or_else(|| "Außerhalb des Filters".into());
-                ui.add_sized([cell_width, 30.], egui::Label::new(&position).truncate())
+                ui.add_sized([cell_width, 28.], egui::Label::new(&position).truncate())
                     .on_hover_text(position);
             });
             ui.horizontal(|ui| {
                 if video {
                     if ui
-                        .add_sized([cell_width, 30.], button("▶ Abspielen"))
+                        .add_sized([cell_width, 28.], button("▶ Abspielen"))
                         .on_hover_text("Im PhotoSuite-Player abspielen · Leertaste (Standard)")
                         .clicked()
                     {
                         actions.command = Some(Command::PlayVideo);
                     }
                     actions.reload = ui
-                        .add_sized([cell_width, 30.], button("Vorschau laden"))
+                        .add_sized([cell_width, 28.], button("Vorschau laden"))
                         .on_hover_text("Alle sechs Videovorschaubilder erneut laden")
                         .clicked();
-                    ui.allocate_exact_size(egui::vec2(cell_width, 30.), egui::Sense::hover());
+                    ui.allocate_exact_size(egui::vec2(cell_width, 28.), egui::Sense::hover());
                 } else {
                     for (command, label, help) in [
                         (
@@ -172,7 +175,7 @@ fn viewer_controls(
                     ] {
                         if ui
                             .add_enabled_ui(!saving, |ui| {
-                                ui.add_sized([cell_width, 30.], button(label))
+                                ui.add_sized([cell_width, 28.], button(label))
                             })
                             .inner
                             .on_hover_text(help)
@@ -200,7 +203,7 @@ fn viewer_controls(
                         "Drehung nur für diese Sitzung · Original unverändert",
                     )
                 };
-                ui.add_sized([cell_width, 30.], egui::Label::new(status).truncate())
+                ui.add_sized([cell_width, 28.], egui::Label::new(status).truncate())
                     .on_hover_text(help);
             });
         });
@@ -209,10 +212,17 @@ fn viewer_controls(
 
 fn centered_preview(ui: &mut egui::Ui, image: egui::Image<'_>) -> egui::Response {
     let size = ui.available_size();
-    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-        ui.add(image.max_size(size).maintain_aspect_ratio(true))
-    })
-    .inner
+    egui::Frame::new()
+        .fill(crate::theme::CANVAS)
+        .corner_radius(6)
+        .show(ui, |ui| {
+            ui.set_min_width(size.x);
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                ui.add(image.max_size(size).maintain_aspect_ratio(true))
+            })
+            .inner
+        })
+        .inner
 }
 
 #[cfg(test)]
@@ -222,6 +232,7 @@ mod tests {
     fn portrait_and_landscape_previews_are_horizontally_centered() {
         for dimensions in [[40, 100], [100, 40]] {
             let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
             let texture = ctx.load_texture(
                 "preview",
                 egui::ColorImage::filled(dimensions, egui::Color32::WHITE),
@@ -256,6 +267,7 @@ mod tests {
                     (true, true, None),
                 ] {
                     let ctx = egui::Context::default();
+                    crate::theme::install(&ctx);
                     let mut height = 0.;
                     let output = ctx.run(
                         egui::RawInput {

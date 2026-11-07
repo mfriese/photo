@@ -211,7 +211,7 @@ pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Se
     cc.egui_ctx.add_image_loader(std::sync::Arc::new(
         crate::image_loader::OrientedLoader::new(services.decoder.clone()),
     ));
-    cc.egui_ctx.set_visuals(egui::Visuals::dark());
+    crate::theme::install(&cc.egui_ctx);
     let (preferences, mut preferences_error) = match services.preferences.load() {
         Ok(p) => (p, String::new()),
         Err(error) => (
@@ -425,9 +425,127 @@ mod layout_tests {
         release.send(()).unwrap();
     }
     #[test]
+    fn gallery_theme_fits_small_and_large_windows() {
+        for width in [360., 600., 1280.] {
+            for populated in [false, true] {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                let mut suite = test_suite();
+                if populated {
+                    suite.root = Some("/Fotos/Demosammlung".into());
+                    suite.items = (0..18)
+                        .map(|i| {
+                            Media::from_path(
+                                format!("/Fotos/Demosammlung/2026/09/img_202609{i:02}_153000.jpg")
+                                    .into(),
+                                "2026/09".into(),
+                            )
+                            .unwrap()
+                        })
+                        .collect();
+                }
+                for _ in 0..3 {
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                egui::vec2(width, 850.),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            suite.toolbar(ctx);
+                            suite.status_bar(ctx);
+                            suite.library_sidebar(ctx);
+                            suite.photo_wall(ctx, &(0..suite.items.len()).collect::<Vec<_>>());
+                        },
+                    );
+                    for shape in output.shapes {
+                        if let egui::Shape::Text(text) = shape.shape {
+                            if text.galley.job.text.is_empty() {
+                                continue;
+                            }
+                            let rect = text.visual_bounding_rect();
+                            assert!(
+                                rect.left() >= -1. && rect.right() <= width + 1.,
+                                "Gallery overflow at {width}, populated={populated}: {:?} {rect:?}",
+                                text.galley.job.text
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn library_years_start_collapsed_and_expand_on_click() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        ctx.style_mut(|style| style.animation_time = 0.);
+        let mut suite = test_suite();
+        suite.root = Some("/Fotos/Demo".into());
+        suite.items =
+            vec![Media::from_path("/Fotos/Demo/2026/09/a.jpg".into(), "2026/09".into()).unwrap()];
+        let mut draw = |events| {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800., 600.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| suite.library_sidebar(ctx),
+            );
+            output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = shape.shape {
+                        Some((text.galley.job.text.clone(), text.visual_bounding_rect()))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let initial = draw(vec![]);
+        assert!(
+            !initial
+                .iter()
+                .any(|(text, _)| text == "September" || text == "Ganzes Jahr")
+        );
+        let header = initial
+            .iter()
+            .find(|(text, _)| text == "2026")
+            .unwrap()
+            .1
+            .center();
+        draw(vec![
+            egui::Event::PointerMoved(header),
+            egui::Event::PointerButton {
+                pos: header,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: header,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let expanded = draw(vec![]);
+        assert!(expanded.iter().any(|(text, _)| text == "September"));
+        assert!(expanded.iter().any(|(text, _)| text == "Ganzes Jahr"));
+    }
+    #[test]
     fn toolbar_text_stays_inside_narrow_and_wide_windows() {
         for width in [360., 600., 1280.] {
             let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
             let mut suite = test_suite();
             suite.root = Some(
                 "/Fotos/Ein sehr langer Bibliothekspfad/Urlaub und Familie/Meine Sammlung".into(),

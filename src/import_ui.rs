@@ -157,6 +157,7 @@ mod tests {
     fn import_results_preserve_newlines_and_wrap_long_paths() {
         for width in [280., 700.] {
             let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
             let events = vec![
                 Event {
                     file: 1,

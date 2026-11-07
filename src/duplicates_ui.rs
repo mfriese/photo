@@ -229,6 +229,7 @@ mod tests {
     fn review_layout_fits_narrow_and_wide_windows() {
         for width in [360., 600., 1280.] {
             let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
             let adapter = Arc::new(NoIo);
             let mut view = DuplicateReview::default();
             view.session

@@ -1,0 +1,46 @@
+# PhotoSuite – Galeriedesign
+
+## Ziel
+
+Eine kompakte Fotoanwendung: Bilder dominieren, Bedienung und Dateinamen bleiben gut lesbar. Keine platzraubenden Dekorationszeilen. Deutsche Beschriftungen bleiben verständlich. Keine Cloud, Tracking- oder Kontofunktionen durch die Gestaltung suggerieren. Der UI-Technologie-Stack bleibt Rust mit egui/eframe.
+
+## Gemeinsame Gestaltung
+
+`src/theme.rs` ist die zentrale Quelle für Farben, Typografie, Widgetzustände und wiederverwendete Flächen. Das Galeriedesign setzt ausdrücklich `egui::Theme::Dark`; automatische macOS-Hell-/Dunkelwechsel dürfen nicht zwischen dunklen App-Flächen und hellen Standardstyles mischen. Keine Fachregeln oder Dateizugriffe ins Theme aufnehmen.
+
+| Rolle | Wert |
+| --- | --- |
+| Bildfläche | `#13161c` |
+| Werkzeugleiste, Seitenleiste, Dialoge | `#1b1f27` |
+| Erhöhte Bedienelemente | `#242a34` |
+| Dezente Kontur | `#313946` |
+| Primärer Text | `#f2f5fa` |
+| Sekundärer Text | `#d6dee9` |
+| Akzent / Fokus | `#8bb5ff` |
+| Auswahlfläche | `#2b4367` |
+
+- Überschriften 20–22 Punkte, Fließtext 14, Buttons 13, Metadaten und Hilfstexte mindestens 12. Keine winzigen 10-/11-Punkte-Beschriftungen.
+- Inhaltsränder 12, Seiten-/Werkzeugleisten 8, Dialoge 10 und Optionsgruppen 8. Basisabstände 8 horizontal und 4 vertikal; Fotowand 8 × 6. Keine zusätzlichen Abzeichen-/Bereichszeilen über dem Raster.
+- Radius 5 für Widgets, 8 für Fotos, 6 für Optionsgruppen, 8 für Dialogfenster. Fotos nicht verzerren; kleine Rundungen dürfen nur die äußeren Ecken beschneiden.
+- Dezente Konturen, keine dekorativen Verläufe oder schweren Schatten auf Fotokacheln. Akzent nur für Auswahl, Fokus und Hover, mit erkennbaren deaktivierten Zuständen.
+- Der Kontrasttest sichert mindestens 7:1 für die verwendeten primären/sekundären Texte auf ihren vorgesehenen Flächen. Sekundärtext und Suchfeld-Hinweise erhalten eine explizite helle Farbe statt standardmäßig reduzierter Transparenz. Auch geöffnete Menüs und deaktivierte Elemente bleiben lesbar. Tooltips ergänzen Beschriftungen; Farbe allein darf einen Schreibmodus nicht erklären.
+
+## Ansichten
+
+- **Kopfbereich:** App-Icon und Name, kompakte umbrechende Aktionen mit Suche und Filter. Bibliothekspfad in eigener ruhiger Zeile mit vollständigem Tooltip; zusätzlich im Fenstertitel.
+- **Seitenleiste:** abgesetzte Fläche, Gesamtansicht, absteigende aufklappbare Jahre, standardmäßig eingeklappt. Manuelles Aufklappen innerhalb der Sitzung respektieren. Monate als deutsche Namen darstellen; originale Gruppenschlüssel beibehalten. Kein zweiter fachlicher Filter in der UI.
+- **Fotowand:** bildbetonte, gleich große Kacheln, fünf Größenstufen, 8 Punkte horizontaler Abstand und gleichmäßig gefüllte vollständige Zeilen. Letzte Zeile unverändert. Dateinamen mit mindestens 12 Punkten und gekürzt; Videoabzeichen auf dunkler Fläche. Hover-Kontur ohne Größenverschiebung. Beide Vorschauformen zentrieren.
+- Allgemeine Bedienelemente 24 Punkte hoch, Navigationseinträge 26, Großansichtsbuttons 28. Größere Schrift nicht durch größere Ränder kompensieren.
+- **Großansicht:** Dateiname oben, anschließend genau zwei feste Kontrollzeilen: Navigation und externes Öffnen, darunter Bild-/Videoaktionen und Status. Kein horizontaler Scroller. Gleiche Höhe bei Foto/Video, EXIF an/aus und laufendem Speichern. Beschriftungen bei Platzmangel kürzen; vollständige Tooltips. Foto horizontal zentriert auf dunkler Bildfläche.
+- **Dialoge:** gemeinsame Optionsgruppen mit identischen Einrückungen. Lange Inhalte vertikal scrollbar, Pfade gekürzt mit Tooltip. EXIF-Schreibmodus ausdrücklich und kontrastreich beschriften.
+- **Import:** jeden Schritt als Absatz anzeigen, echte Zeilenumbrüche erhalten und lange Pfade umbrechen. Informationsvollständigkeit hat Vorrang vor einer festen Protokollzeilenhöhe.
+- **Fußzeile:** genau eine Zeile für Modus, Status und Fehler. Kürzen statt umbrechen; vollständige Meldung im Tooltip.
+- Mindestfenster 360 × 400. Auf schmalen Fenstern bleiben Aktionen erreichbar. Kein abgeschnittener Text ohne Tooltip und kein horizontaler Scroller in der Großansicht.
+
+## Pflege und Nachweis
+
+Bei wesentlichen sichtbaren Änderungen README und betroffene Screenshots im selben Änderungsstand aktualisieren. Das gilt ebenso bei neuen Funktionen, geänderter Installation oder geändertem Sicherheits-/Schreibverhalten. Kleine unsichtbare Korrekturen benötigen keine identischen neuen Screenshots.
+
+Screenshots sind echte Aufnahmen der aktuellen Anwendung, keine Mockups. Nur separate Demodaten und isolierte Preferences verwenden; keine privaten Fotos, persönlichen Verzeichnisse oder Zugangsdaten veröffentlichen. Bildquellen dokumentieren. Relative Markdown-Pfade mit exakter Groß-/Kleinschreibung verwenden, damit GitHub sie auf Branches und Tags auflösen kann. Screenshots gehören unter `docs/screenshots/`, Demo-Originale und Build-Dateien nicht ins Git-Repository.
+
+Automatisierte Layout-/Kontrasttests ergänzen die Sichtprüfung. Ein Regressionstest sendet helle und dunkle Systemtheme-Ereignisse und prüft die tatsächlich gerenderten Textfarben von Jahreszahlen, Überschriften, Menüs, Buttons und Eingabehinweisen. Eine manuelle Sichtprüfung nur als durchgeführt angeben, wenn die laufende App tatsächlich betrachtet wurde. Reproduktion unter [screenshots/README.md](screenshots/README.md).

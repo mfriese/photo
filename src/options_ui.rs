@@ -2,16 +2,19 @@
 use eframe::egui;
 use photosuite_application::preferences::Preferences;
 pub fn spacing(ui: &mut egui::Ui) {
-    ui.spacing_mut().item_spacing = egui::vec2(10., 8.);
-    ui.spacing_mut().button_padding = egui::vec2(10., 5.);
+    ui.spacing_mut().item_spacing = egui::vec2(8., 4.);
+    ui.spacing_mut().button_padding = egui::vec2(8., 3.);
 }
 pub fn section(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::group(ui.style())
-        .inner_margin(12.)
+        .fill(crate::theme::CANVAS)
+        .stroke(egui::Stroke::new(1_f32, crate::theme::BORDER))
+        .corner_radius(6)
+        .inner_margin(8.)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.strong(title);
-            ui.add_space(4.);
+            ui.add_space(2.);
             body(ui);
         });
 }
@@ -53,6 +56,7 @@ mod tests {
     fn settings_dialog_fits_supported_widths() {
         for width in [360., 600., 1280.] {
             let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
             let mut open = true;
             let mut bindings = false;
             let mut p = Preferences::default();

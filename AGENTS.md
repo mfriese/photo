@@ -4,7 +4,7 @@
 - Rust-Desktop-Anwendung zum komfortablen Betrachten von Foto- und Videosammlungen.
 - UI in Rust mit egui/eframe; verständliche deutsche Beschriftungen.
 - Standardmäßig nur lesen. Explizite Ausnahme: bei aktiviertem Häkchen dürfen neue manuelle Drehbefehle JPEG-EXIF ändern. Keine automatische Massenänderung beim Öffnen/Scannen. JPEG-Pixel nicht neu komprimieren; Ohne dauerhafte Sicherung direkt in der Originaldatei aktualisieren (`-overwrite_original_in_place`); temporäre Arbeitsdatei darf intern verwendet werden. Bereits vorhandene fremde Backups nicht löschen. Andere Formate und symbolische Links nicht verändern. Keine Cache-Dateien in der Sammlung.
-- Jahres-/Monatsstruktur respektieren; Jahre aufklappbar, ganze Jahre und vorhandene Monate auswählbar.
+- Jahres-/Monatsstruktur respektieren; Jahre standardmäßig eingeklappt und manuell aufklappbar; ganze Jahre und vorhandene Monate auswählbar.
 - Scrollbare, virtualisierte Fotowand; fünf Vorschaugrößenstufen. Vollständige Zeilen füllen die Breite mit gleichen Kachelgrößen und Abständen. Letzte Zeile behält Kachelgrößen.
 - Häkchen „Quadratische Vorschau“: aktiviert zentrierter quadratischer Beschnitt ohne Verzerrung; deaktiviert vollständiges Bild im Seitenverhältnis innerhalb gleich großer Rasterzellen.
 - Suche, Videofilter, Großansicht, Pfeiltastennavigation und Escape erhalten.
@@ -102,3 +102,14 @@
 - Aktive Bibliothek mit gekürztem Pfad und vollständigem Tooltip prominent unter den Werkzeugaktionen zeigen und in den Fenstertitel übernehmen. Fußzeile strikt einzeilig halten: Modus, Status und Fehler nebeneinander, bei Platzmangel kürzen und vollständigen Text im Tooltip anbieten.
 
 - Importprotokoll: jeden Schritt als eigenen Absatz anzeigen, eingebettete Zeilenumbrüche erhalten und lange Pfade umbrechen. Protokolltexte nicht auf eine gekürzte Rasterzeile beschränken.
+
+## Verbindliches Galeriedesign und Dokumentationspflege
+- Zentrales Designsystem in `src/theme.rs`; Farben, Schriftgrößen, Widgetzustände und gemeinsame Flächen dort pflegen. `docs/DESIGN.md` beschreibt das verbindliche Erscheinungsbild. Keine Fachlogik und keine Dateizugriffe im Theme.
+- Kompakte Graphitflächen, helle kontrastreiche Texte, zurückhaltender blauer Akzent. Wenig Randabstand, flache Bedienelemente, keine zusätzlichen Galerie-Badgezeilen. Hilfs-/Datei-/Statustexte mindestens 12 Punkte. Primär- und Sekundärtexte sowie Widgetzustände auf mindestens 7:1 Kontrast prüfen; deaktivierte Texte nicht bis zur Unlesbarkeit abdunkeln. Dezente Fotokachelrundungen, klare Typografiehierarchie und sichtbarer Fokus. Aktive Schreibmodi zusätzlich textlich kennzeichnen.
+- Bei Änderungen das gesamte betroffene Layout mit dem echten Theme prüfen, einschließlich 360-Punkte-Fenstern, langer Pfade und Foto-/Videowechsel. Kontrast- und Layouttests erhalten.
+- README.md ist die GitHub-Einstiegsseite: Nutzen, aktueller Projektstatus, echte Screenshots, Funktionen, Installation, Bedienung, Grenzen und Entwicklungsbefehle verständlich aktuell halten. Technische Detailanleitungen nach `docs/USER_GUIDE.md`, Architektur nach `ARCHITECTURE.md`, Designregeln nach `docs/DESIGN.md` auslagern.
+- README.md **einschließlich Screenshots regelmäßig aktualisieren, sobald entsprechend umfangreiche Änderungen an Oberfläche, Funktionen, Installation oder Verhalten erfolgt sind**. Betroffene Screenshots im selben Änderungsstand erneuern; keine veralteten Ansichten neben neu beschriebenem Verhalten belassen. Kleine unsichtbare Korrekturen erfordern keine identischen Neuaufnahmen.
+- Screenshots als echte Aufnahmen der laufenden Anwendung unter `docs/screenshots/` versionieren. In Markdown ausschließlich relative Repository-Pfade mit exakter Schreibweise verwenden, damit die Darstellung auf GitHub funktioniert. Keine lokalen absoluten Pfade oder Build-Verzeichnisse als Bildquelle in der GitHub-README.
+- Für Dokumentationsaufnahmen ausschließlich separate Demofotos mit nachvollziehbaren Bildrechten und isolierte Preferences benutzen. Keine privaten Sammlungen oder persönlichen Dateipfade veröffentlichen. Aufnahmeablauf und Bildquellen unter `docs/screenshots/README.md` dokumentieren; heruntergeladene Demobibliotheken bleiben außerhalb des versionierten Quellcodes.
+
+- Dunkle Galeriefarben müssen an eine explizite egui-ThemePreference::Dark gebunden bleiben. Nur Visuals/Style zu setzen reicht nicht: ein später gemeldetes helles macOS-Systemtheme darf keine schwarzen Standardtexte auf dunkle eigene Flächen bringen. Regressionen mit RawInput.system_theme und tatsächlich gerenderten Textfarben prüfen (u. a. Jahreszahlen, starke Überschriften, Menüs, Buttons und Suchhinweise), nicht nur Farbkonstanten vergleichen.

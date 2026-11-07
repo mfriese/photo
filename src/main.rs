@@ -14,6 +14,7 @@ mod options_ui;
 mod preferences_fs;
 mod presentation;
 mod storyboard_ui;
+mod theme;
 mod video;
 use eframe::egui;
 fn main() -> eframe::Result {
@@ -36,7 +37,11 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     let repository = std::sync::Arc::new(infrastructure::FileSystemRepository);
-    let preferences_path = match preferences_fs::PlistPreferences::user_path() {
+    let preferences_path = match std::env::var_os("PHOTOSUITE_PREFERENCES_PATH")
+        .map(std::path::PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(preferences_fs::PlistPreferences::user_path)
+    {
         Ok(path) => path,
         Err(error) => {
             eprintln!("{error}");

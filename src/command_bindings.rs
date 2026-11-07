@@ -150,7 +150,7 @@ impl CommandBindings {
                 ui.small("Kürzel mit Alt, Strg oder Command; für Wiedergabe auch Leertaste. Escape bricht ab.");
                 ui.add_space(8.);
                 for (command,shortcut) in &mut self.bindings {
-                    egui::Frame::group(ui.style()).inner_margin(12.).show(ui,|ui| {
+                    egui::Frame::group(ui.style()).inner_margin(8.).show(ui,|ui| {
                         ui.strong(command.title());
                         ui.horizontal_wrapped(|ui| {
                             ui.label(shortcut.map(|s|ctx.format_shortcut(&s)).unwrap_or("Nicht zugewiesen".into()));
