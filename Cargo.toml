@@ -1,0 +1,23 @@
+[package]
+name = "photosuite"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.33"
+egui_extras = { version = "0.33", features = ["file", "image"] }
+image = { version = "0.25", features = ["jpeg", "png", "webp", "tiff", "gif", "bmp"] }
+rfd = "0.15"
+walkdir = "2"
+open = "5"
+plist = "1"
+
+tempfile = "3"
+kamadak-exif = "0.6"
+photosuite-domain = { path = "crates/domain" }
+photosuite-application = { path = "crates/application" }
+
+[workspace]
+members = ["crates/domain", "crates/application"]
+default-members = [".", "crates/domain", "crates/application"]
+resolver = "3"

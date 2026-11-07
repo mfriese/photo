@@ -1,0 +1,62 @@
+fn main() {
+    for source in [
+        "native/video.m",
+        "native/player.m",
+        "native/filesystem.m",
+        "native/photosuite.h",
+    ] {
+        println!("cargo:rerun-if-changed={source}");
+    }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => "arm64",
+        Ok("x86_64") => "x86_64",
+        _ => panic!("unsupported macOS architecture"),
+    };
+    let mut objects = Vec::new();
+    for source in ["video", "player", "filesystem"] {
+        let object = out.join(format!("{source}.o"));
+        assert!(
+            std::process::Command::new("clang")
+                .args([
+                    "-fobjc-arc",
+                    "-Wno-deprecated-declarations",
+                    "-arch",
+                    arch,
+                    "-c"
+                ])
+                .arg(format!("native/{source}.m"))
+                .arg("-o")
+                .arg(&object)
+                .status()
+                .expect("Apple clang required")
+                .success(),
+            "native {source} adapter failed"
+        );
+        objects.push(object);
+    }
+    assert!(
+        std::process::Command::new("ar")
+            .arg("crs")
+            .arg(out.join("libphotosuite_video.a"))
+            .args(&objects)
+            .status()
+            .unwrap()
+            .success()
+    );
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=photosuite_video");
+    for framework in [
+        "AVFoundation",
+        "AVKit",
+        "AppKit",
+        "Foundation",
+        "CoreMedia",
+        "CoreGraphics",
+    ] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
+}
