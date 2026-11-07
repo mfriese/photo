@@ -9,3 +9,5 @@ pub mod playback;
 pub mod ports;
 pub mod preferences;
 pub mod storyboard;
+
+pub mod diary;

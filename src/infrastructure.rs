@@ -1,7 +1,9 @@
 use crate::domain::Media;
 use crate::ports::MediaRepository;
 use std::path::Path;
-pub struct FileSystemRepository;
+pub struct FileSystemRepository {
+    pub audio: std::sync::Arc<dyn photosuite_application::diary::AudioSource>,
+}
 impl MediaRepository for FileSystemRepository {
     fn scan(&self, root: &Path) -> (Vec<Media>, usize) {
         let mut items = Vec::new();
@@ -28,7 +30,14 @@ impl MediaRepository for FileSystemRepository {
             } else {
                 parent.to_string_lossy().into_owned()
             };
-            if let Some(media) = Media::from_path(path.into(), group) {
+            if let Some(mut media) = Media::from_path(path.into(), group) {
+                if media.is_video() && self.audio.probe(path).is_ok_and(|p| p.audio_only) {
+                    media = Media::from_audio_asset(path.into(), media.group().to_owned()).unwrap();
+                }
+                if crate::domain::diary::diary_year(media.group()).is_some() && !media.is_audio() {
+                    errors += 1;
+                    continue;
+                }
                 items.push(media);
             }
         }
@@ -47,7 +56,12 @@ mod tests {
         for name in ["a.JPG", "b.mov", "ignore.txt"] {
             std::fs::write(month.join(name), b"original").unwrap();
         }
-        let (items, errors) = FileSystemRepository.scan(dir.path());
+        let repository = FileSystemRepository {
+            audio: std::sync::Arc::new(crate::audio::NativeAudioSource {
+                tool: crate::exiftool::ExifTool::development(),
+            }),
+        };
+        let (items, errors) = repository.scan(dir.path());
         assert_eq!(errors, 0);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].group(), "2024/03");

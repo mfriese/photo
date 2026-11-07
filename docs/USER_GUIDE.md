@@ -83,7 +83,7 @@ Quellen werden niemals verschoben, umbenannt oder gelöscht. EXIF `DateTimeOrigi
 
 Die Dateiendung bleibt dem Originalformat entsprechend erhalten (JPEG-Endung wird zu `.jpg`). Bei Fotokollisionen werden die Dateien bytegenau verglichen: identische Dateien werden übersprungen, unterschiedliche erhalten `_001`, `_002` usw. Auch die nummerierten Ziele werden auf Identität geprüft. Unterschiedliche Metadaten zählen als unterschiedlicher Dateiinhalt. Bei Videos genügt derselbe generierte Zielname als Duplikat, ohne Inhaltsvergleich.
 
-Das Protokoll zeigt Quelle, gelesene Metadaten, Zielpfade, Kollisionen, Kopierfortschritt in Bytes, Verifikation, endgültige Übernahme und Fehler. Es lässt sich vollständig in die Zwischenablage kopieren; lange Zeilen zeigen Details per Mauszeiger. Dateifortschritt und Zusammenfassung bleiben sichtbar. **Abbrechen** beendet den Lauf; abgeschlossene Kopien bleiben erhalten. Temporäre Kopien werden bei regulärem Abbruch/Fehler entfernt. Kopien werden im Zielverzeichnis zunächst temporär geschrieben, synchronisiert und bytegenau geprüft, dann ohne Überschreiben vorhandener Dateien veröffentlicht. Parallel entstandene Kollisionen werden als Fehler gemeldet. Ein Prüflauf reserviert Namen nur im Arbeitsspeicher; tatsächliche Verzeichnisänderungen werden beim Import erneut berücksichtigt.
+Über „Alle Schritte anzeigen“ zeigt das Detailprotokoll Quelle, gelesene Metadaten, Zielpfade, Kollisionen, Kopierfortschritt in Bytes, Verifikation, endgültige Übernahme und Fehler. Es lässt sich in der gewählten kompakten oder ausführlichen Ansicht in die Zwischenablage kopieren; lange Zeilen zeigen Details per Mauszeiger. Dateifortschritt und Zusammenfassung bleiben sichtbar. **Abbrechen** beendet den Lauf; abgeschlossene Kopien bleiben erhalten. Temporäre Kopien werden bei regulärem Abbruch/Fehler entfernt. Kopien werden im Zielverzeichnis zunächst temporär geschrieben, synchronisiert und bytegenau geprüft, dann ohne Überschreiben vorhandener Dateien veröffentlicht. Parallel entstandene Kollisionen werden als Fehler gemeldet. Ein Prüflauf reserviert Namen nur im Arbeitsspeicher; tatsächliche Verzeichnisänderungen werden beim Import erneut berücksichtigt.
 
 Nach dem Import wird die Zielbibliothek neu geladen. Der Import ist eine ausdrücklich gestartete Schreiboperation unabhängig vom EXIF-Schreibmodus. Das Importprotokoll gilt für die Sitzung; es gibt keinen dauerhaften Importkatalog. Einstellungen und Tastenkürzel werden dauerhaft gespeichert. Kein globales Rollback: bereits abgeschlossene Importe bleiben bei Fehlern erhalten.
 
@@ -103,7 +103,7 @@ Cargo-Workspace mit durch den Compiler getrennten Schichten:
 
 Domäne und Anwendung verbieten unsicheren Rust-Code. Ein Rückgriff auf Desktop-Module ist aus diesen Crates nicht möglich. Buttonbeschriftungen liegen außerhalb der Domäne. Fachlogik wird zusätzlich mit In-Memory-Adaptern ohne GUI und Dateisystem getestet. Architekturentscheidungen und Grenzen: `ARCHITECTURE.md`.
 
-HEIC/RAW, Zoom/Pan, persistenter Thumbnail-Cache und installierbares App-Bundle fehlen weiterhin. Bildcache und Protokoll wachsen derzeit mit der Sitzung; Bildladeaufträge verwenden zwei Worker mit einer Queue von höchstens 32 wartenden Aufträgen. Diese Betriebsgrenzen sind unabhängig von der Schichtentrennung.
+HEIC/RAW, Zoom/Pan und ein persistenter Thumbnail-Cache fehlen weiterhin. Ein installierbares macOS-App-Bundle und ein .pkg-Installer sind vorhanden. Bildcache und Protokoll wachsen derzeit mit der Sitzung; Bildladeaufträge verwenden zwei Worker mit einer Queue von höchstens 32 wartenden Aufträgen. Diese Betriebsgrenzen sind unabhängig von der Schichtentrennung.
 
 ## Prüfen
 
@@ -199,4 +199,12 @@ Die aktive Bibliothek steht mit ihrem Pfad direkt unter den Werkzeugaktionen und
 
 In der Großansicht stehen Navigation und Bild-/Videoaktionen in zwei Zeilen mit konstanter Höhe. Kein horizontaler Scroller; schmale Fenster kürzen Beschriftungen mit vollständigem Tooltip. Fotos sind horizontal zentriert.
 
-Das Importprotokoll stellt jeden Schritt als eigenen Absatz dar, erhält Zeilenumbrüche und bricht lange Pfade passend zur Fensterbreite um.
+Die optionale Detailansicht des Importprotokolls stellt jeden Schritt als eigenen Absatz dar, erhält Zeilenumbrüche und bricht lange Pfade passend zur Fensterbreite um. Die Standardansicht zeigt ein kompaktes Ergebnis pro Datei.
+
+## Audio-Diary
+
+Audio wird im bestehenden Import mitkopiert: `Jahr/diary/aud_JJJJMMTT_HHMMSS.ext`. Quellen bleiben unverändert und werden niemals gelöscht. Zum Anhören ein Jahr aufklappen, „♪ Diary“ wählen und eine Datei anklicken. Der Jahresplayer enthält alle Aufnahmen dieses Diary-Ordners chronologisch auf einer einzigen, nach Dauer proportionalen Hörleiste. Der Schieber navigiert auch über Dateigrenzen hinweg; es wird keine Sammeldatei exportiert und keine Playlist dargestellt.
+
+Eingebettete Aufnahmezeit vor Inhalts-/Containerdatum; ohne diese Daten zuerst den vollständigen Zeitstempel im Dateinamen (z. B. `2023-12-27_22-51-32`, mit `-`, `_` oder ohne Trenner; einschließlich aud-Importnamen), zuletzt das Dateisystem-Erstellungsdatum als gekennzeichneten Fallback verwenden. Datum und Quelle im Prüflauf kontrollieren. Bei Fotos/Videos bleiben die strikten bisherigen Regeln unverändert. Audio-Kollisionen werden bytegenau verglichen. Formatliste, Einschränkungen und genaue Priorität stehen in der aktuellen Repository-README.
+
+Das Importprotokoll ist standardmäßig kompakt: ein Ergebnis pro Datei, vollständige Pfade und Datumsquelle im Tooltip. „Alle Schritte anzeigen“ öffnet das detaillierte, mehrzeilige Protokoll. „Protokoll kopieren“ kopiert jeweils die gewählte Ansicht.

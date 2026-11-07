@@ -2,11 +2,13 @@
 mod capture_time;
 pub use capture_time::CaptureTime;
 pub mod commands;
+pub mod diary;
 use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaKind {
     Photo,
     Video,
+    Audio,
 }
 #[derive(Clone, Debug)]
 pub struct Media {
@@ -17,7 +19,9 @@ pub struct Media {
 impl Media {
     pub fn from_path(path: PathBuf, group: String) -> Option<Self> {
         let ext = path.extension()?.to_string_lossy().to_lowercase();
-        let kind = if is_video(&path) {
+        let kind = if is_audio_extension(&path) {
+            MediaKind::Audio
+        } else if is_video(&path) {
             MediaKind::Video
         } else if matches!(
             ext.as_str(),
@@ -28,6 +32,23 @@ impl Media {
             return None;
         };
         Some(Self { path, group, kind })
+    }
+    /// The adapter has confirmed an audio-only asset, including MP4/MOV containers.
+    pub fn from_audio_asset(path: PathBuf, group: String) -> Option<Self> {
+        if !is_audio_extension(&path) && !is_video(&path) {
+            return None;
+        }
+        Some(Self {
+            path,
+            group,
+            kind: MediaKind::Audio,
+        })
+    }
+    pub fn is_audio(&self) -> bool {
+        self.kind == MediaKind::Audio
+    }
+    pub fn is_photo(&self) -> bool {
+        self.kind == MediaKind::Photo
     }
     pub fn path(&self) -> &std::path::Path {
         &self.path
@@ -66,3 +87,31 @@ mod tests {
     }
 }
 pub mod duplicates;
+
+pub fn is_audio_extension(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "wav"
+            | "wave"
+            | "mp3"
+            | "m4a"
+            | "m4b"
+            | "aac"
+            | "aif"
+            | "aiff"
+            | "aifc"
+            | "caf"
+            | "flac"
+            | "ac3"
+            | "eac3"
+            | "amr"
+            | "au"
+            | "snd"
+            | "mp2"
+    )
+}
+pub mod audio_date;

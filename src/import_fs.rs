@@ -11,6 +11,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 pub struct FileImportAdapter {
+    pub audio: std::sync::Arc<dyn photosuite_application::diary::AudioSource>,
     pub tool: crate::exiftool::ExifTool,
     pub repository: std::sync::Arc<dyn MediaRepository>,
 }
@@ -66,6 +67,9 @@ impl ImportAdapter for FileImportAdapter {
     }
     fn capture_time(&self, media: &Media) -> Result<CaptureTime, String> {
         regular(media.path())?;
+        if media.is_audio() {
+            return self.audio.capture_time(media.path());
+        }
         if media.is_video() {
             let output = self
                 .tool
@@ -193,9 +197,13 @@ mod tests {
     use crate::import;
     use std::sync::Arc;
     fn adapter() -> FileImportAdapter {
-        FileImportAdapter {
+        let audio = Arc::new(crate::audio::NativeAudioSource {
             tool: crate::exiftool::ExifTool::development(),
-            repository: Arc::new(crate::infrastructure::FileSystemRepository),
+        });
+        FileImportAdapter {
+            audio: audio.clone(),
+            tool: crate::exiftool::ExifTool::development(),
+            repository: Arc::new(crate::infrastructure::FileSystemRepository { audio }),
         }
     }
     fn photo(path: &Path, color: u8) {
@@ -271,6 +279,126 @@ mod tests {
                 .contains("0 kopiert, 3 übersprungen")
         );
         assert_eq!(fs::read_dir(base.parent().unwrap()).unwrap().count(), 2);
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn audio_import_plans_year_diary_compares_collisions_and_preserves_source() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        crate::audio::test_wave(&source.path().join("a.wav"), 1, true);
+        fs::copy(source.path().join("a.wav"), source.path().join("b.wav")).unwrap();
+        crate::audio::test_wave(&source.path().join("c.wav"), 2, true);
+        let originals: Vec<_> = ["a.wav", "b.wav", "c.wav"]
+            .into_iter()
+            .map(|name| (name, fs::read(source.path().join(name)).unwrap()))
+            .collect();
+        let before = fs::read(source.path().join("a.wav")).unwrap();
+        let plan = run(source.path(), target.path(), true);
+        assert!(
+            plan.last()
+                .unwrap()
+                .message
+                .contains("2 geplant, 1 übersprungen"),
+            "{:?}",
+            plan.last()
+        );
+        assert!(
+            plan.iter()
+                .any(|e| e.message.contains("RIFF:DateTimeOriginal"))
+        );
+        assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+        let events = run(source.path(), target.path(), false);
+        assert!(
+            events
+                .last()
+                .unwrap()
+                .message
+                .contains("2 kopiert, 1 übersprungen, 0 Fehler")
+        );
+        let first = target.path().join("2008/diary/aud_20080916_035811.wav");
+        assert_eq!(fs::read(first).unwrap(), before);
+        assert!(
+            target
+                .path()
+                .join("2008/diary/aud_20080916_035811_001.wav")
+                .exists()
+        );
+        assert_eq!(fs::read(source.path().join("a.wav")).unwrap(), before);
+        for (name, original) in originals {
+            assert_eq!(
+                fs::read(source.path().join(name)).unwrap(),
+                original,
+                "Quelle darf niemals gelöscht oder verändert werden"
+            );
+        }
+        assert_eq!(fs::read_dir(source.path()).unwrap().count(), 3);
+        assert!(
+            run(source.path(), target.path(), false)
+                .last()
+                .unwrap()
+                .message
+                .contains("0 kopiert, 3 übersprungen")
+        );
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn undated_audio_import_name_preserves_selected_date_after_copy() {
+        use photosuite_application::diary::AudioSource;
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let path = source.path().join("aud_20080916_035811.wav");
+        crate::audio::test_wave(&path, 1, false);
+        let events = run(source.path(), target.path(), false);
+        assert!(
+            events
+                .last()
+                .unwrap()
+                .message
+                .contains("1 kopiert, 0 übersprungen, 0 Fehler")
+        );
+        let imported = target.path().join("2008/diary/aud_20080916_035811.wav");
+        let date = crate::audio::NativeAudioSource {
+            tool: crate::exiftool::ExifTool::development(),
+        }
+        .capture_time(&imported)
+        .unwrap();
+        assert_eq!(date.stamp(), "20080916_035811");
+        assert!(date.origin().contains("Importdateiname"));
+        assert!(path.exists());
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recorder_filename_is_used_by_preview_and_import_without_changing_source() {
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let path = source.path().join("2023-12-27_22-51-32.wav");
+        crate::audio::test_wave(&path, 1, false);
+        let original = fs::read(&path).unwrap();
+        let preview = run(source.path(), target.path(), true);
+        assert!(
+            preview
+                .iter()
+                .any(|event| event.message.contains("FALLBACK Audio-Dateiname"))
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|event| event.message.contains("2023/diary/aud_20231227_225132.wav"))
+        );
+        assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+        let result = run(source.path(), target.path(), false);
+        assert!(
+            result
+                .last()
+                .unwrap()
+                .message
+                .contains("1 kopiert, 0 übersprungen, 0 Fehler")
+        );
+        assert_eq!(
+            fs::read(target.path().join("2023/diary/aud_20231227_225132.wav")).unwrap(),
+            original
+        );
+        assert_eq!(fs::read(path).unwrap(), original);
     }
     #[test]
     fn missing_exif_does_not_use_filesystem_date() {

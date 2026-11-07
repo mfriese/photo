@@ -35,6 +35,23 @@ pub struct Event {
     pub total: usize,
     pub message: String,
     pub outcome: Option<ImportOutcome>,
+    pub file_report: Option<FileReport>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileDecision {
+    Planned,
+    Copied,
+    SkippedIdentical,
+    SkippedVideoName,
+    Failed(String),
+    Cancelled,
+}
+#[derive(Clone, Debug)]
+pub struct FileReport {
+    pub source: PathBuf,
+    pub target: Option<PathBuf>,
+    pub captured: Option<CaptureTime>,
+    pub decision: FileDecision,
 }
 #[derive(Clone, Debug)]
 pub struct ImportSummary {
@@ -98,6 +115,7 @@ pub fn start(
                 total,
                 message,
                 outcome: None,
+                file_report: None,
             });
         };
         emit(
@@ -132,9 +150,20 @@ pub fn start(
                 }
                 let log = |message| emit(i + 1, total, message);
                 log(format!("Quelle: {}", media.path().display()));
+                let mut report = FileReport {
+                    source: media.path().into(),
+                    target: None,
+                    captured: None,
+                    decision: if preview {
+                        FileDecision::Planned
+                    } else {
+                        FileDecision::Copied
+                    },
+                };
                 let action = (|| {
                     log("Aufnahmedatum aus Metadaten lesen …".into());
                     let time = adapter.capture_time(media)?;
+                    report.captured = Some(time.clone());
                     log(format!("Datum: {} ({})", time.stamp(), time.origin()));
                     let mut suffix = 0;
                     let destination = loop {
@@ -142,11 +171,13 @@ pub fn start(
                             return Err("Abgebrochen".into());
                         }
                         let candidate = time.target(&target, media, suffix);
+                        report.target = Some(candidate.clone());
                         log(format!("Ziel prüfen: {}", candidate.display()));
                         if !planned.contains_key(&candidate) && !adapter.exists(&candidate)? {
                             break candidate;
                         }
                         if media.is_video() {
+                            report.decision = FileDecision::SkippedVideoName;
                             log("Übersprungen: Videoname existiert bereits (kein Inhaltsvergleich).".into());
                             skipped += 1;
                             return Ok(());
@@ -156,6 +187,7 @@ pub fn start(
                             media.path(),
                             planned.get(&candidate).unwrap_or(&candidate),
                         )? {
+                            report.decision = FileDecision::SkippedIdentical;
                             log("Übersprungen: identischer Dateiinhalt.".into());
                             skipped += 1;
                             return Ok(());
@@ -198,8 +230,20 @@ pub fn start(
                     if !stop.load(Ordering::Relaxed) {
                         failed += 1;
                     }
+                    report.decision = if stop.load(Ordering::Relaxed) {
+                        FileDecision::Cancelled
+                    } else {
+                        FileDecision::Failed(e.clone())
+                    };
                     log(format!("Nicht importiert: {e}"));
                 }
+                let _ = tx.send(Event {
+                    file: i + 1,
+                    total,
+                    message: String::new(),
+                    outcome: None,
+                    file_report: Some(report),
+                });
             }
             Ok::<_, String>(ImportSummary {
                 copied,
@@ -218,6 +262,7 @@ pub fn start(
             total: 0,
             message: outcome.message(),
             outcome: Some(outcome),
+            file_report: None,
         });
     });
     Job { events, cancel }
@@ -277,11 +322,15 @@ mod use_case_tests {
         });
         for preview in [true, false] {
             let job = start(adapter.clone(), "source".into(), "library".into(), preview);
+            let mut reports = Vec::new();
             let outcome = loop {
                 let event = job
                     .events
                     .recv_timeout(std::time::Duration::from_secs(2))
                     .unwrap();
+                if let Some(report) = event.file_report {
+                    reports.push(report);
+                }
                 if let Some(outcome) = event.outcome {
                     break outcome;
                 }
@@ -289,6 +338,25 @@ mod use_case_tests {
             let ImportOutcome::Completed(summary) = outcome else {
                 panic!("expected completion")
             };
+            assert_eq!(reports.len(), 3);
+            assert_eq!(reports[1].decision, FileDecision::SkippedIdentical);
+            assert!(
+                reports
+                    .iter()
+                    .all(|report| report.captured.is_some() && report.target.is_some())
+            );
+            assert_eq!(
+                reports[2].target.as_deref(),
+                Some(Path::new("library/2008/09/img_20080916_035811_001.jpg"))
+            );
+            assert_eq!(
+                reports[0].decision,
+                if preview {
+                    FileDecision::Planned
+                } else {
+                    FileDecision::Copied
+                }
+            );
             assert_eq!((summary.copied, summary.skipped, summary.failed), (2, 1, 0));
             assert_eq!(summary.preview, preview);
             assert!(!summary.aborted);

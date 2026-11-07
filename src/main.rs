@@ -1,6 +1,7 @@
 use photosuite_application::{application, import, ports};
 use photosuite_domain as domain;
 use photosuite_domain::commands;
+mod audio;
 mod command_bindings;
 mod command_labels;
 mod duplicates_fs;
@@ -36,7 +37,12 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
-    let repository = std::sync::Arc::new(infrastructure::FileSystemRepository);
+    let audio_source = std::sync::Arc::new(audio::NativeAudioSource {
+        tool: exiftool.clone(),
+    });
+    let repository = std::sync::Arc::new(infrastructure::FileSystemRepository {
+        audio: audio_source.clone(),
+    });
     let preferences_path = match std::env::var_os("PHOTOSUITE_PREFERENCES_PATH")
         .map(std::path::PathBuf::from)
         .map(Ok)
@@ -50,11 +56,14 @@ fn main() -> eframe::Result {
     };
     let video_preview = std::sync::Arc::new(video::NativeVideoSource);
     let services = application::Services {
+        audio_source: audio_source.clone(),
+        audio_player: std::sync::Arc::new(audio::NativeAudioPlayer),
         duplicates: std::sync::Arc::new(duplicates_fs::PixelDuplicates),
         video_player: std::sync::Arc::new(video::NativeVideoPlayer),
         video_preview: video_preview.clone(),
         preferences: std::sync::Arc::new(preferences_fs::PlistPreferences::at(preferences_path)),
         importer: std::sync::Arc::new(import_fs::FileImportAdapter {
+            audio: audio_source,
             repository: repository.clone(),
             tool: exiftool.clone(),
         }),

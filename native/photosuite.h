@@ -8,3 +8,8 @@ double photosuite_video_duration(const char *path);
 int photosuite_video_play(const char *path);
 // Explicit user action; moves to the OS Trash, never permanently deletes.
 int photosuite_trash_file(const char *path);
+
+// Probe on a worker thread. Birth timestamp buffer is caller-owned and always NUL-terminated.
+int photosuite_audio_probe(const char *path, double *duration, int *audioOnly, char *created, size_t capacity);
+// Main thread only. All arrays/strings are copied synchronously; composition builds on a worker.
+int photosuite_audio_open(const char **paths, const char **labels, const double *durations, size_t count, const char *year, double start);

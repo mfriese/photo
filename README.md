@@ -2,7 +2,7 @@
   <img src="assets/app-icon/photosuite.png" alt="PhotoSuite App-Icon" width="96">
   <h1>PhotoSuite</h1>
   <p><strong>Deine Fotos. Deine Ordner. Deine Sammlung.</strong></p>
-  <p>Eine lokale Foto- und Videogalerie für macOS, geschrieben in Rust.</p>
+  <p>Eine lokale Foto- und Videogalerie mit Audio-Diary für macOS, geschrieben in Rust.</p>
 </div>
 
 PhotoSuite öffnet vorhandene Fotoordner als übersichtliche Galerie. Keine Cloud, kein Konto, keine neue Datenbank für deine Sammlung: Deine Struktur nach **Jahr und Monat** bleibt erhalten. Die Anwendung liest deine Originale standardmäßig nur und merkt sich die zuletzt geöffnete Bibliothek.
@@ -17,8 +17,9 @@ PhotoSuite öffnet vorhandene Fotoordner als übersichtliche Galerie. Keine Clou
 | **In der Sammlung navigieren** | Aufklappbare Jahre, Monatsauswahl, Dateinamens-/Pfadsuche und Videofilter. |
 | **Großansicht** | Zentrierte Fotos, Pfeiltastennavigation und zwei feste Kontrollzeilen oberhalb des Bildes. |
 | **Videos ansehen** | Native Vorschauen, sechs zeitlich verteilte Standbilder und Wiedergabe über AVFoundation/AVKit. Kein externes FFmpeg erforderlich. |
+| **Audio-Diary** | Pro Jahr eine Dateiansicht und eine durchgehende Hörleiste mit proportionalen Dateiabschnitten, globalem Schieber und nativer Audiowiedergabe. Keine Playlist-Ansicht. |
 | **Ausrichtung korrigieren** | EXIF inklusive Spiegelungen; manuelles Drehen zunächst nur für die Sitzung. Optional JPEG-EXIF ohne Neukompression speichern. |
-| **Kontrolliert importieren** | Prüflauf, detailliertes Schrittprotokoll, EXIF-basierte Zielnamen und Kollisionsprüfung vor dem Kopieren. |
+| **Kontrolliert importieren** | Prüflauf mit einem kompakten Ergebnis pro Datei, zuschaltbaren Arbeitsschritten, metadatenbasierten Zielnamen und Kollisionsprüfung. |
 | **Kollisionsduplikate prüfen** | Vollständiger Pixelvergleich geeigneter Bilder, jeweils eine Gruppe mit ausdrücklicher Entscheidung. |
 | **Einstellungen behalten** | Anzeige, Filter, Tastenkürzel, Schreibmodus und letzter Bibliothekspfad in macOS-Preferences. |
 
@@ -30,7 +31,7 @@ Dunkle Graphitflächen, helle kontrastreiche Texte und kompakte Abstände lassen
 
 ## Auf macOS installieren
 
-Voraussetzungen zum Bauen: **Rust/Cargo**, die **Xcode Command Line Tools**, **Python 3** sowie **ExifTool** für die Paketierung und schreibende EXIF-Funktionen. Mit vorhandenem Homebrew lässt sich ExifTool über `brew install exiftool` installieren. Der Paketbau verwendet lokal verfügbare Cargo-Abhängigkeiten; bei einem frischen Checkout zuerst `cargo fetch` ausführen.
+Voraussetzungen zum Bauen: **Rust/Cargo**, die **Xcode Command Line Tools**, **Python 3** sowie **ExifTool** für die Paketierung, Video-/Audio-Datumsmetadaten und schreibende EXIF-Funktionen. Mit vorhandenem Homebrew lässt sich ExifTool über `brew install exiftool` installieren. Der Paketbau verwendet lokal verfügbare Cargo-Abhängigkeiten; bei einem frischen Checkout zuerst `cargo fetch` ausführen.
 
 ```sh
 cargo fetch
@@ -69,7 +70,7 @@ Es gibt noch keinen veröffentlichten Homebrew-Cask und keinen Mac-App-Store-Dow
 
 ## Import und Umgang mit Originalen
 
-Ein Import wird ausdrücklich gestartet und **kopiert** ausschließlich ins gewählte Ziel. Die Quelle wird weder verschoben noch umbenannt. Ein Prüflauf schreibt keine Medien. Fehlende Aufnahmedaten werden sichtbar gemeldet und nicht durch ein Dateisystemdatum ersetzt.
+Ein Import wird ausdrücklich gestartet und **kopiert** ausschließlich ins gewählte Ziel. Die Quelle wird niemals gelöscht, verschoben oder umbenannt. Ein Prüflauf schreibt keine Medien. Das Protokoll zeigt standardmäßig einen Eintrag pro Datei mit Entscheidung und gekürztem Zielpfad. Tooltips zeigen vollständige Pfade, Datum und Datumsquelle. „Alle Schritte anzeigen“ blendet das ausführliche Protokoll ein; „Protokoll kopieren“ übernimmt jeweils die gewählte Ansicht. Bei Fotos/Videos werden fehlende Aufnahmedaten sichtbar gemeldet und nicht durch ein Dateisystemdatum ersetzt. Audio verwendet die unten beschriebene Priorität mit ausdrücklich gekennzeichneten Fallbacks. Bei Abbruch werden ausschließlich importereigene temporäre Zieldateien entfernt; fertige Kopien und alle Quellen bleiben erhalten.
 
 ```text
 Fotos/
@@ -77,12 +78,14 @@ Fotos/
 │   └── 10/
 │       └── img_20251016_153000.jpg
 └── 2026/
-    └── 09/
-        ├── img_20260916_035811.jpg
-        └── img_20260916_035811_001.jpg
+    ├── 09/
+    │   └── img_20260916_035811.jpg
+    └── diary/
+        ├── aud_20260115_143000.m4a
+        └── aud_20260916_035811.wav
 ```
 
-Fotos erhalten Datum und Uhrzeit aus **EXIF DateTimeOriginal**, Videos aus **QuickTime CreateDate**. Bei Fotokollisionen wird bytegenau verglichen: identische Dateien werden übersprungen, verschiedene mit Nummernzusatz kopiert. Bei Videos genügt der generierte Zielname zum Überspringen.
+Fotos erhalten Datum und Uhrzeit aus **EXIF DateTimeOriginal**, Videos aus **QuickTime CreateDate**. Bei Foto- und Audiokollisionen wird bytegenau verglichen: identische Dateien werden übersprungen, verschiedene mit Nummernzusatz kopiert. Bei Videos genügt der generierte Zielname zum Überspringen.
 
 Es gibt drei ausdrücklich freizugebende Schreibaktionen:
 
@@ -92,12 +95,37 @@ Es gibt drei ausdrücklich freizugebende Schreibaktionen:
 
 Details zu Prüflauf, Abbruch, Kollisionsnamen und Duplikatvergleich stehen im [Benutzerhandbuch](docs/USER_GUIDE.md).
 
+## Audio-Diary: ein Jahresverlauf
+
+Ein Jahr aufklappen und **„♪ Diary“** auswählen. Der Eintrag ist auch ohne vorhandene Aufnahmen verfügbar; das physische Verzeichnis wird erst bei einem ausdrücklich gestarteten Import angelegt. Die Dateiansicht zeigt ausschließlich Audio. Eine Aufnahme anklicken, um den Jahresplayer an ihrem Beginn zu öffnen, oder **„Jahresverlauf öffnen“** wählen.
+
+Der native Player bietet **eine zusammenhängende Hörleiste**, keine Playlist. Jede Datei belegt exakt den Anteil ihrer Dauer an der Gesamtdauer. Eine Aufnahme von 10 Sekunden neben einer von 30 Sekunden erhält entsprechend ein Viertel der Leiste. Es gibt keine stillen Kalenderlücken und keine erzeugte Sammeldatei. Der Schieber kann über alle Dateien hinweg springen; der Player zeigt aktuelle Aufnahme, Datum/Datumsquelle und Gesamtzeit. Tooltips erläutern die Segmente. Leertaste spielt/pausiert, Pfeiltasten springen fünf Sekunden, Buttons 15 Sekunden; Lautstärke ist einstellbar.
+
+Die Wiedergabe enthält alle Audiodateien im `diary` dieses Jahres, unabhängig vom Such- oder Videofilter. Reihenfolge: ausgewähltes Datumsfeld, bei Gleichstand Dateipfad. Der gesamte Verlauf wird vor dem Öffnen im Hintergrund vorbereitet; kann eine Aufnahme nicht gelesen werden, wird der Fehler angezeigt und keine unvollständige Leiste stillschweigend abgespielt.
+
+### Datum und Audio-Import
+
+Audio wird ohne Umwandlung als **`Jahr/diary/aud_JJJJMMTT_HHMMSS.ext`** kopiert. Datumsquellen werden in dieser Reihenfolge geprüft:
+
+1. Eingebettete Aufnahmezeit: BWF/RIFF `DateTimeOriginal`, ID3 `RecordingTime`, XMP `DateTimeOriginal`.
+2. Inhaltserstellungsdatum: QuickTime/Keys `CreationDate`, vollständiges RIFF `DateCreated` plus `TimeCreated`.
+3. Container-/XMP-Erstellung: QuickTime `CreateDate`, XMP `CreateDate`.
+4. **Gekennzeichneter Fallback:** Datum und Uhrzeit aus dem vollständigen Audio-Dateinamen: z. B. `2023-12-27_22-51-32`, `2023_12_27_22_51_32` oder `20231227225132`. Zwischen den Datums-/Zeitbestandteilen sind `-`, `_` oder keine Trennzeichen erlaubt. `aud_…`-Importnamen und getrennte numerische Kollisionszusätze bleiben unterstützt. Dieser Fallback erhält das gewählte Datum nach dem Kopieren.
+5. **Gekennzeichneter Fallback:** Dateisystem-Erstellungsdatum in lokaler macOS-Zeit; niemals Änderungsdatum. Das ist kein nachgewiesenes Aufnahmedatum und kann etwa nach einem Export abweichen.
+
+Nur vollständige, gültige Datum-/Uhrzeitwerte werden benutzt; Jahreszahlen und Datumswerte ohne Uhrzeit werden nicht still ergänzt. Bekannte Nullwerte wie `1904:01:01 00:00:00` werden verworfen. Enthaltene Zeitzonen werden protokolliert; Benennung und Sortierung verwenden den angegebenen lokalen Zeitwert ohne versteckte Verschiebung. Die Datumsquelle steht im Prüflauf, im Importprotokoll, unter „Datumsquellen der Aufnahmen“ und im Player. Widersprüchliche Metadaten lassen sich nicht pauschal beweisen; die definierte Priorität wählt die plausibelste vorhandene Quelle.
+
+Erkannt werden WAV/WAVE, MP3, M4A/M4B, AAC, AIFF/AIF/AIFC, CAF, FLAC, AC3/EAC3, AMR, AU/SND und MP2; tatsächliche Abspielbarkeit prüft AVFoundation. Reine Audio-MP4/MOV und andere bereits erkannte Mediencontainer werden über ihre Tracks als Audio klassifiziert. Enthält eine Datei Video, bleibt sie ein Video und wird nicht ins Diary importiert. Nicht aufgeführte Dateiendungen werden im ersten Entwurf noch nicht dynamisch aus allen macOS-Formaten ermittelt.
+
+Audio erhält dieselben sicheren Kopier- und Kollisionsregeln wie Fotos: bytegleiche Dateien überspringen, verschiedene mit `_001` usw. erhalten. **Der Import löscht niemals Quelldateien.** Die separate Pixelduplikat-Bereinigung gilt nur für Fotos.
+
 ## Bekannte Grenzen
 
 - Bilder: JPEG, PNG, WebP, TIFF, GIF und BMP. **HEIC und Kamera-RAW werden derzeit nicht unterstützt.** Animierte Formate sind kein vollständiger Animationsplayer.
 - Videos: Dateiendungen werden erkannt; tatsächlich dekodierbare Formate hängen von AVFoundation und installierten macOS-Codecs ab. Native Videovorschau, Player und Papierkorb sind auf macOS ausgelegt.
 - Duplikatfreigabe: konservativer, vollständiger Pixelvergleich statischer JPEG-/PNG-Dateien; keine unscharfe Ähnlichkeitssuche. Farbprofilunterschiede und unklare Formate verhindern automatische Freigaben. Grenzen: 32 Megapixel bzw. 256 MiB pro Datei.
 - Zwei Decoder und maximal 32 wartende Bildaufträge begrenzen die Arbeitsqueue. Bild-/GPU-Cache und Importprotokoll haben noch kein globales Speicherlimit; sehr große Sammlungen oder Protokolle können viel Speicher benötigen.
+- Audio-Diary ist ein erster macOS-Entwurf: noch keine Wellenform, keine manuelle Datumskorrektur und keine garantierte Unterstützung jedes Systemformats. Eine große Jahreskomposition kann beim Vorbereiten Zeit und Speicher benötigen; einzelne laufende Systemaufrufe sind nicht sofort abbrechbar. Die native Leiste verwendet angegebene Dauern, ohne Mindestbreiten für sehr kurze Segmente.
 - Keine Bearbeitungs-Suite für Zuschnitt, Belichtung oder Farbkorrekturen. Nicht gespeicherte Drehungen sind Sitzungskorrekturen.
 - Defekte Preferences werden sichtbar gemeldet und nicht überschrieben. Beim normalen Beenden werden ausstehende Einstellungen gespeichert; erzwungenes Beenden kann laufende Schreibvorgänge unterbrechen.
 
@@ -108,6 +136,7 @@ cargo run -- /Pfad/zur/Fotosammlung
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+make test-audio  # Native Jahreskomposition und Wiedergabe mit stummen Testdateien
 cargo build --workspace
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```

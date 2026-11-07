@@ -1,5 +1,6 @@
 fn main() {
     for source in [
+        "native/audio.m",
         "native/video.m",
         "native/player.m",
         "native/filesystem.m",
@@ -17,7 +18,7 @@ fn main() {
         _ => panic!("unsupported macOS architecture"),
     };
     let mut objects = Vec::new();
-    for source in ["video", "player", "filesystem"] {
+    for source in ["video", "player", "filesystem", "audio"] {
         let object = out.join(format!("{source}.o"));
         assert!(
             std::process::Command::new("clang")

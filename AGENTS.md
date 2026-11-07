@@ -1,7 +1,7 @@
 # PhotoSuite – verbindliche Projektregeln
 
 ## Produkt
-- Rust-Desktop-Anwendung zum komfortablen Betrachten von Foto- und Videosammlungen.
+- Rust-Desktop-Anwendung zum komfortablen Betrachten von Foto- und Videosammlungen sowie jährlichen Audio-Diaries.
 - UI in Rust mit egui/eframe; verständliche deutsche Beschriftungen.
 - Standardmäßig nur lesen. Explizite Ausnahme: bei aktiviertem Häkchen dürfen neue manuelle Drehbefehle JPEG-EXIF ändern. Keine automatische Massenänderung beim Öffnen/Scannen. JPEG-Pixel nicht neu komprimieren; Ohne dauerhafte Sicherung direkt in der Originaldatei aktualisieren (`-overwrite_original_in_place`); temporäre Arbeitsdatei darf intern verwendet werden. Bereits vorhandene fremde Backups nicht löschen. Andere Formate und symbolische Links nicht verändern. Keine Cache-Dateien in der Sammlung.
 - Jahres-/Monatsstruktur respektieren; Jahre standardmäßig eingeklappt und manuell aufklappbar; ganze Jahre und vorhandene Monate auswählbar.
@@ -35,7 +35,7 @@
 - Werkzeugleiste kompakt und fensterbreitenabhängig: Ordneraktionen, Menüs und kompaktes Suchfeld (180 Punkte) mit Filter in derselben umbrechenden Buttonzeile. Anzeigeoptionen unter „Ansicht“, Speichern und Tastenkürzel unter „Einstellungen“. Lange Steuerelementzeilen umbrechen, Pfade kürzen mit Tooltip; Bibliotheksleiste ausblendbar. Mindestfenstergröße 360 × 400.
 
 ## Import und Videovorschauen
-- Explizit gestarteter Import ist eine weitere Ausnahme zum Nur-Lesen-Modus: ausschließlich ins gewählte Ziel kopieren. Quelle niemals umbenennen, verschieben oder löschen. Quelle/Ziel dürfen sich nicht überschneiden.
+- Explizit gestarteter Import ist eine weitere Ausnahme zum Nur-Lesen-Modus: ausschließlich ins gewählte Ziel kopieren. Quelle niemals umbenennen, verschieben oder löschen. Ausschließlich eigene temporäre Zieldateien bei Fehler/Abbruch entfernen; keine vorhandenen Quell- oder Zieldateien löschen. Quelle/Ziel dürfen sich nicht überschneiden.
 - Foto-Aufnahmezeit ausschließlich aus EXIF DateTimeOriginal, bei Videos QuickTime CreateDate. Ungültiges/fehlendes Datum sichtbar melden; kein stiller Ersatz durch Dateisystemdatum. Keine implizite Zeitzonenverschiebung.
 - Ziel: Jahr/Monat/img_JJJJMMTT_HHMMSS.ext; Originalformat erhalten, .jpeg zu .jpg normalisieren. Fotos bei Kollision bytegenau vergleichen; identische überspringen, unterschiedliche mit _001 usw. kopieren. Videos bei gleichem generiertem Zielnamen überspringen.
 - Prüflauf ohne Schreibzugriffe und tatsächlicher Import mit erneuter Prüfung. Jede Phase, Quelle, Datum, Ziel, Kollisionsentscheidung, Fortschritt und Fehler im Protokoll sichtbar. Abbruch unterstützen, abgeschlossene Dateien behalten.
@@ -101,7 +101,7 @@
 
 - Aktive Bibliothek mit gekürztem Pfad und vollständigem Tooltip prominent unter den Werkzeugaktionen zeigen und in den Fenstertitel übernehmen. Fußzeile strikt einzeilig halten: Modus, Status und Fehler nebeneinander, bei Platzmangel kürzen und vollständigen Text im Tooltip anbieten.
 
-- Importprotokoll: jeden Schritt als eigenen Absatz anzeigen, eingebettete Zeilenumbrüche erhalten und lange Pfade umbrechen. Protokolltexte nicht auf eine gekürzte Rasterzeile beschränken.
+- Importprotokoll standardmäßig kompakt: genau ein strukturiertes Ergebnis pro abgeschlossener Datei (Entscheidung, Dateiname, relativer Zielpfad), Fehler sichtbar hervorheben. Vollständige Pfade, Datum und Datumsquelle per Tooltip. „Alle Schritte anzeigen“ schaltet das vollständige Detailprotokoll zu; dort Zeilenumbrüche erhalten und lange Pfade umbrechen. Kopieren exportiert die gewählte Ansicht. Dateiergebnisse als typisierte FileReport/FileDecision aus Anwendung liefern, niemals Logtexte zur Ermittlung von Entscheidungen parsen.
 
 ## Verbindliches Galeriedesign und Dokumentationspflege
 - Zentrales Designsystem in `src/theme.rs`; Farben, Schriftgrößen, Widgetzustände und gemeinsame Flächen dort pflegen. `docs/DESIGN.md` beschreibt das verbindliche Erscheinungsbild. Keine Fachlogik und keine Dateizugriffe im Theme.
@@ -113,3 +113,14 @@
 - Für Dokumentationsaufnahmen ausschließlich separate Demofotos mit nachvollziehbaren Bildrechten und isolierte Preferences benutzen. Keine privaten Sammlungen oder persönlichen Dateipfade veröffentlichen. Aufnahmeablauf und Bildquellen unter `docs/screenshots/README.md` dokumentieren; heruntergeladene Demobibliotheken bleiben außerhalb des versionierten Quellcodes.
 
 - Dunkle Galeriefarben müssen an eine explizite egui-ThemePreference::Dark gebunden bleiben. Nur Visuals/Style zu setzen reicht nicht: ein später gemeldetes helles macOS-Systemtheme darf keine schwarzen Standardtexte auf dunkle eigene Flächen bringen. Regressionen mit RawInput.system_theme und tatsächlich gerenderten Textfarben prüfen (u. a. Jahreszahlen, starke Überschriften, Menüs, Buttons und Suchhinweise), nicht nur Farbkonstanten vergleichen.
+
+
+## Audio-Diary und Jahres-Hörleiste
+- Pro Jahr einen virtuellen Diary-Eintrag anbieten, auch ohne vorhandene Audiodateien. Physische Ordner nicht beim Nur-Lesen-Scan anlegen. Erst der explizite Import erzeugt `Jahr/diary`.
+- Audio separat von Fotowand/Monaten anzeigen; `diary` enthält ausschließlich Audio. Reine Audio-MP4/MOV über tatsächliche AVFoundation-Tracks erkennen, Dateien mit Videospur als Video behandeln. Nicht unterstützte Codecs sichtbar melden. Erkennungsliste und tatsächliche Plattformprüfung ehrlich dokumentieren.
+- Importziel `Jahr/diary/aud_JJJJMMTT_HHMMSS.ext`, Originalformat und Bytes erhalten. Audio bei Kollision bytegenau vergleichen; identische überspringen, andere mit Nummernzusatz kopieren. Keine Quelle verändern oder löschen. Die Foto-Pixelduplikat-Bereinigung darf Audio nicht bearbeiten.
+- Datumspriorität in der Domäne: eingebettete Aufnahmezeiten (BWF/RIFF, ID3, XMP) vor Inhaltserstellungsdaten und Containerdaten; danach vollständiger Datum-/Uhrzeit-Dateiname (YYYY-MM-DD_HH-MM-SS, Unterstriche oder ohne Trenner; auch aud_-Importnamen und getrennte numerische Kollisionssuffixe) und zuletzt Dateisystem-Erstellungsdatum als ausdrücklich markierte Fallbacks. Kein Änderungsdatum. Unvollständige/ungültige Datumswerte und Null-Containerdatum verwerfen; keine erfundene Uhrzeit. Datum und Quelle im Prüflauf/Protokoll/Player zeigen. Foto-/Video-Datumsregeln bleiben unverändert.
+- Jahresverlauf als eine AVFoundation-Komposition, ohne Export oder Zusammenkopieren der Dateien, keine Playlist-Ansicht. Abschnittsbreite exakt proportional zur Dateidauer; keine Kalenderpausen oder Mindestbreiten, die das Verhältnis verändern. Globaler Schieber sucht über Dateigrenzen, Anzeige und Tooltips nennen aktuelle Aufnahme und Datumsquelle.
+- `Recording` und `YearTimeline` sichern positive endliche Dauern, Sortierung und globale Zeitzuordnung in der Domäne. `DiarySession` begrenzt Vorbereitung auf einen laufenden Auftrag einschließlich noch nicht abgeschlossener Abbrüche und bereitet den gesamten Jahresordner unabhängig von Such-/Videofiltern im Hintergrund vor und verwaltet Fortschritt, Abbruch, Fehler und veraltete Ergebnisse. UI zeigt Dateien und stößt Anwendungsfälle an.
+- AudioSource-/AudioPlayer-Ports in Anwendung; ExifTool/AVFoundation-Adapter in Desktop und ausschließlich in main injizieren. Native Audiokomposition auf Worker laden, Player/Bedienelemente auf Hauptthread. Bei Schließen/Ersetzen pausieren, Timer invalidieren und AVPlayerItem freigeben. Keine späten Seek-Callbacks reaktivieren geschlossene Player.
+- Tests mit echten temporären BWF/WAV- und Audio-MP4-Dateien für Datumswahl, Kopien, Kollisionen und Quellschutz. Domänentests für proportionale Abschnitte und Grenzen. `make test-audio` prüft zusätzlich tatsächliche Komposition, dateiübergreifendes Suchen, Wiedergabe, Pause und Freigabe mit stummen Testdateien. Manuelle Sichtprüfung weiterhin gesondert kennzeichnen.

@@ -5,6 +5,7 @@ impl super::Suite {
         if !self.show_library {
             return;
         }
+        let previous_group = self.group.clone();
         egui::SidePanel::left("albums")
             .default_width(180.).min_width(120.).max_width((ctx.content_rect().width() * 0.4).clamp(120., 260.))
             .frame(theme::panel(theme::SURFACE, 8))
@@ -34,8 +35,12 @@ impl super::Suite {
                                 if theme::navigation(ui, self.group.as_ref() == Some(&year), "Ganzes Jahr").clicked() {
                                     self.group = Some(year.clone());
                                 }
+                                let diary = format!("{year}/diary");
+                                if theme::navigation(ui, self.group.as_ref() == Some(&diary), "♪ Diary").clicked() {
+                                    self.group = Some(diary);
+                                }
                                 for g in months {
-                                    if g == year { continue; }
+                                    if g == year || crate::domain::diary::diary_year(&g).is_some() { continue; }
                                     let label = g.strip_prefix(&format!("{year}/")).unwrap_or(&g);
                                     if theme::navigation(ui, self.group.as_ref() == Some(&g), month_label(label)).clicked() {
                                         self.group = Some(g);
@@ -49,6 +54,11 @@ impl super::Suite {
                     }
                 });
             });
+        if self.group != previous_group {
+            self.selected = None;
+            self.storyboard.clear();
+            self.diary.cancel();
+        }
     }
 }
 fn month_label(value: &str) -> &str {

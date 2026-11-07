@@ -33,7 +33,7 @@ Eine kompakte Fotoanwendung: Bilder dominieren, Bedienung und Dateinamen bleiben
 - Allgemeine Bedienelemente 24 Punkte hoch, Navigationseinträge 26, Großansichtsbuttons 28. Größere Schrift nicht durch größere Ränder kompensieren.
 - **Großansicht:** Dateiname oben, anschließend genau zwei feste Kontrollzeilen: Navigation und externes Öffnen, darunter Bild-/Videoaktionen und Status. Kein horizontaler Scroller. Gleiche Höhe bei Foto/Video, EXIF an/aus und laufendem Speichern. Beschriftungen bei Platzmangel kürzen; vollständige Tooltips. Foto horizontal zentriert auf dunkler Bildfläche.
 - **Dialoge:** gemeinsame Optionsgruppen mit identischen Einrückungen. Lange Inhalte vertikal scrollbar, Pfade gekürzt mit Tooltip. EXIF-Schreibmodus ausdrücklich und kontrastreich beschriften.
-- **Import:** jeden Schritt als Absatz anzeigen, echte Zeilenumbrüche erhalten und lange Pfade umbrechen. Informationsvollständigkeit hat Vorrang vor einer festen Protokollzeilenhöhe.
+- **Import:** standardmäßig eine kompakte Zeile pro Datei mit Entscheidung, Namen und relativem Ziel. Vollständige Pfade, Datum und Datumsquelle im Tooltip; Fehler kontrastreich markieren. „Alle Schritte anzeigen“ bietet die vollständigen Arbeitsschritte mit erhaltenen Zeilenumbrüchen und umbrochenen Pfaden. Kopieren folgt der gewählten Ansicht.
 - **Fußzeile:** genau eine Zeile für Modus, Status und Fehler. Kürzen statt umbrechen; vollständige Meldung im Tooltip.
 - Mindestfenster 360 × 400. Auf schmalen Fenstern bleiben Aktionen erreichbar. Kein abgeschnittener Text ohne Tooltip und kein horizontaler Scroller in der Großansicht.
 
@@ -44,3 +44,7 @@ Bei wesentlichen sichtbaren Änderungen README und betroffene Screenshots im sel
 Screenshots sind echte Aufnahmen der aktuellen Anwendung, keine Mockups. Nur separate Demodaten und isolierte Preferences verwenden; keine privaten Fotos, persönlichen Verzeichnisse oder Zugangsdaten veröffentlichen. Bildquellen dokumentieren. Relative Markdown-Pfade mit exakter Groß-/Kleinschreibung verwenden, damit GitHub sie auf Branches und Tags auflösen kann. Screenshots gehören unter `docs/screenshots/`, Demo-Originale und Build-Dateien nicht ins Git-Repository.
 
 Automatisierte Layout-/Kontrasttests ergänzen die Sichtprüfung. Ein Regressionstest sendet helle und dunkle Systemtheme-Ereignisse und prüft die tatsächlich gerenderten Textfarben von Jahreszahlen, Überschriften, Menüs, Buttons und Eingabehinweisen. Eine manuelle Sichtprüfung nur als durchgeführt angeben, wenn die laufende App tatsächlich betrachtet wurde. Reproduktion unter [screenshots/README.md](screenshots/README.md).
+
+## Audio-Diary
+
+Unter jedem eingeklappten Jahr einen „♪ Diary“-Eintrag anbieten. Die Dateiansicht bleibt kompakt und kontrastreich; Audio ersetzt keine Fotokacheln in der allgemeinen Galerie. Der native Audioplayer verwendet eine einzelne segmentierte Jahresleiste mit heller Positionsmarke. Segmentbreiten ausschließlich nach Dauer, keine gleich breiten Titel und keine Playlist. Aktuelle Datei und Datumsquelle mit vollständigem Tooltip zeigen; Fallbacks ausdrücklich kennzeichnen. Die Dateiübersicht ist weiterhin separat erreichbar.

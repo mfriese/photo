@@ -1,3 +1,4 @@
+mod diary;
 mod library;
 mod toolbar;
 mod viewer;
@@ -6,6 +7,7 @@ use crate::domain::Media;
 use eframe::egui;
 use std::{path::PathBuf, sync::mpsc};
 pub struct Suite {
+    diary: photosuite_application::diary::DiarySession,
     storyboard: crate::storyboard_ui::StoryboardView,
     preferences: photosuite_application::preferences::Preferences,
     persistence: Option<photosuite_application::preferences::Persistence>,
@@ -31,6 +33,7 @@ pub struct Suite {
 impl Suite {
     fn load(&mut self, path: PathBuf) {
         self.storyboard.clear();
+        self.diary.cancel();
         let path = if path.is_absolute() {
             path
         } else {
@@ -130,6 +133,10 @@ impl Suite {
 }
 impl eframe::App for Suite {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.diary.poll(self.services.audio_player.as_ref());
+        if self.diary.is_loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         if let Some(saved) = self.editor.poll() {
             match saved.result {
                 Ok(()) => {
@@ -228,6 +235,7 @@ pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Se
         preferences.clone(),
     ));
     let mut app = Suite {
+        diary: Default::default(),
         storyboard: Default::default(),
         preferences: preferences.clone(),
         persistence,
@@ -269,6 +277,22 @@ mod layout_tests {
     use super::*;
     use std::sync::Arc;
     struct UnusedAdapters;
+    impl photosuite_application::diary::AudioSource for UnusedAdapters {
+        fn probe(
+            &self,
+            _: &std::path::Path,
+        ) -> Result<photosuite_application::diary::AudioProbe, String> {
+            unreachable!()
+        }
+        fn capture_time(&self, _: &std::path::Path) -> Result<crate::domain::CaptureTime, String> {
+            unreachable!()
+        }
+    }
+    impl photosuite_application::diary::AudioPlayer for UnusedAdapters {
+        fn open(&self, _: &crate::domain::diary::YearTimeline, _: f64) -> Result<(), String> {
+            unreachable!()
+        }
+    }
     impl crate::ports::MediaRepository for UnusedAdapters {
         fn scan(&self, _: &std::path::Path) -> (Vec<Media>, usize) {
             panic!("layout must not scan")
@@ -361,12 +385,15 @@ mod layout_tests {
     fn test_suite() -> Suite {
         let adapters = Arc::new(UnusedAdapters);
         Suite {
+            diary: Default::default(),
             storyboard: Default::default(),
             preferences: Default::default(),
             persistence: None,
             preferences_error: String::new(),
             options_open: false,
             services: crate::application::Services {
+                audio_source: adapters.clone(),
+                audio_player: adapters.clone(),
                 duplicates: adapters.clone(),
                 video_player: adapters.clone(),
                 video_preview: adapters.clone(),
@@ -539,7 +566,53 @@ mod layout_tests {
         ]);
         let expanded = draw(vec![]);
         assert!(expanded.iter().any(|(text, _)| text == "September"));
+        assert!(expanded.iter().any(|(text, _)| text == "♪ Diary"));
         assert!(expanded.iter().any(|(text, _)| text == "Ganzes Jahr"));
+    }
+    #[test]
+    fn diary_file_view_remains_readable_at_supported_widths() {
+        for width in [360., 600., 1280.] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let mut suite = test_suite();
+            suite.root = Some("/Fotos".into());
+            suite.group = Some("2026/diary".into());
+            suite.items = vec![
+                Media::from_path(
+                    "/Fotos/2026/diary/aud_20260916_035811.wav".into(),
+                    "2026/diary".into(),
+                )
+                .unwrap(),
+            ];
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    suite.toolbar(ctx);
+                    suite.status_bar(ctx);
+                    suite.library_sidebar(ctx);
+                    suite.photo_wall(ctx, &[0]);
+                },
+            );
+            for shape in output.shapes {
+                if let egui::Shape::Text(text) = shape.shape {
+                    if text.galley.job.text.is_empty() {
+                        continue;
+                    }
+                    let rect = text.visual_bounding_rect();
+                    assert!(
+                        rect.left() >= -1. && rect.right() <= width + 1.,
+                        "Diary overflow at {width}: {:?} {rect:?}",
+                        text.galley.job.text
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn toolbar_text_stays_inside_narrow_and_wide_windows() {

@@ -7,3 +7,7 @@ uninstall:
 	python3 scripts/macos_app.py uninstall
 pkg:
 	python3 scripts/macos_app.py package
+
+.PHONY: test-audio
+test-audio:
+	python3 scripts/check_native_audio.py

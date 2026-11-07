@@ -36,8 +36,8 @@ impl EditingSession {
         if self.is_saving() {
             return Err("Ein Speichervorgang läuft bereits".into());
         }
-        if media.is_video() {
-            return Err("Bildbearbeitung ist für Videos nicht verfügbar".into());
+        if !media.is_photo() {
+            return Err("Bildbearbeitung ist nur für Fotos verfügbar".into());
         }
         let turns = self
             .rotations

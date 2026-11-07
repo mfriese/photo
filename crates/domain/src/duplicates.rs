@@ -7,7 +7,7 @@ pub struct CollisionGroup {
     pub files: Vec<PathBuf>,
 }
 fn family(media: &Media) -> Option<(String, bool)> {
-    if media.is_video() {
+    if !media.is_photo() {
         return None;
     }
     let stem = media.path().file_stem()?.to_str()?;

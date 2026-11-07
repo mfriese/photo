@@ -12,6 +12,7 @@ pub struct ImportPanel {
     target: Option<PathBuf>,
     job: Option<Job>,
     log: Vec<Event>,
+    detailed_log: bool,
     current: usize,
     total: usize,
     summary: String,
@@ -97,7 +98,7 @@ impl ImportPanel {
                             && let Some(path) = rfd::FileDialog::new().pick_folder() { self.target = Some(path); }
                         let text = self.target.as_ref().map(|p| p.display().to_string()).unwrap_or("Keine Bibliothek gewählt".into());
                         ui.add(egui::Label::new(&text).truncate()).on_hover_text(text);
-                        ui.small("Jahr/Monat/img_JJJJMMTT_HHMMSS.ext");
+                        ui.small("Fotos/Video: Jahr/Monat/img_… · Audio: Jahr/diary/aud_…");
                     });
                     ui.horizontal_wrapped(|ui| {
                         let ready = self.source.is_some() && self.target.is_some();
@@ -119,10 +120,14 @@ impl ImportPanel {
                         ui.add(egui::ProgressBar::new(self.current as f32 / self.total as f32).text(format!("Datei {} / {}", self.current, self.total)));
                     }
                     if !self.summary.is_empty() { ui.label(&self.summary); }
-                    if ui.button("Protokoll kopieren").clicked() {
-                        ctx.copy_text(self.log.iter().map(|e| format!("[{}/{}] {}", e.file, e.total, e.message)).collect::<Vec<_>>().join("\n"));
-                    }
-                    show_import_log(ui, &self.log);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut self.detailed_log, "Alle Schritte anzeigen");
+                        if ui.button("Protokoll kopieren").clicked() {
+                            ctx.copy_text(export_log(&self.log, self.detailed_log, self.target.as_deref()));
+                        }
+                    });
+                    if self.detailed_log { show_import_log(ui, &self.log); }
+                    else { show_compact_log(ui, &self.log, self.target.as_deref(), self.job.is_some()); }
                 });
             });
         refresh
@@ -137,7 +142,7 @@ fn show_import_log(ui: &mut egui::Ui, events: &[Event]) {
         .show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width());
-                for event in events {
+                for event in events.iter().filter(|event| !event.message.is_empty()) {
                     ui.add(
                         egui::Label::new(format!(
                             "[{}/{}] {}",
@@ -150,9 +155,217 @@ fn show_import_log(ui: &mut egui::Ui, events: &[Event]) {
         });
 }
 
+fn decision_text(decision: &import::FileDecision) -> &str {
+    match decision {
+        import::FileDecision::Planned => "Geplant",
+        import::FileDecision::Copied => "Kopiert",
+        import::FileDecision::SkippedIdentical => "Identisch · übersprungen",
+        import::FileDecision::SkippedVideoName => "Videoname vorhanden · übersprungen",
+        import::FileDecision::Failed(_) => "Fehler",
+        import::FileDecision::Cancelled => "Abgebrochen",
+    }
+}
+fn compact_line(event: &Event, root: Option<&std::path::Path>) -> Option<String> {
+    let report = event.file_report.as_ref()?;
+    let source = report
+        .source
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let destination = report.target.as_deref().map(|path| {
+        root.and_then(|root| path.strip_prefix(root).ok())
+            .unwrap_or(path)
+            .display()
+            .to_string()
+    });
+    let mut line = format!(
+        "[{}/{}] {} · {source}",
+        event.file,
+        event.total,
+        decision_text(&report.decision)
+    );
+    if let Some(target) = destination {
+        line.push_str(&format!(" → {target}"));
+    }
+    if let import::FileDecision::Failed(error) = &report.decision {
+        line.push_str(&format!(" · {error}"));
+    }
+    Some(line.replace(['\n', '\r', '\t'], " "))
+}
+fn report_details(report: &import::FileReport) -> String {
+    let mut details = format!("Quelle: {}", report.source.display());
+    if let Some(time) = &report.captured {
+        details.push_str(&format!(
+            "\nDatum: {}\nDatumsquelle: {}",
+            time.stamp(),
+            time.origin()
+        ));
+    }
+    if let Some(target) = &report.target {
+        details.push_str(&format!("\nZiel: {}", target.display()));
+    }
+    details.push_str(&format!(
+        "\nEntscheidung: {}",
+        decision_text(&report.decision)
+    ));
+    if let import::FileDecision::Failed(error) = &report.decision {
+        details.push_str(&format!("\n{error}"));
+    }
+    details
+}
+fn export_log(events: &[Event], detailed: bool, root: Option<&std::path::Path>) -> String {
+    events
+        .iter()
+        .filter_map(|event| {
+            if detailed {
+                (!event.message.is_empty())
+                    .then(|| format!("[{}/{}] {}", event.file, event.total, event.message))
+            } else {
+                compact_line(event, root)
+                    .or_else(|| event.is_terminal().then(|| event.message.clone()))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+fn show_compact_log(
+    ui: &mut egui::Ui,
+    events: &[Event],
+    root: Option<&std::path::Path>,
+    running: bool,
+) {
+    let reports: Vec<_> = events
+        .iter()
+        .filter(|event| event.file_report.is_some())
+        .collect();
+    if running
+        && let Some(current) = events.last().filter(|event| {
+            !event.is_terminal() && event.file_report.is_none() && !event.message.is_empty()
+        })
+    {
+        ui.add(
+            egui::Label::new(if current.file == 0 {
+                current.message.clone()
+            } else {
+                format!("Datei {} / {} wird geprüft …", current.file, current.total)
+            })
+            .truncate(),
+        )
+        .on_hover_text(&current.message);
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("import_compact_log")
+        .stick_to_bottom(true)
+        .max_height(220.)
+        .show_rows(ui, 22., reports.len(), |ui, rows| {
+            for index in rows {
+                let event = reports[index];
+                let report = event.file_report.as_ref().unwrap();
+                let color = if matches!(report.decision, import::FileDecision::Failed(_)) {
+                    egui::Color32::LIGHT_RED
+                } else {
+                    crate::theme::TEXT
+                };
+                ui.add_sized(
+                    [ui.available_width(), 22.],
+                    egui::Label::new(
+                        egui::RichText::new(compact_line(event, root).unwrap()).color(color),
+                    )
+                    .truncate(),
+                )
+                .on_hover_text(report_details(report));
+            }
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compact_log_has_one_entry_per_file_and_retains_diagnostics_on_request() {
+        let report = import::FileReport {
+            source: "/Quelle/2023-12-27_22-51-32.wav".into(),
+            target: Some("/Bibliothek/2023/diary/aud_20231227_225132.wav".into()),
+            captured: Some(
+                crate::domain::CaptureTime::parse(
+                    "2023:12:27 22:51:32",
+                    "FALLBACK Audio-Dateiname",
+                )
+                .unwrap(),
+            ),
+            decision: import::FileDecision::Planned,
+        };
+        let events = vec![
+            Event {
+                file: 1,
+                total: 1,
+                message: "Metadaten lesen …".into(),
+                outcome: None,
+                file_report: None,
+            },
+            Event {
+                file: 1,
+                total: 1,
+                message: "Dateiinhalt vergleichen …".into(),
+                outcome: None,
+                file_report: None,
+            },
+            Event {
+                file: 1,
+                total: 1,
+                message: String::new(),
+                outcome: None,
+                file_report: Some(report.clone()),
+            },
+        ];
+        let compact = export_log(&events, false, Some(std::path::Path::new("/Bibliothek")));
+        assert_eq!(compact.lines().count(), 1);
+        assert!(compact.contains("Geplant"));
+        assert!(compact.contains("2023/diary/aud_20231227_225132.wav"));
+        assert!(!compact.contains("/Bibliothek/"));
+        assert!(!compact.contains("Metadaten lesen"));
+        let detailed = export_log(&events, true, None);
+        assert!(detailed.contains("Metadaten lesen"));
+        assert!(detailed.contains("Dateiinhalt vergleichen"));
+        assert!(report_details(&report).contains("FALLBACK Audio-Dateiname"));
+        for width in [280., 700.] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 400.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        show_compact_log(
+                            ui,
+                            &events,
+                            Some(std::path::Path::new("/Bibliothek")),
+                            false,
+                        )
+                    });
+                },
+            );
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| {
+                    if let egui::Shape::Text(t) = &s.shape {
+                        Some(t)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert_eq!(text.len(), 1);
+            assert_eq!(text[0].galley.rows.len(), 1);
+            assert!(text[0].visual_bounding_rect().right() <= width + 1.);
+        }
+    }
     #[test]
     fn import_results_preserve_newlines_and_wrap_long_paths() {
         for width in [280., 700.] {
@@ -164,6 +377,7 @@ mod tests {
                     total: 2,
                     message: "Quelle: /Fotos/Urlaub\nDatum: 20260801_120000".into(),
                     outcome: None,
+                    file_report: None,
                 },
                 Event {
                     file: 2,
@@ -173,6 +387,7 @@ mod tests {
                         "Langer Verzeichnisname/".repeat(5)
                     ),
                     outcome: None,
+                    file_report: None,
                 },
             ];
             let output = ctx.run(
