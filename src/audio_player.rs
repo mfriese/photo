@@ -155,7 +155,7 @@ impl AudioPlayer for NativeAudioPlayer {
             let Some(context) = guard.as_mut() else {
                 return photosuite_application::diary::AudioPlayerUpdate {
                     is_open: true,
-                    photo_to_open: None,
+                    photo_to_reveal: None,
                 };
             };
             if flags & 2 != 0 {
@@ -297,14 +297,14 @@ impl AudioPlayer for NativeAudioPlayer {
                     &mut slot,
                 )
             };
-            let photo_to_open = if clicked != 0 && clicked_session == session {
+            let photo_to_reveal = if clicked != 0 && clicked_session == session {
                 context.photo_at(clicked_request, slot as usize)
             } else {
                 None
             };
             photosuite_application::diary::AudioPlayerUpdate {
                 is_open: true,
-                photo_to_open,
+                photo_to_reveal,
             }
         }
         #[cfg(not(target_os = "macos"))]

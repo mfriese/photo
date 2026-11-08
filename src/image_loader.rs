@@ -376,14 +376,24 @@ mod tests {
             }
         }
         assert!(loader.byte_size() <= 8);
-        assert!(matches!(
-            ctx.try_load_texture(
-                "oriented://0:256/0.jpg",
-                egui::TextureOptions::LINEAR,
-                SizeHint::default()
-            )
-            .unwrap(),
-            egui::load::TexturePoll::Pending { .. }
-        ));
+        // CPU eviction precedes asynchronous texture release; wait for that release.
+        loop {
+            if matches!(
+                ctx.try_load_texture(
+                    "oriented://0:256/0.jpg",
+                    egui::TextureOptions::LINEAR,
+                    SizeHint::default()
+                )
+                .unwrap(),
+                egui::load::TexturePoll::Pending { .. }
+            ) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "evicted texture was never released"
+            );
+            std::thread::yield_now();
+        }
     }
 }

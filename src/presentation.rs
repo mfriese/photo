@@ -28,6 +28,8 @@ pub struct Suite {
     group: Option<String>,
     size: usize,
     selected: Option<usize>,
+    highlighted_photo: Option<PathBuf>,
+    scroll_to_photo: Option<PathBuf>,
     collection: photosuite_application::collection::CollectionSession,
     status: String,
     videos_only: bool,
@@ -58,6 +60,8 @@ impl Suite {
         }
         self.root = Some(path);
         self.items.clear();
+        self.highlighted_photo = None;
+        self.scroll_to_photo = None;
         self.selected = None;
         self.group = None;
         self.status = "Sammlung wird gelesen …".into();
@@ -295,6 +299,8 @@ pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Se
         query: String::new(),
         group: None,
         selected: None,
+        highlighted_photo: None,
+        scroll_to_photo: None,
         collection: Default::default(),
         videos_only: preferences.videos_only,
     };

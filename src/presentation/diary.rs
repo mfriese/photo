@@ -111,16 +111,22 @@ impl super::Suite {
         if audio_update.is_open {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        if let Some(path) = audio_update.photo_to_open {
-            if let Some(index) = self
-                .items
-                .iter()
-                .position(|media| media.is_photo() && media.path() == path)
-            {
-                self.selected = Some(index);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            } else {
-                self.status = "Foto gehört nicht mehr zur geöffneten Bibliothek".into();
+        if let Some(path) = audio_update.photo_to_reveal {
+            match crate::application::locate_photo(&self.items, &path) {
+                Ok(location) => {
+                    self.group = location.year;
+                    self.query.clear();
+                    self.videos_only = false;
+                    self.selected = None;
+                    self.storyboard.clear();
+                    self.diary_catalog.cancel();
+                    self.highlighted_photo = Some(self.items[location.index].path().to_owned());
+                    self.scroll_to_photo = self.highlighted_photo.clone();
+                    self.status =
+                        "Foto aus der Audiowiedergabe in der Jahresübersicht markiert".into();
+                    ctx.request_repaint();
+                }
+                Err(error) => self.status = error,
             }
         }
     }

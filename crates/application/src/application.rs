@@ -21,6 +21,29 @@ pub fn visible(items: &[Media], query: &str, group: Option<&str>, videos_only: b
         .collect()
 }
 
+/// Gallery destination for a contextual photo; never performs I/O or changes playback.
+pub struct PhotoLocation {
+    pub index: usize,
+    pub year: Option<String>,
+}
+pub fn locate_photo(items: &[Media], path: &std::path::Path) -> Result<PhotoLocation, String> {
+    let index = items
+        .iter()
+        .position(|media| media.is_photo() && media.path() == path)
+        .ok_or("Foto gehört nicht mehr zur geöffneten Bibliothek")?;
+    let year = items[index]
+        .group()
+        .split(std::path::MAIN_SEPARATOR)
+        .next()
+        .filter(|year| {
+            year.len() == 4
+                && year.bytes().all(|b| b.is_ascii_digit())
+                && year.parse::<u16>().is_ok_and(|n| n > 0)
+        })
+        .map(str::to_owned);
+    Ok(PhotoLocation { index, year })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,4 +82,28 @@ pub struct Services {
     pub repository: std::sync::Arc<dyn MediaRepository>,
     pub decoder: std::sync::Arc<dyn crate::ports::ImageDecoder>,
     pub opener: std::sync::Arc<dyn crate::ports::MediaOpener>,
+}
+
+#[cfg(test)]
+mod photo_location_tests {
+    use super::*;
+    #[test]
+    fn contextual_photo_uses_its_own_year_and_rejects_nonphotos_or_stale_paths() {
+        let items = vec![
+            Media::from_path("/Photos/2021/12/a.jpg".into(), "2021/12".into()).unwrap(),
+            Media::from_path("/Photos/2023/diary/a.wav".into(), "2023/diary".into()).unwrap(),
+        ];
+        let location = locate_photo(&items, items[0].path()).unwrap();
+        assert_eq!(location.year.as_deref(), Some("2021"));
+        assert_eq!(location.index, 0);
+        assert!(locate_photo(&items, items[1].path()).is_err());
+        assert!(locate_photo(&items, std::path::Path::new("/Other/a.jpg")).is_err());
+        let loose = Media::from_path("/Photos/Misc/a.jpg".into(), "Misc".into()).unwrap();
+        assert!(
+            locate_photo(std::slice::from_ref(&loose), loose.path())
+                .unwrap()
+                .year
+                .is_none()
+        );
+    }
 }

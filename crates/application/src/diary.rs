@@ -34,7 +34,7 @@ pub trait AudioSource: Send + Sync + 'static {
 #[derive(Default)]
 pub struct AudioPlayerUpdate {
     pub is_open: bool,
-    pub photo_to_open: Option<PathBuf>,
+    pub photo_to_reveal: Option<PathBuf>,
 }
 #[derive(Clone, Copy, Default)]
 pub struct AudioPlaybackState {
@@ -66,7 +66,7 @@ pub trait AudioPlayer: Send + Sync + 'static {
     fn state(&self) -> AudioPlaybackState {
         AudioPlaybackState::default()
     }
-    /// Pump platform events on the UI thread; consume photo-open events.
+    /// Pump platform events on the UI thread; consume photo-reveal events.
     fn poll(&self) -> AudioPlayerUpdate {
         AudioPlayerUpdate::default()
     }

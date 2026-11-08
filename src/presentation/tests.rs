@@ -157,6 +157,8 @@ fn test_suite() -> Suite {
         group: None,
         size: 2,
         selected: None,
+        highlighted_photo: None,
+        scroll_to_photo: None,
         collection: Default::default(),
         status: String::new(),
         videos_only: true,
@@ -165,7 +167,7 @@ fn test_suite() -> Suite {
     }
 }
 #[test]
-fn audio_photo_event_opens_normal_viewer_with_navigation_and_preserves_diary_filters() {
+fn audio_photo_event_reveals_year_without_viewer_or_focus_change() {
     struct PhotoClick(std::sync::Mutex<Option<PathBuf>>);
     impl photosuite_application::diary::AudioPlayer for PhotoClick {
         fn revise(
@@ -187,7 +189,7 @@ fn audio_photo_event_opens_normal_viewer_with_navigation_and_preserves_diary_fil
         fn poll(&self) -> photosuite_application::diary::AudioPlayerUpdate {
             photosuite_application::diary::AudioPlayerUpdate {
                 is_open: true,
-                photo_to_open: self.0.lock().unwrap().take(),
+                photo_to_reveal: self.0.lock().unwrap().take(),
             }
         }
     }
@@ -206,16 +208,35 @@ fn audio_photo_event_opens_normal_viewer_with_navigation_and_preserves_diary_fil
     suite.services.audio_player = Arc::new(PhotoClick(std::sync::Mutex::new(Some(
         suite.items[1].path().into(),
     ))));
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        suite.poll_audio_player(ctx)
+    });
+    assert!(
+        !output
+            .viewport_output
+            .values()
+            .flat_map(|v| &v.commands)
+            .any(|command| matches!(command, egui::ViewportCommand::Focus))
+    );
+    assert!(suite.selected.is_none());
+    assert_eq!(suite.group.as_deref(), Some("2023"));
+    assert!(suite.query.is_empty());
+    assert!(!suite.videos_only);
+    assert_eq!(suite.visible(), vec![1, 2]);
+    assert_eq!(
+        suite.highlighted_photo.as_deref(),
+        Some(suite.items[1].path())
+    );
+    assert_eq!(
+        suite.scroll_to_photo.as_deref(),
+        Some(suite.items[1].path())
+    );
+    suite.scroll_to_photo = None;
     suite.poll_audio_player(&ctx);
-    assert_eq!(suite.selected, Some(1));
-    assert_eq!(suite.group.as_deref(), Some("2023/diary"));
-    assert_eq!(suite.query, "aud_");
-    assert!(suite.videos_only);
-    assert_eq!(suite.visible(), vec![0]);
-    assert_eq!(suite.viewer_items(&suite.visible()), vec![1, 2]);
-    suite.selected = None;
-    suite.poll_audio_player(&ctx);
-    assert!(suite.selected.is_none(), "click must be consumed once");
+    assert!(
+        suite.scroll_to_photo.is_none(),
+        "click must be consumed once"
+    );
     suite.services.audio_player = Arc::new(PhotoClick(std::sync::Mutex::new(Some(
         "/Other/library.jpg".into(),
     ))));
@@ -495,5 +516,65 @@ fn toolbar_text_stays_inside_narrow_and_wide_windows() {
             }
         }
         assert!(text_count > 3);
+    }
+}
+
+#[test]
+fn audio_photo_jump_renders_far_target_with_highlight_in_virtualized_wall() {
+    for width in [360., 900.] {
+        for zoom in [0, 2, 4] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let mut suite = test_suite();
+            suite.root = Some("/Photos".into());
+            suite.group = Some("2023".into());
+            suite.videos_only = false;
+            suite.size = zoom;
+            suite.items = (0..1000)
+                .map(|i| {
+                    Media::from_path(
+                        format!("/Photos/2023/12/img_{i:04}.jpg").into(),
+                        "2023/12".into(),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            suite.highlighted_photo = Some(suite.items[900].path().into());
+            suite.scroll_to_photo = suite.highlighted_photo.clone();
+            let visible = suite.visible();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| suite.photo_wall(ctx, &visible),
+            );
+            let highlighted: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect)
+                        if rect.stroke.width == 3. && rect.stroke.color == crate::theme::ACCENT =>
+                    {
+                        Some((rect.rect, shape.clip_rect))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                highlighted.len(),
+                1,
+                "target not rendered at width {width}, zoom {zoom}"
+            );
+            assert!(
+                highlighted[0].1.contains_rect(highlighted[0].0),
+                "highlight outside viewport: {highlighted:?}"
+            );
+            assert!(suite.scroll_to_photo.is_none());
+            assert!(suite.selected.is_none());
+        }
     }
 }

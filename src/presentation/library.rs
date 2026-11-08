@@ -31,6 +31,7 @@ impl super::Suite {
                     for (year, months) in years.into_iter().rev() {
                         egui::CollapsingHeader::new(egui::RichText::new(&year).size(14.).strong())
                             .id_salt((&self.root, &year)).default_open(false)
+                            .open((self.scroll_to_photo.is_some() && self.group.as_deref()==Some(year.as_str())).then_some(true))
                             .show(ui, |ui| {
                                 if theme::navigation(ui, self.group.as_ref() == Some(&year), "Ganzes Jahr").clicked() {
                                     self.group = Some(year.clone());
@@ -56,6 +57,8 @@ impl super::Suite {
             });
         if self.group != previous_group {
             self.selected = None;
+            self.highlighted_photo = None;
+            self.scroll_to_photo = None;
             self.storyboard.clear();
             self.diary.cancel();
             self.diary_catalog.cancel();

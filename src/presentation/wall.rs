@@ -85,7 +85,20 @@ impl super::Suite {
                 let columns = ((width + gap) / (target + gap)).floor().max(1.) as usize;
                 let tile = ((width - gap * (columns - 1) as f32) / columns as f32).max(1.);
                 let row_height = tile + 24.;
-                egui::ScrollArea::vertical().show_rows(
+                let mut scroll =
+                    egui::ScrollArea::vertical().id_salt(("photo_wall", &self.root, &self.group));
+                if let Some(path) = self.scroll_to_photo.take()
+                    && let Some(position) = visible
+                        .iter()
+                        .position(|&index| self.items[index].path() == path)
+                {
+                    let row = position / columns;
+                    let stride = row_height + ui.spacing().item_spacing.y;
+                    let offset =
+                        (row as f32 * stride - (ui.available_height() - stride) * 0.5).max(0.);
+                    scroll = scroll.vertical_scroll_offset(offset);
+                }
+                scroll.show_rows(
                     ui,
                     row_height,
                     visible.len().div_ceil(columns),
@@ -152,11 +165,16 @@ impl super::Suite {
                                                 );
                                             }
                                             image.corner_radius(8).paint_at(ui, paint_rect);
-                                            if response.hovered() {
+                                            let highlighted =
+                                                self.highlighted_photo.as_deref() == Some(m.path());
+                                            if response.hovered() || highlighted {
                                                 ui.painter().rect_stroke(
                                                     rect.shrink(1.),
                                                     8.,
-                                                    egui::Stroke::new(2_f32, theme::ACCENT),
+                                                    egui::Stroke::new(
+                                                        if highlighted { 3_f32 } else { 2_f32 },
+                                                        theme::ACCENT,
+                                                    ),
                                                     egui::StrokeKind::Inside,
                                                 );
                                             }
