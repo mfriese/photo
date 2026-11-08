@@ -1,6 +1,6 @@
 //! macOS audio probing, embedded metadata and native year-player adapters.
-use crate::domain::{CaptureTime, diary::YearTimeline};
-use photosuite_application::diary::{AudioPlayer, AudioProbe, AudioSource};
+use crate::domain::CaptureTime;
+use photosuite_application::diary::{AudioProbe, AudioSource};
 use std::path::Path;
 pub struct NativeAudioSource {
     pub tool: crate::exiftool::ExifTool,
@@ -53,8 +53,27 @@ impl AudioSource for NativeAudioSource {
             Err("Diary-Audio derzeit nur unter macOS verfügbar".into())
         }
     }
-    fn capture_time(&self, path: &Path) -> Result<CaptureTime, String> {
+    fn file_size(&self, path: &Path) -> Result<u64, String> {
+        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err("Keine reguläre Audiodatei".into());
+        }
+        Ok(metadata.len())
+    }
+    fn inspect(&self, path: &Path) -> Result<crate::domain::diary::Recording, String> {
         let probe = self.probe(path)?;
+        crate::domain::diary::Recording::new(
+            path.into(),
+            self.capture_with_probe(path, &probe)?,
+            probe.duration,
+        )
+    }
+    fn capture_time(&self, path: &Path) -> Result<CaptureTime, String> {
+        self.capture_with_probe(path, &self.probe(path)?)
+    }
+}
+impl NativeAudioSource {
+    fn capture_with_probe(&self, path: &Path, probe: &AudioProbe) -> Result<CaptureTime, String> {
         if !probe.audio_only {
             return Err("Datei enthält Video oder keine Audiospur".into());
         }
@@ -96,75 +115,6 @@ impl AudioSource for NativeAudioSource {
             path.file_stem().and_then(|s| s.to_str()),
             probe.file_created.as_deref(),
         )
-    }
-}
-pub struct NativeAudioPlayer;
-impl AudioPlayer for NativeAudioPlayer {
-    fn open(&self, timeline: &YearTimeline, start: f64) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
-        {
-            use std::{ffi::CString, os::unix::ffi::OsStrExt};
-            unsafe extern "C" {
-                fn photosuite_audio_open(
-                    paths: *const *const std::ffi::c_char,
-                    labels: *const *const std::ffi::c_char,
-                    durations: *const f64,
-                    recorded_at: *const f64,
-                    count: usize,
-                    year: *const std::ffi::c_char,
-                    start: f64,
-                ) -> i32;
-            }
-            let paths: Vec<_> = timeline
-                .recordings()
-                .iter()
-                .map(|r| CString::new(r.path().as_os_str().as_bytes()).map_err(|e| e.to_string()))
-                .collect::<Result<_, _>>()?;
-            let labels: Vec<_> = timeline
-                .recordings()
-                .iter()
-                .map(|r| {
-                    CString::new(format!(
-                        "{} · {}",
-                        r.captured().stamp(),
-                        r.captured().origin()
-                    ))
-                    .map_err(|e| e.to_string())
-                })
-                .collect::<Result<_, _>>()?;
-            let path_ptrs: Vec<_> = paths.iter().map(|s| s.as_ptr()).collect();
-            let label_ptrs: Vec<_> = labels.iter().map(|s| s.as_ptr()).collect();
-            let durations: Vec<_> = timeline.recordings().iter().map(|r| r.duration()).collect();
-            let recorded_at: Vec<_> = timeline
-                .recordings()
-                .iter()
-                .map(|r| r.captured().civil_seconds() as f64)
-                .collect();
-            let year = CString::new(timeline.year()).map_err(|e| e.to_string())?;
-            let status = unsafe {
-                photosuite_audio_open(
-                    path_ptrs.as_ptr(),
-                    label_ptrs.as_ptr(),
-                    durations.as_ptr(),
-                    recorded_at.as_ptr(),
-                    paths.len(),
-                    year.as_ptr(),
-                    start,
-                )
-            };
-            if status == 0 {
-                Ok(())
-            } else {
-                Err(format!(
-                    "Audioplayer konnte nicht geöffnet werden ({status})"
-                ))
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = (timeline, start);
-            Err("Audioplayer derzeit nur unter macOS verfügbar".into())
-        }
     }
 }
 

@@ -225,6 +225,20 @@ fn centered_preview(ui: &mut egui::Ui, image: egui::Image<'_>) -> egui::Response
         .inner
 }
 
+impl super::Suite {
+    /// A photo opened from Diary needs photo navigation while Diary remains selected behind it.
+    pub(super) fn viewer_items(&self, visible: &[usize]) -> Vec<usize> {
+        if let Some(index) = self.selected
+            && !visible.contains(&index)
+            && self.items[index].is_photo()
+        {
+            crate::application::visible(&self.items, "", Some(self.items[index].group()), false)
+        } else {
+            visible.to_vec()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

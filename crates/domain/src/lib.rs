@@ -115,3 +115,7 @@ pub fn is_audio_extension(path: &std::path::Path) -> bool {
     )
 }
 pub mod audio_date;
+
+pub mod photo_context;
+
+pub mod diary_timeline;

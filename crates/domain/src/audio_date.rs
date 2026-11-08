@@ -57,7 +57,7 @@ pub fn select_audio_date(
 }
 /// Anchored YYYY[-_]MM[-_]DD[-_]hh[-_]mm[-_]ss, also without separators.
 /// Optional aud_ prefix and a separated numeric collision suffix are supported.
-fn date_from_filename(stem: &str) -> Option<CaptureTime> {
+pub fn date_from_filename(stem: &str) -> Option<CaptureTime> {
     let imported = stem
         .get(..4)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("aud_"));

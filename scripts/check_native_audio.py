@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the macOS audio integration test with silent, temporary WAV fixtures."""
+"""Verify progressive macOS playback and in-place timeline corrections using silent WAVs."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,7 +21,7 @@ def main():
                 output.writeframes(b"\0\0" * 8000 * seconds)
             files.append(path)
         binary = directory / "native-audio-test"
-        subprocess.run(["clang", "-fobjc-arc", "-Wno-deprecated-declarations", str(ROOT / "tests/native_audio.m"), "-framework", "AVFoundation", "-framework", "AppKit", "-framework", "Foundation", "-framework", "CoreMedia", "-o", str(binary)], check=True)
+        subprocess.run(["clang", "-fobjc-arc", "-Wno-deprecated-declarations", str(ROOT / "tests/native_audio.m"), str(ROOT / "native/context_photo_view.m"), str(ROOT / "native/audio_transport.m"), str(ROOT / "native/audio_timeline_view.m"), "-framework", "AVFoundation", "-framework", "AppKit", "-framework", "Foundation", "-framework", "CoreMedia", "-o", str(binary)], check=True)
         subprocess.run([str(binary), *(str(path) for path in files)], check=True, timeout=25)
 
 

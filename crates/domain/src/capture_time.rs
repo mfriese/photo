@@ -46,6 +46,34 @@ impl CaptureTime {
     pub fn origin(&self) -> &str {
         &self.origin
     }
+    pub fn from_photo_filename(stem: &str) -> Option<Self> {
+        let base = stem.get(..19)?;
+        if !base.get(..4)?.eq_ignore_ascii_case("img_") || base.as_bytes()[12] != b'_' {
+            return None;
+        }
+        let date = base.get(4..12)?;
+        let clock = base.get(13..19)?;
+        if !date
+            .bytes()
+            .chain(clock.bytes())
+            .all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        Self::parse(
+            &format!(
+                "{}:{}:{} {}:{}:{}",
+                &date[..4],
+                &date[4..6],
+                &date[6..],
+                &clock[..2],
+                &clock[2..4],
+                &clock[4..]
+            ),
+            "Foto-Importdateiname",
+        )
+        .ok()
+    }
     pub fn date_label(&self) -> String {
         format!(
             "{}.{}.{}",

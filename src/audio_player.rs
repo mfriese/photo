@@ -1,0 +1,315 @@
+//! Native playback bridge: application snapshots in, UI updates/clicks out.
+use crate::domain::diary_timeline::DiaryTimeline;
+use photosuite_application::diary::{AudioPlaybackState, AudioPlayer, VerificationProgress};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+#[path = "audio_player_projection.rs"]
+mod projection;
+pub struct NativeAudioPlayer {
+    source: std::sync::Arc<dyn photosuite_application::photo_context::ContextPhotoSource>,
+    context: std::sync::Mutex<Option<photosuite_application::photo_context::PhotoContext>>,
+    session: std::sync::atomic::AtomicU64,
+}
+impl NativeAudioPlayer {
+    pub fn new(
+        source: std::sync::Arc<dyn photosuite_application::photo_context::ContextPhotoSource>,
+    ) -> Self {
+        Self {
+            source,
+            context: Default::default(),
+            session: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+impl AudioPlayer for NativeAudioPlayer {
+    fn open(
+        &self,
+        timeline: &DiaryTimeline,
+        selected: &Path,
+        photos: &[crate::domain::Media],
+    ) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            let session =
+                projection::NativeLayout::new(timeline, &VerificationProgress::default())?
+                    .open(timeline.year(), selected)?;
+            self.session
+                .store(session, std::sync::atomic::Ordering::Relaxed);
+            let candidates = photos
+                .iter()
+                .filter(|p| p.is_photo())
+                .map(|p| p.path().to_owned())
+                .collect();
+            *self.context.lock().unwrap() =
+                Some(photosuite_application::photo_context::PhotoContext::new(
+                    self.source.clone(),
+                    candidates,
+                ));
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (timeline, selected, photos);
+            Err("Audioplayer derzeit nur unter macOS verfügbar".into())
+        }
+    }
+    fn revise(
+        &self,
+        timeline: &DiaryTimeline,
+        progress: &VerificationProgress,
+    ) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            let status = if progress.cancelled {
+                "Prüfung abgebrochen · Grau: vorläufig · Blau: geprüft".into()
+            } else if progress.checked == progress.total && progress.errors.is_empty() {
+                format!(
+                    "Alle {} Aufnahmen geprüft · Breiten nach Dauer",
+                    progress.total
+                )
+            } else {
+                format!(
+                    "Geprüft {} / {} · {} Fehler · Grau: vorläufig · Blau: geprüft",
+                    progress.checked,
+                    progress.total,
+                    progress.errors.len()
+                )
+            };
+            projection::NativeLayout::new(timeline, progress)?.revise(
+                self.session.load(std::sync::atomic::Ordering::Relaxed),
+                &status,
+            )
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (timeline, progress);
+            Err("Audioplayer derzeit nur unter macOS verfügbar".into())
+        }
+    }
+    fn state(&self) -> AudioPlaybackState {
+        #[cfg(target_os = "macos")]
+        {
+            unsafe extern "C" {
+                fn photosuite_audio_state(session: u64) -> i32;
+            }
+            let flags = unsafe {
+                photosuite_audio_state(self.session.load(std::sync::atomic::Ordering::Relaxed))
+            };
+            AudioPlaybackState {
+                is_open: flags & 1 != 0,
+                has_started: flags & 2 != 0,
+                failed: flags & 4 != 0,
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Default::default()
+        }
+    }
+    fn poll(&self) -> photosuite_application::diary::AudioPlayerUpdate {
+        #[cfg(target_os = "macos")]
+        {
+            use photosuite_application::photo_context::PhotoEvent;
+            use std::ffi::CString;
+            unsafe extern "C" {
+                fn photosuite_audio_context_click(
+                    session: *mut u64,
+                    request: *mut u64,
+                    slot: *mut u32,
+                ) -> i32;
+                fn photosuite_audio_context_state(
+                    session: *mut u64,
+                    request: *mut u64,
+                    civil: *mut f64,
+                ) -> i32;
+                fn photosuite_audio_context_slot(
+                    session: u64,
+                    request: u64,
+                    slot: u32,
+                    png: *const u8,
+                    length: usize,
+                    tooltip: *const std::ffi::c_char,
+                    state: i32,
+                );
+                fn photosuite_audio_context_caption(
+                    session: u64,
+                    request: u64,
+                    slot: u32,
+                    date: *const std::ffi::c_char,
+                    clock: *const std::ffi::c_char,
+                );
+                fn photosuite_audio_context_status(
+                    session: u64,
+                    request: u64,
+                    status: *const std::ffi::c_char,
+                );
+            }
+            let (mut session, mut request, mut civil) = (0, 0, 0.);
+            let flags =
+                unsafe { photosuite_audio_context_state(&mut session, &mut request, &mut civil) };
+            let mut guard = self.context.lock().unwrap();
+            if flags & 1 == 0 {
+                *guard = None;
+                return Default::default();
+            }
+            let Some(context) = guard.as_mut() else {
+                return photosuite_application::diary::AudioPlayerUpdate {
+                    is_open: true,
+                    photo_to_open: None,
+                };
+            };
+            if flags & 2 != 0 {
+                context.request(request, civil);
+            }
+            for event in context.poll() {
+                match event {
+                    PhotoEvent::Failed { request, message } => {
+                        if let Ok(text) = CString::new(message) {
+                            unsafe {
+                                photosuite_audio_context_status(session, request, text.as_ptr());
+                                for slot in 0..5 {
+                                    photosuite_audio_context_slot(
+                                        session,
+                                        request,
+                                        slot,
+                                        std::ptr::null(),
+                                        0,
+                                        text.as_ptr(),
+                                        3,
+                                    );
+                                    photosuite_audio_context_caption(
+                                        session,
+                                        request,
+                                        slot,
+                                        std::ptr::null(),
+                                        std::ptr::null(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    PhotoEvent::Selection {
+                        request,
+                        photos,
+                        unreadable,
+                    } => {
+                        let count = photos.iter().flatten().count();
+                        let status = if count == 0 {
+                            format!("Keine Fotos mit auswertbarem Datum ({unreadable} ohne Datum)")
+                        } else if unreadable > 0 {
+                            format!("{unreadable} Dateien ohne auswertbares Datum")
+                        } else {
+                            String::new()
+                        };
+                        if let Ok(text) = CString::new(status) {
+                            unsafe {
+                                photosuite_audio_context_status(session, request, text.as_ptr());
+                            }
+                        }
+                        for (slot, photo) in photos.iter().enumerate() {
+                            let tooltip = photo
+                                .as_ref()
+                                .map(|p| {
+                                    format!(
+                                        "{} {}\n{}\n{}",
+                                        p.captured().date_label(),
+                                        p.captured().time_label(),
+                                        p.captured().origin(),
+                                        p.path().display()
+                                    )
+                                })
+                                .unwrap_or_else(|| "Kein zeitlicher Nachbar vorhanden".into());
+                            if let Ok(text) = CString::new(tooltip) {
+                                unsafe {
+                                    photosuite_audio_context_slot(
+                                        session,
+                                        request,
+                                        slot as u32,
+                                        std::ptr::null(),
+                                        0,
+                                        text.as_ptr(),
+                                        i32::from(photo.is_some()),
+                                    );
+                                    let date = CString::new(
+                                        photo
+                                            .as_ref()
+                                            .map(|p| p.captured().date_label())
+                                            .unwrap_or_default(),
+                                    )
+                                    .unwrap();
+                                    let clock = CString::new(
+                                        photo
+                                            .as_ref()
+                                            .map(|p| p.captured().time_label())
+                                            .unwrap_or_default(),
+                                    )
+                                    .unwrap();
+                                    photosuite_audio_context_caption(
+                                        session,
+                                        request,
+                                        slot as u32,
+                                        date.as_ptr(),
+                                        clock.as_ptr(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    PhotoEvent::Image {
+                        request,
+                        slot,
+                        result,
+                    } => match result {
+                        Ok(png) => unsafe {
+                            photosuite_audio_context_slot(
+                                session,
+                                request,
+                                slot as u32,
+                                png.as_ptr(),
+                                png.len(),
+                                std::ptr::null(),
+                                2,
+                            );
+                        },
+                        Err(error) => {
+                            if let Ok(text) = CString::new(error) {
+                                unsafe {
+                                    photosuite_audio_context_slot(
+                                        session,
+                                        request,
+                                        slot as u32,
+                                        std::ptr::null(),
+                                        0,
+                                        text.as_ptr(),
+                                        3,
+                                    );
+                                }
+                            }
+                        }
+                    },
+                }
+            }
+            let (mut clicked_session, mut clicked_request, mut slot) = (0, 0, 0);
+            let clicked = unsafe {
+                photosuite_audio_context_click(
+                    &mut clicked_session,
+                    &mut clicked_request,
+                    &mut slot,
+                )
+            };
+            let photo_to_open = if clicked != 0 && clicked_session == session {
+                context.photo_at(clicked_request, slot as usize)
+            } else {
+                None
+            };
+            photosuite_application::diary::AudioPlayerUpdate {
+                is_open: true,
+                photo_to_open,
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Default::default()
+        }
+    }
+}

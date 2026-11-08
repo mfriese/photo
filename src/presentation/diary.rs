@@ -105,6 +105,27 @@ impl super::Suite {
         }
     }
 }
+impl super::Suite {
+    pub(super) fn poll_audio_player(&mut self, ctx: &egui::Context) {
+        let audio_update = self.services.audio_player.poll();
+        if audio_update.is_open {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        if let Some(path) = audio_update.photo_to_open {
+            if let Some(index) = self
+                .items
+                .iter()
+                .position(|media| media.is_photo() && media.path() == path)
+            {
+                self.selected = Some(index);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            } else {
+                self.status = "Foto gehört nicht mehr zur geöffneten Bibliothek".into();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

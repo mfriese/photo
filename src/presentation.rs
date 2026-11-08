@@ -147,6 +147,7 @@ impl eframe::App for Suite {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         self.diary.poll(self.services.audio_player.as_ref());
+        self.poll_audio_player(ctx);
         if self.diary.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -211,7 +212,8 @@ impl eframe::App for Suite {
         self.library_sidebar(ctx);
         let visible = self.visible();
         self.photo_wall(ctx, &visible);
-        self.media_viewer(ctx, &visible, &mut pending);
+        let viewer_visible = self.viewer_items(&visible);
+        self.media_viewer(ctx, &viewer_visible, &mut pending);
         if self.selected.is_none() {
             self.storyboard.clear();
         }
@@ -311,6 +313,10 @@ mod layout_tests {
     use std::sync::Arc;
     struct UnusedAdapters;
     impl photosuite_application::diary::AudioSource for UnusedAdapters {
+        fn file_size(&self, _: &std::path::Path) -> Result<u64, String> {
+            panic!("layout must not stat")
+        }
+
         fn probe(
             &self,
             _: &std::path::Path,
@@ -329,7 +335,20 @@ mod layout_tests {
         }
     }
     impl photosuite_application::diary::AudioPlayer for UnusedAdapters {
-        fn open(&self, _: &crate::domain::diary::YearTimeline, _: f64) -> Result<(), String> {
+        fn revise(
+            &self,
+            _: &crate::domain::diary_timeline::DiaryTimeline,
+            _: &photosuite_application::diary::VerificationProgress,
+        ) -> Result<(), String> {
+            unreachable!()
+        }
+
+        fn open(
+            &self,
+            _: &crate::domain::diary_timeline::DiaryTimeline,
+            _: &std::path::Path,
+            _: &[Media],
+        ) -> Result<(), String> {
             unreachable!()
         }
     }
@@ -462,6 +481,65 @@ mod layout_tests {
             square_previews: true,
             show_library: true,
         }
+    }
+    #[test]
+    fn audio_photo_event_opens_normal_viewer_with_navigation_and_preserves_diary_filters() {
+        struct PhotoClick(std::sync::Mutex<Option<PathBuf>>);
+        impl photosuite_application::diary::AudioPlayer for PhotoClick {
+            fn revise(
+                &self,
+                _: &crate::domain::diary_timeline::DiaryTimeline,
+                _: &photosuite_application::diary::VerificationProgress,
+            ) -> Result<(), String> {
+                panic!("click must not revise audio")
+            }
+
+            fn open(
+                &self,
+                _: &crate::domain::diary_timeline::DiaryTimeline,
+                _: &std::path::Path,
+                _: &[Media],
+            ) -> Result<(), String> {
+                panic!("click must not restart audio")
+            }
+            fn poll(&self) -> photosuite_application::diary::AudioPlayerUpdate {
+                photosuite_application::diary::AudioPlayerUpdate {
+                    is_open: true,
+                    photo_to_open: self.0.lock().unwrap().take(),
+                }
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut suite = test_suite();
+        suite.items = [
+            ("/Photos/2023/diary/aud_20231227_225132.wav", "2023/diary"),
+            ("/Photos/2023/12/first.jpg", "2023/12"),
+            ("/Photos/2023/12/second.jpg", "2023/12"),
+        ]
+        .into_iter()
+        .map(|(path, group)| Media::from_path(path.into(), group.into()).unwrap())
+        .collect();
+        suite.group = Some("2023/diary".into());
+        suite.query = "aud_".into();
+        suite.services.audio_player = Arc::new(PhotoClick(std::sync::Mutex::new(Some(
+            suite.items[1].path().into(),
+        ))));
+        suite.poll_audio_player(&ctx);
+        assert_eq!(suite.selected, Some(1));
+        assert_eq!(suite.group.as_deref(), Some("2023/diary"));
+        assert_eq!(suite.query, "aud_");
+        assert!(suite.videos_only);
+        assert_eq!(suite.visible(), vec![0]);
+        assert_eq!(suite.viewer_items(&suite.visible()), vec![1, 2]);
+        suite.selected = None;
+        suite.poll_audio_player(&ctx);
+        assert!(suite.selected.is_none(), "click must be consumed once");
+        suite.services.audio_player = Arc::new(PhotoClick(std::sync::Mutex::new(Some(
+            "/Other/library.jpg".into(),
+        ))));
+        suite.poll_audio_player(&ctx);
+        assert!(suite.selected.is_none());
+        assert!(suite.status.contains("nicht mehr"));
     }
     #[test]
     fn opening_library_persists_before_scan_finishes() {

@@ -11,3 +11,5 @@ pub mod preferences;
 pub mod storyboard;
 
 pub mod diary;
+
+pub mod photo_context;

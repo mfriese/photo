@@ -1,7 +1,8 @@
 //! Prepare one continuous year timeline in the background; native UI opens on the UI thread.
 use crate::domain::{
     CaptureTime, Media,
-    diary::{Recording, YearTimeline, diary_year},
+    diary::{Recording, diary_year},
+    diary_timeline::{DiaryClip, DiaryTimeline},
 };
 use std::{
     path::{Path, PathBuf},
@@ -20,18 +21,72 @@ pub struct AudioProbe {
 pub trait AudioSource: Send + Sync + 'static {
     fn probe(&self, path: &Path) -> Result<AudioProbe, String>;
     fn capture_time(&self, path: &Path) -> Result<CaptureTime, String>;
+    /// Only a regular-file stat; no media decoding or metadata processes.
+    fn file_size(&self, path: &Path) -> Result<u64, String>;
+    fn inspect(&self, path: &Path) -> Result<Recording, String> {
+        let probe = self.probe(path)?;
+        if !probe.audio_only {
+            return Err("Keine reine Audiodatei".into());
+        }
+        Recording::new(path.into(), self.capture_time(path)?, probe.duration)
+    }
+}
+#[derive(Default)]
+pub struct AudioPlayerUpdate {
+    pub is_open: bool,
+    pub photo_to_open: Option<PathBuf>,
+}
+#[derive(Clone, Copy, Default)]
+pub struct AudioPlaybackState {
+    pub is_open: bool,
+    pub has_started: bool,
+    pub failed: bool,
+}
+#[derive(Clone, Default)]
+pub struct VerificationProgress {
+    pub checked: usize,
+    pub total: usize,
+    pub errors: std::collections::BTreeMap<PathBuf, String>,
+    pub cancelled: bool,
 }
 pub trait AudioPlayer: Send + Sync + 'static {
-    /// Called on the main thread. Composition loading must stay asynchronous.
-    fn open(&self, timeline: &YearTimeline, start_seconds: f64) -> Result<(), String>;
+    /// Main thread, lightweight snapshot; only the selected clip may load asynchronously.
+    fn open(
+        &self,
+        timeline: &DiaryTimeline,
+        selected: &Path,
+        photos: &[Media],
+    ) -> Result<(), String>;
+    /// Update layout in place without replacing/reseeking the current recording.
+    fn revise(
+        &self,
+        timeline: &DiaryTimeline,
+        progress: &VerificationProgress,
+    ) -> Result<(), String>;
+    fn state(&self) -> AudioPlaybackState {
+        AudioPlaybackState::default()
+    }
+    /// Pump platform events on the UI thread; consume photo-open events.
+    fn poll(&self) -> AudioPlayerUpdate {
+        AudioPlayerUpdate::default()
+    }
 }
 enum Event {
-    Progress(String),
-    Ready(Result<(YearTimeline, f64), String>),
+    Draft(Result<(DiaryTimeline, PathBuf, Vec<Media>), String>),
+    Checked(PathBuf, Result<Recording, String>),
+    Done,
+}
+struct Pending {
+    receiver: mpsc::Receiver<Event>,
+    cancel: Arc<AtomicBool>,
+    gate: Option<mpsc::Sender<()>>,
+    opened: bool,
 }
 #[derive(Default)]
 pub struct DiarySession {
-    pending: Option<(mpsc::Receiver<Event>, Arc<AtomicBool>)>,
+    pending: Option<Pending>,
+    timeline: Option<DiaryTimeline>,
+    progress: VerificationProgress,
     status: String,
     warnings: Vec<String>,
 }
@@ -46,13 +101,11 @@ impl DiarySession {
         &self.warnings
     }
     pub fn cancel(&mut self) {
-        if let Some((_, cancel)) = &self.pending {
-            cancel.store(true, Ordering::Relaxed);
-            self.status = "Audio-Vorbereitung wird abgebrochen …".into();
-        } else {
-            self.status.clear();
+        if let Some(pending) = &mut self.pending {
+            pending.cancel.store(true, Ordering::Relaxed);
+            pending.gate.take();
+            self.status = "Audio-Prüfung wird abgebrochen …".into();
         }
-        self.warnings.clear();
     }
     pub fn start(
         &mut self,
@@ -73,101 +126,202 @@ impl DiarySession {
             .filter(|m| m.is_audio() && diary_year(m.group()) == Some(&year))
             .map(|m| m.path().into())
             .collect();
-        let chosen = selected.path().to_owned();
-        self.cancel();
+        let selected = selected.path().to_owned();
+        if !paths.contains(&selected) {
+            return Err("Aufnahme nicht im Jahresverlauf".into());
+        }
+        let photos = items.iter().filter(|m| m.is_photo()).cloned().collect();
+        self.timeline = None;
         self.warnings.clear();
-        let (tx, rx) = mpsc::channel();
+        self.progress = VerificationProgress {
+            total: paths.len(),
+            ..Default::default()
+        };
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let (go, gate) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        self.pending = Some((rx, cancel.clone()));
-        self.status = "Jahresverlauf wird vorbereitet …".into();
+        let stop = cancel.clone();
+        self.pending = Some(Pending {
+            receiver,
+            cancel,
+            gate: Some(go),
+            opened: false,
+        });
+        self.status = "Audioplayer wird mit Dateinamen und Dateigrößen geöffnet …".into();
         std::thread::spawn(move || {
-            let result = (|| {
-                let mut recordings = Vec::new();
-                for (i, path) in paths.iter().enumerate() {
-                    if cancel.load(Ordering::Relaxed) {
+            let draft = (|| {
+                let mut clips = Vec::with_capacity(paths.len());
+                for path in &paths {
+                    if stop.load(Ordering::Relaxed) {
                         return Err("Abgebrochen".into());
                     }
-                    let _ = tx.send(Event::Progress(format!(
-                        "Audio {} / {}: {}",
-                        i + 1,
-                        paths.len(),
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    )));
-                    let probe = source
-                        .probe(path)
-                        .map_err(|e| format!("{}: {e}", path.display()))?;
-                    if !probe.audio_only {
-                        return Err(format!("Keine reine Audiodatei: {}", path.display()));
-                    }
-                    recordings.push(Recording::new(
+                    clips.push(DiaryClip::from_file(
                         path.clone(),
                         source
-                            .capture_time(path)
+                            .file_size(path)
                             .map_err(|e| format!("{}: {e}", path.display()))?,
-                        probe.duration,
-                    )?);
+                    ));
                 }
-                let timeline = YearTimeline::new(year, recordings)?;
-                let index = timeline
-                    .recordings()
-                    .iter()
-                    .position(|r| r.path() == chosen)
-                    .ok_or("Aufnahme nicht im Jahresverlauf")?;
-                let start = timeline.offset(index).unwrap();
-                Ok((timeline, start))
+                DiaryTimeline::new(year, clips)
             })();
-            let _ = tx.send(Event::Ready(result));
+            let Ok(timeline) = draft else {
+                let _ = sender.send(Event::Draft(Err(draft.unwrap_err())));
+                let _ = sender.send(Event::Done);
+                return;
+            };
+            let mut order: Vec<_> = timeline
+                .clips()
+                .iter()
+                .map(|c| c.path().to_owned())
+                .collect();
+            if let Some(index) = order.iter().position(|p| p == &selected) {
+                order.swap(0, index);
+            }
+            if sender
+                .send(Event::Draft(Ok((timeline, selected, photos))))
+                .is_err()
+            {
+                return;
+            }
+            // Verification starts only after the selected clip has actually played.
+            loop {
+                if stop.load(Ordering::Relaxed) {
+                    let _ = sender.send(Event::Done);
+                    return;
+                }
+                match gate.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(()) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        let _ = sender.send(Event::Done);
+                        return;
+                    }
+                }
+            }
+            for path in order {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let result = source.inspect(&path);
+                if sender.send(Event::Checked(path, result)).is_err() {
+                    return;
+                }
+            }
+            let _ = sender.send(Event::Done);
         });
         Ok(())
     }
     pub fn poll(&mut self, player: &dyn AudioPlayer) {
-        let Some((rx, cancel)) = &self.pending else {
+        let Some(pending) = &mut self.pending else {
             return;
         };
-        let cancelled = cancel.load(Ordering::Relaxed);
-        let mut ready = None;
-        loop {
-            match rx.try_recv() {
-                Ok(Event::Progress(message)) => {
-                    if !cancelled {
-                        self.status = message;
-                    }
+        if pending.opened && pending.gate.is_some() && !pending.cancel.load(Ordering::Relaxed) {
+            let state = player.state();
+            if state.has_started {
+                if let Some(gate) = pending.gate.take() {
+                    let _ = gate.send(());
                 }
-                Ok(Event::Ready(result)) => {
-                    ready = Some(result);
-                    break;
-                }
+                self.status = "Aufnahmedaten und Dauern werden im Hintergrund geprüft …".into();
+            } else if !state.is_open || state.failed {
+                pending.cancel.store(true, Ordering::Relaxed);
+                pending.gate.take();
+            }
+        } else if pending.opened && !player.state().is_open {
+            pending.cancel.store(true, Ordering::Relaxed);
+        }
+        let mut changed = false;
+        let mut done = false;
+        for _ in 0..8 {
+            let event = match pending.receiver.try_recv() {
+                Ok(event) => event,
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    ready = Some(Err("Audioauftrag unerwartet beendet".into()));
+                    self.status = "Audio-Prüfung unerwartet beendet".into();
+                    self.progress.cancelled = true;
+                    changed = true;
+                    done = true;
+                    break;
+                }
+            };
+            let cancelled = pending.cancel.load(Ordering::Relaxed);
+            match event {
+                Event::Draft(result) if !cancelled => match result {
+                    Ok((timeline, selected, photos)) => match player
+                        .open(&timeline, &selected, &photos)
+                    {
+                        Ok(()) => {
+                            self.timeline = Some(timeline);
+                            pending.opened = true;
+                            self.status =
+                                "Vorläufiger Jahresverlauf geöffnet · Wiedergabe startet".into();
+                        }
+                        Err(error) => {
+                            self.status = format!("Diary nicht geöffnet: {error}");
+                            pending.cancel.store(true, Ordering::Relaxed);
+                            pending.gate.take();
+                        }
+                    },
+                    Err(error) => {
+                        self.status = format!("Diary nicht geöffnet: {error}");
+                        pending.cancel.store(true, Ordering::Relaxed);
+                        pending.gate.take();
+                    }
+                },
+                Event::Draft(_) => {}
+                Event::Checked(path, result) if !cancelled => {
+                    self.progress.checked += 1;
+                    changed = true;
+                    let result = result.and_then(|recording| {
+                        if recording.path() != path {
+                            return Err("Prüfergebnis gehört zu einer anderen Aufnahme".into());
+                        }
+                        self.warnings.push(format!(
+                            "{} · {}",
+                            path.display(),
+                            recording.captured().origin()
+                        ));
+                        self.timeline
+                            .as_mut()
+                            .ok_or("Jahresverlauf fehlt")?
+                            .refine(recording)
+                    });
+                    if let Err(error) = result {
+                        self.warnings.push(format!("{}: {error}", path.display()));
+                        self.progress.errors.insert(path, error);
+                    }
+                    self.status = format!(
+                        "Audio geprüft: {} / {} · {} Fehler",
+                        self.progress.checked,
+                        self.progress.total,
+                        self.progress.errors.len()
+                    );
+                }
+                Event::Checked(_, _) => {}
+                Event::Done => {
+                    done = true;
+                    changed = true;
+                    self.progress.cancelled = cancelled;
+                    if cancelled && (pending.opened || self.status.starts_with("Audio-Prüfung")) {
+                        self.status =
+                            "Audio-Prüfung abgebrochen · ungeprüfte Abschnitte bleiben vorläufig"
+                                .into();
+                    }
                     break;
                 }
             }
         }
-        if let Some(result) = ready {
+        if changed
+            && player.state().is_open
+            && let Some(timeline) = &self.timeline
+            && let Err(error) = player.revise(timeline, &self.progress)
+        {
+            self.status = format!("Jahresleiste konnte nicht aktualisiert werden: {error}");
+            pending.cancel.store(true, Ordering::Relaxed);
+            pending.gate.take();
+        }
+        if done {
             self.pending = None;
-            if cancelled {
-                self.status = "Audio-Vorbereitung abgebrochen".into();
-                return;
-            }
-            let result = result.and_then(|(timeline, start)| {
-                self.warnings = timeline
-                    .recordings()
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "{} · {}",
-                            r.path().file_name().unwrap_or_default().to_string_lossy(),
-                            r.captured().origin()
-                        )
-                    })
-                    .collect();
-                player.open(&timeline, start)
-            });
-            self.status = match result {
-                Ok(()) => "Jahresverlauf im Audioplayer geöffnet".into(),
-                Err(e) => format!("Diary nicht geöffnet: {e}"),
-            };
+            self.timeline = None;
         }
     }
 }
@@ -294,6 +448,9 @@ mod tests {
     use std::sync::Mutex;
     struct Source;
     impl AudioSource for Source {
+        fn file_size(&self, _: &Path) -> Result<u64, String> {
+            Ok(16_000)
+        }
         fn probe(&self, path: &Path) -> Result<AudioProbe, String> {
             Ok(AudioProbe {
                 duration: if path.file_name().unwrap() == "a.wav" {
@@ -317,11 +474,40 @@ mod tests {
         }
     }
     #[derive(Default)]
-    struct Player(Mutex<Option<(usize, f64, f64)>>);
+    struct Player {
+        opened: Mutex<Option<(DiaryTimeline, PathBuf)>>,
+        revisions: Mutex<Vec<(DiaryTimeline, VerificationProgress)>>,
+        started: AtomicBool,
+        closed: AtomicBool,
+    }
     impl AudioPlayer for Player {
-        fn open(&self, t: &YearTimeline, start: f64) -> Result<(), String> {
-            *self.0.lock().unwrap() = Some((t.recordings().len(), t.duration(), start));
+        fn open(&self, t: &DiaryTimeline, selected: &Path, _: &[Media]) -> Result<(), String> {
+            *self.opened.lock().unwrap() = Some((t.clone(), selected.into()));
             Ok(())
+        }
+        fn revise(&self, t: &DiaryTimeline, p: &VerificationProgress) -> Result<(), String> {
+            self.revisions.lock().unwrap().push((t.clone(), p.clone()));
+            Ok(())
+        }
+        fn state(&self) -> AudioPlaybackState {
+            AudioPlaybackState {
+                is_open: self.opened.lock().unwrap().is_some()
+                    && !self.closed.load(Ordering::Relaxed),
+                has_started: self.started.load(Ordering::Relaxed),
+                failed: false,
+            }
+        }
+    }
+    fn until(
+        session: &mut DiarySession,
+        player: &Player,
+        condition: impl Fn(&DiarySession, &Player) -> bool,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !condition(session, player) {
+            session.poll(player);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
         }
     }
     #[test]
@@ -361,6 +547,7 @@ mod tests {
         .collect();
         let mut session = DiarySession::default();
         let player = Player::default();
+        player.started.store(true, Ordering::Relaxed);
         session.start(&items, &items[0], Arc::new(Source)).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while session.is_loading() {
@@ -368,7 +555,17 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
-        assert_eq!(*player.0.lock().unwrap(), Some((2, 40., 10.)));
+        let opened = player.opened.lock().unwrap();
+        let (draft, selected) = opened.as_ref().unwrap();
+        assert_eq!(selected, Path::new("b.wav"));
+        assert_eq!(draft.clips().len(), 2);
+        assert!(draft.clips().iter().all(|c| !c.is_verified()));
+        let revisions = player.revisions.lock().unwrap();
+        let (timeline, progress) = revisions.last().unwrap();
+        assert!(timeline.clips().iter().all(|c| c.is_verified()));
+        assert_eq!(timeline.clips()[0].duration(), Some(10.));
+        assert_eq!(timeline.clips()[1].duration(), Some(30.));
+        assert_eq!(progress.checked, 2);
         assert_eq!(session.warnings().len(), 2);
     }
     #[test]
@@ -385,6 +582,130 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
-        assert_eq!(*player.0.lock().unwrap(), None);
+        assert!(player.opened.lock().unwrap().is_none());
+    }
+    #[test]
+    fn opens_without_media_reads_then_verifies_only_after_actual_playback() {
+        use std::sync::atomic::AtomicUsize;
+        struct SlowSource {
+            calls: AtomicUsize,
+            release: AtomicBool,
+        }
+        impl AudioSource for SlowSource {
+            fn file_size(&self, _: &Path) -> Result<u64, String> {
+                Ok(32_000)
+            }
+            fn probe(&self, _: &Path) -> Result<AudioProbe, String> {
+                unreachable!()
+            }
+            fn capture_time(&self, _: &Path) -> Result<CaptureTime, String> {
+                unreachable!()
+            }
+            fn inspect(&self, path: &Path) -> Result<Recording, String> {
+                self.calls.fetch_add(1, Ordering::Relaxed);
+                while !self.release.load(Ordering::Relaxed) {
+                    std::thread::yield_now();
+                }
+                if path == Path::new("bad.wav") {
+                    return Err("Nicht abspielbar".into());
+                }
+                Recording::new(
+                    path.into(),
+                    CaptureTime::parse("2026:01:01 00:00:00", "real metadata")?,
+                    3.,
+                )
+            }
+        }
+        let items: Vec<_> = ["bad.wav", "2026-12-01_00-00-00.wav"]
+            .iter()
+            .map(|p| Media::from_path((*p).into(), "2026/diary".into()).unwrap())
+            .collect();
+        let source = Arc::new(SlowSource {
+            calls: AtomicUsize::new(0),
+            release: AtomicBool::new(false),
+        });
+        let player = Player::default();
+        let mut session = DiarySession::default();
+        session.start(&items, &items[1], source.clone()).unwrap();
+        until(&mut session, &player, |_, p| {
+            p.opened.lock().unwrap().is_some()
+        });
+        for _ in 0..5 {
+            session.poll(&player);
+        }
+        assert_eq!(source.calls.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            player.opened.lock().unwrap().as_ref().unwrap().0.clips()[0]
+                .captured()
+                .unwrap()
+                .stamp(),
+            "20261201_000000"
+        );
+        player.started.store(true, Ordering::Relaxed);
+        until(&mut session, &player, |_, _| {
+            source.calls.load(Ordering::Relaxed) > 0
+        });
+        assert!(session.is_loading());
+        assert!(player.revisions.lock().unwrap().is_empty());
+        source.release.store(true, Ordering::Relaxed);
+        until(&mut session, &player, |s, _| !s.is_loading());
+        let revisions = player.revisions.lock().unwrap();
+        let (timeline, progress) = revisions.last().unwrap();
+        assert_eq!(progress.checked, 2);
+        assert_eq!(progress.errors.len(), 1);
+        assert!(timeline.clips()[0].is_verified());
+        assert_eq!(
+            timeline.clips()[0].captured().unwrap().stamp(),
+            "20260101_000000"
+        );
+        assert!(!timeline.clips()[1].is_verified());
+    }
+    #[test]
+    fn closing_before_playback_cancels_waiting_verification_without_late_reopen() {
+        let items = vec![Media::from_path("a.wav".into(), "2026/diary".into()).unwrap()];
+        let mut session = DiarySession::default();
+        let player = Player::default();
+        session.start(&items, &items[0], Arc::new(Source)).unwrap();
+        until(&mut session, &player, |_, p| {
+            p.opened.lock().unwrap().is_some()
+        });
+        player.closed.store(true, Ordering::Relaxed);
+        until(&mut session, &player, |s, _| !s.is_loading());
+        assert!(session.warnings().is_empty());
+        assert!(player.revisions.lock().unwrap().is_empty());
+    }
+    #[test]
+    fn unreadable_size_and_unexpected_worker_exit_finish_without_opening() {
+        struct BrokenSource(bool);
+        impl AudioSource for BrokenSource {
+            fn file_size(&self, _: &Path) -> Result<u64, String> {
+                if self.0 {
+                    panic!("simulated source failure")
+                } else {
+                    Err("Größe nicht lesbar".into())
+                }
+            }
+            fn probe(&self, _: &Path) -> Result<AudioProbe, String> {
+                unreachable!()
+            }
+            fn capture_time(&self, _: &Path) -> Result<CaptureTime, String> {
+                unreachable!()
+            }
+        }
+        let items = vec![Media::from_path("a.wav".into(), "2026/diary".into()).unwrap()];
+        for crash in [false, true] {
+            let player = Player::default();
+            let mut session = DiarySession::default();
+            session
+                .start(&items, &items[0], Arc::new(BrokenSource(crash)))
+                .unwrap();
+            until(&mut session, &player, |s, _| !s.is_loading());
+            assert!(player.opened.lock().unwrap().is_none());
+            assert!(session.status().contains(if crash {
+                "unerwartet"
+            } else {
+                "Größe nicht lesbar"
+            }));
+        }
     }
 }

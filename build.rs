@@ -1,6 +1,13 @@
 fn main() {
     for source in [
         "native/audio.m",
+        "native/audio_transport.m",
+        "native/audio_transport.h",
+        "native/audio_timeline_view.m",
+        "native/audio_timeline_view.h",
+        "native/context_photos.m",
+        "native/context_photo_view.m",
+        "native/context_photo_view.h",
         "native/video.m",
         "native/player.m",
         "native/filesystem.m",
@@ -18,7 +25,16 @@ fn main() {
         _ => panic!("unsupported macOS architecture"),
     };
     let mut objects = Vec::new();
-    for source in ["video", "player", "filesystem", "audio"] {
+    for source in [
+        "video",
+        "player",
+        "filesystem",
+        "audio",
+        "audio_transport",
+        "audio_timeline_view",
+        "context_photos",
+        "context_photo_view",
+    ] {
         let object = out.join(format!("{source}.o"));
         assert!(
             std::process::Command::new("clang")
@@ -57,6 +73,7 @@ fn main() {
         "Foundation",
         "CoreMedia",
         "CoreGraphics",
+        "ImageIO",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
