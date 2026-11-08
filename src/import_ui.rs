@@ -3,6 +3,7 @@ use eframe::egui;
 use std::{path::PathBuf, sync::Arc};
 #[derive(Default)]
 pub struct ImportPanel {
+    cleanup: crate::import_cleanup_ui::SourceCleanupDialog,
     duplicate_review: crate::duplicates_ui::DuplicateReview,
     pub visible: bool,
     source: Option<PathBuf>,
@@ -13,7 +14,7 @@ pub struct ImportPanel {
 }
 impl ImportPanel {
     pub fn running(&self) -> bool {
-        self.session.running() || self.duplicate_review.running()
+        self.session.running() || self.duplicate_review.running() || self.cleanup.busy()
     }
     pub fn open(&mut self, library: Option<PathBuf>) {
         self.visible = true;
@@ -28,7 +29,9 @@ impl ImportPanel {
         repository: Arc<dyn crate::ports::MediaRepository>,
         duplicates: Arc<dyn photosuite_application::duplicates::DuplicateImages>,
         opener: Arc<dyn crate::ports::MediaOpener>,
+        cleanup_port: Arc<dyn photosuite_application::import_cleanup::CleanupPort>,
     ) -> Option<PathBuf> {
+        self.cleanup.show(ctx, cleanup_port.clone());
         let mut refresh = None;
         if !self.visible && self.duplicate_review.running() {
             self.duplicate_review.cancel();
@@ -51,13 +54,13 @@ impl ImportPanel {
             .show(ctx, |ui| {
                 crate::options_ui::spacing(ui);
                 ui.label("Dateien in die Bibliothek kopieren und nach Aufnahmedatum benennen.");
-                ui.add_enabled_ui(!self.session.running() && !self.duplicate_review.running(), |ui| {
+                ui.add_enabled_ui(!self.session.running() && !self.duplicate_review.running() && !self.cleanup.busy(), |ui| {
                     crate::options_ui::section(ui, "Quelle", |ui| {
                         if ui.button("Quellverzeichnis wählen …").clicked()
                             && let Some(path) = rfd::FileDialog::new().pick_folder() { self.source = Some(path); }
                         let text = self.source.as_ref().map(|p| p.display().to_string()).unwrap_or("Keine Quelle gewählt".into());
                         ui.add(egui::Label::new(&text).truncate()).on_hover_text(text);
-                        ui.small("Quelldateien bleiben unverändert.");
+                        ui.small("Beim Import bleiben Quelldateien unverändert.");
                     });
                     crate::options_ui::section(ui, "Zielbibliothek", |ui| {
                         if ui.button("Zielbibliothek wählen …").clicked()
@@ -75,8 +78,11 @@ impl ImportPanel {
                         }
                     });
                 });
-                if !self.session.running()
+                if !self.session.running() && !self.cleanup.busy()
                     && self.duplicate_review.show(ui,self.target.as_ref(),repository,duplicates,opener){refresh=self.target.clone();}
+                if ui.add_enabled(self.session.can_cleanup() && !self.duplicate_review.running() && !self.cleanup.busy(),egui::Button::new("Importquellen in den Papierkorb …")).clicked(){
+                    match self.session.cleanup_request(){Ok(request)=>self.cleanup.open(request,cleanup_port.clone()),Err(error)=>self.start_error=Some(error)}
+                }
                 ui.small("Prüflauf ohne Kopieren. Identische Fotos und vorhandene Videonamen werden übersprungen; unterschiedliche Fotos erhalten einen Nummernzusatz.");
                 crate::options_ui::section(ui, "Fortschritt", |ui| {
                     if self.session.running() && ui.button("Abbrechen").clicked(){self.session.cancel();}

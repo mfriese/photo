@@ -10,6 +10,8 @@ mod duplicates_fs;
 mod duplicates_ui;
 mod exiftool;
 mod image_loader;
+mod import_cleanup_fs;
+mod import_cleanup_ui;
 mod import_fs;
 mod import_ui;
 mod infrastructure;
@@ -66,6 +68,9 @@ fn main() -> eframe::Result {
         video_player: std::sync::Arc::new(video::NativeVideoPlayer),
         video_preview: video_preview.clone(),
         preferences: std::sync::Arc::new(preferences_fs::PlistPreferences::at(preferences_path)),
+        import_cleanup: std::sync::Arc::new(import_cleanup_fs::SafeImportCleanup {
+            trash: std::sync::Arc::new(import_cleanup_fs::NativeTrash),
+        }),
         importer: std::sync::Arc::new(import_fs::FileImportAdapter {
             audio: audio_source,
             repository: repository.clone(),

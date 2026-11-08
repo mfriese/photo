@@ -8,6 +8,8 @@ use std::{
 pub struct ImportSession {
     job: Option<Job>,
     target: Option<PathBuf>,
+    source: Option<PathBuf>,
+    preview: bool,
     log: Vec<Event>,
     current: usize,
     total: usize,
@@ -48,8 +50,34 @@ impl ImportSession {
         self.copied = false;
         self.refresh = None;
         self.target = Some(target.clone());
+        self.source = Some(source.clone());
+        self.preview = preview;
         self.job = Some(import::start(adapter, source, target, preview));
         Ok(())
+    }
+    pub fn can_cleanup(&self) -> bool {
+        !self.running() && !self.preview && self.log.iter().any(|e| e.file_report.is_some())
+    }
+    pub fn cleanup_request(&self) -> Result<crate::import_cleanup::CleanupRequest, String> {
+        if self.running() || self.preview {
+            return Err(
+                "Nur nach einem tatsächlichen abgeschlossenen oder abgebrochenen Import verfügbar"
+                    .into(),
+            );
+        }
+        let reports: Vec<_> = self
+            .log
+            .iter()
+            .filter_map(|event| event.file_report.clone())
+            .collect();
+        if reports.is_empty() {
+            return Err("Keine protokollierten Quelldateien verfügbar".into());
+        }
+        Ok(crate::import_cleanup::CleanupRequest {
+            source_root: self.source.clone().ok_or("Keine Importquelle")?,
+            target_root: self.target.clone().ok_or("Kein Importziel")?,
+            reports,
+        })
     }
     pub fn cancel(&self) {
         if let Some(job) = &self.job {
@@ -193,6 +221,11 @@ mod tests {
         );
         finish(&mut session);
         assert!(session.status().contains("unerwartet"));
+        let cleanup = session.cleanup_request().unwrap();
+        assert_eq!(cleanup.source_root, PathBuf::from("source"));
+        assert_eq!(cleanup.target_root, PathBuf::from("library"));
+        assert_eq!(cleanup.reports.len(), 1);
+
         assert_eq!(session.take_refresh(), Some(PathBuf::from("library")));
         assert!(session.take_refresh().is_none());
         assert!(session.log().iter().any(|e| matches!(
@@ -216,6 +249,8 @@ mod tests {
         finish(&mut session);
         assert_eq!(adapter.copies.load(Ordering::SeqCst), 0);
         assert!(session.take_refresh().is_none());
+        assert!(!session.can_cleanup());
+        assert!(session.cleanup_request().is_err());
         let adapter = Arc::new(Adapter {
             behaviour: Behaviour::WaitForCancel,
             copies: AtomicUsize::new(0),

@@ -72,7 +72,7 @@ Die XML-Einstellungen liegen unter `~/Library/Preferences/de.photosuite.PhotoSui
 
 ## Import und Umgang mit Originalen
 
-Ein Import wird ausdrücklich gestartet und **kopiert** ausschließlich ins gewählte Ziel. Die Quelle wird niemals gelöscht, verschoben oder umbenannt. Ein Prüflauf schreibt keine Medien. Das Protokoll zeigt standardmäßig einen Eintrag pro Datei mit Entscheidung und gekürztem Zielpfad. Tooltips zeigen vollständige Pfade, Datum und Datumsquelle. „Alle Schritte anzeigen“ blendet das ausführliche Protokoll ein; „Protokoll kopieren“ übernimmt jeweils die gewählte Ansicht. Bei Fotos/Videos werden fehlende Aufnahmedaten sichtbar gemeldet und nicht durch ein Dateisystemdatum ersetzt. Audio verwendet die unten beschriebene Priorität mit ausdrücklich gekennzeichneten Fallbacks. Bei Abbruch werden ausschließlich importereigene temporäre Zieldateien entfernt; fertige Kopien und alle Quellen bleiben erhalten.
+Ein Import wird ausdrücklich gestartet und **kopiert** ausschließlich ins gewählte Ziel. Beim Import selbst wird die Quelle niemals gelöscht, verschoben oder umbenannt. Der separate Schritt **„Importquellen in den Papierkorb …“** ist erst nach einem tatsächlichen Import und ausdrücklicher Bestätigung verfügbar. Ein Prüflauf schreibt keine Medien. Das Protokoll zeigt standardmäßig einen Eintrag pro Datei mit Entscheidung und gekürztem Zielpfad. Tooltips zeigen vollständige Pfade, Datum und Datumsquelle. „Alle Schritte anzeigen“ blendet das ausführliche Protokoll ein; „Protokoll kopieren“ übernimmt jeweils die gewählte Ansicht. Bei Fotos/Videos werden fehlende Aufnahmedaten sichtbar gemeldet und nicht durch ein Dateisystemdatum ersetzt. Audio verwendet die unten beschriebene Priorität mit ausdrücklich gekennzeichneten Fallbacks. Bei Abbruch werden ausschließlich importereigene temporäre Zieldateien entfernt; fertige Kopien und alle Quellen bleiben erhalten.
 
 ```text
 Fotos/
@@ -96,6 +96,14 @@ Es gibt drei ausdrücklich freizugebende Schreibaktionen:
 - **Duplikate in den Papierkorb:** ausschließlich nach Gruppenentscheidung und erneuter Prüfung. Keine endgültige Löschung; nicht sicher vergleichbare Bilder bleiben erhalten.
 
 Details zu Prüflauf, Abbruch, Kollisionsnamen und Duplikatvergleich stehen im [Benutzerhandbuch](docs/USER_GUIDE.md).
+
+### Importquellen nachträglich aufräumen
+
+Nach einem tatsächlichen Import öffnet **„Importquellen in den Papierkorb …“** einen separaten Dialog. Jede protokollierte Quelle wird mit ihrem konkreten Importziel angezeigt: Importentscheidung, Quellpfad, Zielpfad und aktuelles Prüfergebnis. Quelle und Ziel müssen reguläre, nicht leere Dateien in getrennten Importordnern sein und vollständig bytegenau übereinstimmen. Symbolische Pfade, Hardlinks zwischen Quelle und Ziel, fehlende/abweichende Ziele und fehlgeschlagene Importe werden nicht freigegeben. Auch allein wegen des Videonamens übersprungene Dateien benötigen hier den vollen Bytevergleich.
+
+Erst nach abgeschlossener Prüfung ist **„… freigegebene Quellen in den Papierkorb“** aktiv. Abbrechen/Schließen lässt alle noch nicht verschobenen Dateien erhalten. Vor jeder bestätigten Aktion werden Inhalte, Dateiidentität, Änderungsstand und Ordneridentität erneut geprüft; seit der Freigabe veränderte Quellen oder Ziele verhindern die Aktion. Es werden ausschließlich Quellen in den macOS-Papierkorb verschoben, niemals Zieldateien oder ganze Verzeichnisse, und es gibt keinen Rückfall auf endgültiges Löschen. Prüfläufe bieten diese Aktion nicht an. Der Dialog bezieht sich auf den aktuellen, noch im Importprotokoll vorhandenen Lauf und ist kein dauerhaftes Importarchiv.
+
+Eine bereits laufende Papierkorbaktion kann nach Abbruch noch abgeschlossen werden; ihr Ergebnis bleibt sichtbar. Unquittierte Vorgänge werden als unklar gekennzeichnet und nicht blind wiederholt. Änderungen durch andere Programme im kurzen Zeitraum nach der letzten Prüfung sind nicht durch eine systemweite Dateisperre ausgeschlossen; der Papierkorb erhält die Wiederherstellbarkeit.
 
 ## Audio-Diary: ein Jahresverlauf
 

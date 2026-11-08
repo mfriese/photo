@@ -123,6 +123,25 @@ impl photosuite_application::duplicates::DuplicateImages for UnusedAdapters {
         unreachable!()
     }
 }
+impl photosuite_application::import_cleanup::CleanupPort for UnusedAdapters {
+    fn check(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &std::sync::atomic::AtomicBool,
+    ) -> Result<photosuite_application::import_cleanup::Proof, String> {
+        panic!("layout must not verify files")
+    }
+    fn trash_checked(
+        &self,
+        _: &photosuite_application::import_cleanup::Proof,
+        _: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String> {
+        panic!("layout must not trash files")
+    }
+}
 fn test_suite() -> Suite {
     let adapters = Arc::new(UnusedAdapters);
     Suite {
@@ -135,6 +154,7 @@ fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            import_cleanup: adapters.clone(),
             audio_source: adapters.clone(),
             audio_player: adapters.clone(),
             duplicates: adapters.clone(),

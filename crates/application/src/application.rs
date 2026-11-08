@@ -71,6 +71,7 @@ mod tests {
 /// Ports are supplied exclusively by the composition root.
 #[derive(Clone)]
 pub struct Services {
+    pub import_cleanup: std::sync::Arc<dyn crate::import_cleanup::CleanupPort>,
     pub audio_source: std::sync::Arc<dyn crate::diary::AudioSource>,
     pub audio_player: std::sync::Arc<dyn crate::diary::AudioPlayer>,
     pub duplicates: std::sync::Arc<dyn crate::duplicates::DuplicateImages>,

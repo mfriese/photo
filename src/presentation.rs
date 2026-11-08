@@ -237,6 +237,7 @@ impl eframe::App for Suite {
             self.services.repository.clone(),
             self.services.duplicates.clone(),
             self.services.opener.clone(),
+            self.services.import_cleanup.clone(),
         ) {
             self.refresh_after_import(path);
         }

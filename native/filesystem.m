@@ -1,7 +1,7 @@
 #include "photosuite.h"
 #import <Foundation/Foundation.h>
 #include <string.h>
-// Filesystem adapter: reversible removal only after explicit duplicate review.
+// Filesystem adapter: reversible removal only after explicit duplicate or import-source review.
 int photosuite_trash_file(const char *path) {
     @autoreleasepool {
         NSString *name = [[NSFileManager defaultManager] stringWithFileSystemRepresentation:path length:strlen(path)];
