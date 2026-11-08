@@ -102,6 +102,22 @@ pub fn navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Respo
 }
 
 #[cfg(test)]
+pub fn assert_text_glyphs(ctx: &egui::Context, text: &egui::epaint::TextShape) {
+    for section in &text.galley.job.sections {
+        for character in text.galley.job.text[section.byte_range.clone()]
+            .chars()
+            .filter(|c| !c.is_control())
+        {
+            assert!(
+                ctx.fonts_mut(|fonts| fonts.has_glyph(&section.format.font_id, character)),
+                "Missing glyph {character:?} in {:?}",
+                text.galley.job.text
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn luminance(color: Color32) -> f32 {

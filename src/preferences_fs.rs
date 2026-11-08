@@ -4,14 +4,20 @@ use plist::{Dictionary, Value};
 use std::{io::Write, path::PathBuf};
 pub struct PlistPreferences {
     path: PathBuf,
+    legacy: Option<PathBuf>,
 }
 impl PlistPreferences {
     pub fn at(path: PathBuf) -> Self {
-        Self { path }
+        let legacy = path
+            .file_name()
+            .filter(|name| *name == "de.photosuite.PhotoSuite.settings.plist")
+            .and_then(|_| path.parent())
+            .map(|parent| parent.join("de.photosuite.PhotoSuite.plist"));
+        Self { path, legacy }
     }
     pub fn user_path() -> Result<PathBuf, String> {
         let home = std::env::var_os("HOME").ok_or("Benutzerverzeichnis nicht verfügbar")?;
-        Ok(PathBuf::from(home).join("Library/Preferences/de.photosuite.PhotoSuite.plist"))
+        Ok(PathBuf::from(home).join("Library/Preferences/de.photosuite.PhotoSuite.settings.plist"))
     }
 }
 fn encode(p: &Preferences) -> Value {
@@ -129,7 +135,16 @@ fn decode(value: Value) -> Result<Preferences, String> {
 }
 impl PreferencesStore for PlistPreferences {
     fn load(&self) -> Result<Preferences, String> {
-        match std::fs::File::open(&self.path) {
+        let opened = std::fs::File::open(&self.path).or_else(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound
+                && let Some(legacy) = &self.legacy
+            {
+                std::fs::File::open(legacy)
+            } else {
+                Err(error)
+            }
+        });
+        match opened {
             Ok(file) => decode(Value::from_reader(file).map_err(|e| e.to_string())?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Preferences::default()),
             Err(e) => Err(e.to_string()),
@@ -137,9 +152,7 @@ impl PreferencesStore for PlistPreferences {
     }
     fn save(&self, p: &Preferences) -> Result<(), String> {
         // Do not silently replace malformed or newer files.
-        if self.path.exists() {
-            self.load()?;
-        }
+        self.load()?;
         let parent = self
             .path
             .parent()
@@ -158,6 +171,35 @@ impl PreferencesStore for PlistPreferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_library_is_migrated_without_modifying_macos_preferences() {
+        let directory = tempfile::tempdir().unwrap();
+        let old = directory.path().join("de.photosuite.PhotoSuite.plist");
+        let new = directory
+            .path()
+            .join("de.photosuite.PhotoSuite.settings.plist");
+        let original = Preferences {
+            last_library: Some("/Fotos/Familie".into()),
+            ..Default::default()
+        };
+        PlistPreferences::at(old.clone()).save(&original).unwrap();
+        let bytes = std::fs::read(&old).unwrap();
+        let store = PlistPreferences::at(new.clone());
+        assert_eq!(store.load().unwrap(), original);
+        let mut persistence = photosuite_application::preferences::Persistence::new(
+            std::sync::Arc::new(store),
+            original.clone(),
+        );
+        persistence.flush_current();
+        drop(persistence);
+        assert_eq!(PlistPreferences::at(new.clone()).load().unwrap(), original);
+        assert_eq!(std::fs::read(&old).unwrap(), bytes);
+        std::fs::write(old, b"changed by macOS").unwrap();
+        assert_eq!(
+            PlistPreferences::at(new).load().unwrap().last_library,
+            original.last_library
+        );
+    }
     #[test]
     fn plist_roundtrip_and_removed_shortcuts() {
         let dir = tempfile::tempdir().unwrap();

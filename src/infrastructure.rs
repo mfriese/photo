@@ -8,6 +8,11 @@ impl MediaRepository for FileSystemRepository {
     fn scan(&self, root: &Path) -> (Vec<Media>, usize) {
         let mut items = Vec::new();
         let mut errors = 0;
+        if !std::fs::symlink_metadata(root)
+            .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        {
+            return (items, 1);
+        }
         for entry in walkdir::WalkDir::new(root).follow_links(false) {
             let entry = match entry {
                 Ok(e) => e,
@@ -48,6 +53,20 @@ impl MediaRepository for FileSystemRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_root_must_be_a_regular_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("file.jpg");
+        std::fs::write(&file, b"original").unwrap();
+        let repository = FileSystemRepository {
+            audio: std::sync::Arc::new(crate::audio::NativeAudioSource {
+                tool: crate::exiftool::ExifTool::development(),
+            }),
+        };
+        assert_eq!(repository.scan(&file).1, 1);
+        assert_eq!(repository.scan(&directory.path().join("missing")).1, 1);
+        assert_eq!(std::fs::read(file).unwrap(), b"original");
+    }
     #[test]
     fn scan_filters_and_preserves_originals() {
         let dir = tempfile::tempdir().unwrap();

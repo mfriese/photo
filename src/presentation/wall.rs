@@ -172,7 +172,7 @@ impl super::Suite {
                                                 ui.painter().text(
                                                     rect.left_bottom() + egui::vec2(8., -8.),
                                                     egui::Align2::LEFT_BOTTOM,
-                                                    "▶ Video",
+                                                    "Video",
                                                     egui::FontId::proportional(16.),
                                                     egui::Color32::WHITE,
                                                 );

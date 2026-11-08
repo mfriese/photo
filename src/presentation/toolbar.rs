@@ -31,7 +31,7 @@ impl super::Suite {
                         self.load(path);
                     }
                     if ui
-                        .add_enabled(self.root.is_some(), egui::Button::new("↻"))
+                        .add_enabled(self.root.is_some(), egui::Button::new("Aktualisieren"))
                         .on_hover_text("Sammlung aktualisieren")
                         .clicked()
                         && let Some(path) = self.root.clone()
@@ -128,7 +128,7 @@ impl super::Suite {
                         "Nur Lesen"
                     };
                     let text = if self.preferences_error.is_empty() {
-                        format!("● {mode}  ·  {}", self.status)
+                        format!("{mode}  ·  {}", self.status)
                     } else {
                         format!("{mode} · {} · {}", self.status, self.preferences_error)
                     };

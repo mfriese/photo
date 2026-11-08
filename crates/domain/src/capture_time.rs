@@ -46,6 +46,46 @@ impl CaptureTime {
     pub fn origin(&self) -> &str {
         &self.origin
     }
+    pub fn date_label(&self) -> String {
+        format!(
+            "{}.{}.{}",
+            &self.stamp[6..8],
+            &self.stamp[4..6],
+            &self.stamp[..4]
+        )
+    }
+    pub fn time_label(&self) -> String {
+        format!(
+            "{}:{}:{}",
+            &self.stamp[9..11],
+            &self.stamp[11..13],
+            &self.stamp[13..15]
+        )
+    }
+    /// Civil clock seconds, deliberately without implicit timezone conversion.
+    pub fn civil_seconds(&self) -> i64 {
+        chrono::NaiveDateTime::parse_from_str(&self.stamp, "%Y%m%d_%H%M%S")
+            .expect("validated capture time")
+            .and_utc()
+            .timestamp()
+    }
+    pub fn shifted(&self, seconds: f64) -> Result<Self, String> {
+        if !seconds.is_finite() || seconds < 0. || seconds > i64::MAX as f64 {
+            return Err("Ungültige Zeitverschiebung".into());
+        }
+        let base = chrono::NaiveDateTime::parse_from_str(&self.stamp, "%Y%m%d_%H%M%S")
+            .map_err(|e| e.to_string())?;
+        let shifted = base
+            .checked_add_signed(
+                chrono::Duration::try_seconds(seconds.floor() as i64)
+                    .ok_or("Zeitverschiebung zu groß")?,
+            )
+            .ok_or("Datum außerhalb des gültigen Bereichs")?;
+        Self::parse(
+            &shifted.format("%Y:%m:%d %H:%M:%S").to_string(),
+            &self.origin,
+        )
+    }
     pub fn target(&self, root: &Path, media: &Media, suffix: usize) -> PathBuf {
         let ext = media
             .path()

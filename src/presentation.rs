@@ -8,6 +8,8 @@ use eframe::egui;
 use std::{path::PathBuf, sync::mpsc};
 pub struct Suite {
     diary: photosuite_application::diary::DiarySession,
+    diary_catalog: photosuite_application::diary::DiaryCatalog,
+    remember_after_scan: bool,
     storyboard: crate::storyboard_ui::StoryboardView,
     preferences: photosuite_application::preferences::Preferences,
     persistence: Option<photosuite_application::preferences::Persistence>,
@@ -32,7 +34,12 @@ pub struct Suite {
 }
 impl Suite {
     fn load(&mut self, path: PathBuf) {
+        self.load_path(path, true);
+    }
+    fn load_path(&mut self, path: PathBuf, remember: bool) {
         self.storyboard.clear();
+        self.diary_catalog.cancel();
+        self.remember_after_scan = !remember;
         self.diary.cancel();
         let path = if path.is_absolute() {
             path
@@ -45,8 +52,10 @@ impl Suite {
             self.services.repository.clone(),
             path.clone(),
         ));
-        self.preferences.last_library = Some(path.clone());
-        self.persist_preferences();
+        if remember {
+            self.preferences.last_library = Some(path.clone());
+            self.persist_preferences();
+        }
         self.root = Some(path);
         self.items.clear();
         self.selected = None;
@@ -133,6 +142,10 @@ impl Suite {
 }
 impl eframe::App for Suite {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.diary_catalog.poll();
+        if self.diary_catalog.is_loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.diary.poll(self.services.audio_player.as_ref());
         if self.diary.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -167,6 +180,11 @@ impl eframe::App for Suite {
                 Ok((items, errors)) => {
                     self.status =
                         format!("{} Medien · {} nicht lesbare Einträge", items.len(), errors);
+                    if self.remember_after_scan && (errors == 0 || !items.is_empty()) {
+                        self.preferences.last_library = self.root.clone();
+                        self.persist_preferences();
+                    }
+                    self.remember_after_scan = false;
                     self.items = items;
                     self.receiver = None;
                 }
@@ -175,6 +193,7 @@ impl eframe::App for Suite {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.receiver = None;
+                    self.remember_after_scan = false;
                     self.status="Sammlung konnte nicht geladen werden: Hintergrundauftrag unerwartet beendet".into();
                 }
             }
@@ -208,7 +227,16 @@ impl eframe::App for Suite {
             self.services.duplicates.clone(),
             self.services.opener.clone(),
         ) {
+            self.refresh_after_import(path);
+        }
+    }
+}
+impl Suite {
+    fn refresh_after_import(&mut self, path: PathBuf) {
+        if self.root.as_ref().is_none_or(|root| root == &path) {
             self.load(path);
+        } else {
+            self.status = format!("Importziel aktualisiert: {}", path.display());
         }
     }
 }
@@ -230,12 +258,17 @@ pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Se
     if let Err(error) = bindings.restore(&preferences.shortcuts) {
         preferences_error = error;
     }
-    let persistence = Some(photosuite_application::preferences::Persistence::new(
+    let mut persistence = Some(photosuite_application::preferences::Persistence::new(
         services.preferences.clone(),
         preferences.clone(),
     ));
+    if let Some(persistence) = &mut persistence {
+        persistence.flush_current();
+    }
     let mut app = Suite {
         diary: Default::default(),
+        diary_catalog: Default::default(),
+        remember_after_scan: false,
         storyboard: Default::default(),
         preferences: preferences.clone(),
         persistence,
@@ -259,7 +292,7 @@ pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Se
         videos_only: preferences.videos_only,
     };
     if let Some(path) = preferences.startup_library(std::env::args_os().skip(1)) {
-        app.load(path);
+        app.load_path(path, false);
     }
     app
 }
@@ -284,8 +317,15 @@ mod layout_tests {
         ) -> Result<photosuite_application::diary::AudioProbe, String> {
             unreachable!()
         }
-        fn capture_time(&self, _: &std::path::Path) -> Result<crate::domain::CaptureTime, String> {
-            unreachable!()
+        fn capture_time(
+            &self,
+            path: &std::path::Path,
+        ) -> Result<crate::domain::CaptureTime, String> {
+            crate::domain::audio_date::select_audio_date(
+                &Default::default(),
+                path.file_stem().and_then(|s| s.to_str()),
+                None,
+            )
         }
     }
     impl photosuite_application::diary::AudioPlayer for UnusedAdapters {
@@ -386,6 +426,8 @@ mod layout_tests {
         let adapters = Arc::new(UnusedAdapters);
         Suite {
             diary: Default::default(),
+            diary_catalog: Default::default(),
+            remember_after_scan: false,
             storyboard: Default::default(),
             preferences: Default::default(),
             persistence: None,
@@ -489,6 +531,7 @@ mod layout_tests {
                     );
                     for shape in output.shapes {
                         if let egui::Shape::Text(text) = shape.shape {
+                            crate::theme::assert_text_glyphs(&ctx, &text);
                             if text.galley.job.text.is_empty() {
                                 continue;
                             }
@@ -530,6 +573,7 @@ mod layout_tests {
                 .into_iter()
                 .filter_map(|shape| {
                     if let egui::Shape::Text(text) = shape.shape {
+                        crate::theme::assert_text_glyphs(&ctx, &text);
                         Some((text.galley.job.text.clone(), text.visual_bounding_rect()))
                     } else {
                         None
@@ -566,8 +610,18 @@ mod layout_tests {
         ]);
         let expanded = draw(vec![]);
         assert!(expanded.iter().any(|(text, _)| text == "September"));
-        assert!(expanded.iter().any(|(text, _)| text == "♪ Diary"));
+        assert!(expanded.iter().any(|(text, _)| text == "Diary"));
         assert!(expanded.iter().any(|(text, _)| text == "Ganzes Jahr"));
+    }
+    #[test]
+    fn importing_elsewhere_keeps_the_open_photo_library_and_saved_path() {
+        let mut suite = test_suite();
+        suite.root = Some("/Fotos/Sammlung".into());
+        suite.preferences.last_library = suite.root.clone();
+        suite.refresh_after_import("/Andere/Sammlung".into());
+        assert_eq!(suite.root, Some("/Fotos/Sammlung".into()));
+        assert_eq!(suite.preferences.last_library, suite.root);
+        assert!(suite.receiver.is_none());
     }
     #[test]
     fn diary_file_view_remains_readable_at_supported_widths() {
@@ -584,6 +638,15 @@ mod layout_tests {
                 )
                 .unwrap(),
             ];
+            suite
+                .diary_catalog
+                .ensure(&suite.items, "2026", suite.services.audio_source.clone());
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while suite.diary_catalog.is_loading() {
+                suite.diary_catalog.poll();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
             let output = ctx.run(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
@@ -599,8 +662,27 @@ mod layout_tests {
                     suite.photo_wall(ctx, &[0]);
                 },
             );
+            let texts: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|s| {
+                    if let egui::Shape::Text(t) = &s.shape {
+                        Some(t.galley.job.text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            assert!(texts.contains(&"16.09.2026"));
+            assert!(texts.contains(&"03:58:11"));
+            assert!(
+                !texts
+                    .iter()
+                    .any(|text| text.contains("aud_20260916_035811"))
+            );
             for shape in output.shapes {
                 if let egui::Shape::Text(text) = shape.shape {
+                    crate::theme::assert_text_glyphs(&ctx, &text);
                     if text.galley.job.text.is_empty() {
                         continue;
                     }
@@ -641,6 +723,7 @@ mod layout_tests {
             let mut text_count = 0;
             for shape in output.shapes {
                 if let egui::Shape::Text(text) = shape.shape {
+                    crate::theme::assert_text_glyphs(&ctx, &text);
                     // Empty TextEdit galleys contain no visible glyph bounds.
                     if text.galley.job.text.is_empty() {
                         continue;

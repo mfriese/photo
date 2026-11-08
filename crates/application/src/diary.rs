@@ -177,6 +177,117 @@ impl Drop for DiarySession {
     }
 }
 
+/// Read-only dates for the current diary grid. One worker, including cancelled work.
+enum CatalogEvent {
+    Date(PathBuf, Result<CaptureTime, String>),
+    Done,
+}
+#[derive(Default)]
+pub struct DiaryCatalog {
+    key: Option<(String, Vec<PathBuf>)>,
+    dates: std::collections::BTreeMap<PathBuf, Result<CaptureTime, String>>,
+    pending: Option<(mpsc::Receiver<CatalogEvent>, Arc<AtomicBool>)>,
+}
+impl DiaryCatalog {
+    pub fn date(&self, path: &Path) -> Option<&Result<CaptureTime, String>> {
+        self.dates.get(path)
+    }
+    pub fn is_loading(&self) -> bool {
+        self.pending.is_some()
+    }
+    pub fn cancel(&mut self) {
+        if let Some((_, cancel)) = &self.pending {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.key = None;
+        self.dates.clear();
+    }
+    pub fn ensure(&mut self, items: &[Media], year: &str, source: Arc<dyn AudioSource>) {
+        let paths: Vec<_> = items
+            .iter()
+            .filter(|m| m.is_audio() && diary_year(m.group()) == Some(year))
+            .map(|m| m.path().to_owned())
+            .collect();
+        let key = (year.to_owned(), paths.clone());
+        if self.key.as_ref() == Some(&key) {
+            return;
+        }
+        if self.pending.is_some() {
+            self.cancel();
+            return;
+        }
+        self.key = Some(key);
+        self.dates.clear();
+        if paths.is_empty() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.pending = Some((rx, cancel.clone()));
+        std::thread::spawn(move || {
+            for path in paths {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let result = source.capture_time(&path);
+                if tx.send(CatalogEvent::Date(path, result)).is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(CatalogEvent::Done);
+        });
+    }
+    pub fn poll(&mut self) {
+        let Some((rx, cancel)) = &self.pending else {
+            return;
+        };
+        let cancelled = cancel.load(Ordering::Relaxed);
+        let mut done = false;
+        let mut disconnected = false;
+        loop {
+            match rx.try_recv() {
+                Ok(CatalogEvent::Date(path, result)) => {
+                    if !cancelled {
+                        self.dates.insert(path, result);
+                    }
+                }
+                Ok(CatalogEvent::Done) => {
+                    done = true;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    done = true;
+                    disconnected = true;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+            }
+        }
+        if done {
+            self.pending = None;
+            if disconnected
+                && !cancelled
+                && let Some((_, paths)) = &self.key
+            {
+                for path in paths {
+                    self.dates
+                        .entry(path.clone())
+                        .or_insert_with(|| Err("Datumsauftrag unerwartet beendet".into()));
+                }
+            }
+            if cancelled {
+                self.key = None;
+                self.dates.clear();
+            }
+        }
+    }
+}
+impl Drop for DiaryCatalog {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,6 +323,31 @@ mod tests {
             *self.0.lock().unwrap() = Some((t.recordings().len(), t.duration(), start));
             Ok(())
         }
+    }
+    #[test]
+    fn catalog_reads_dates_in_background_and_reuses_the_same_year() {
+        let items = vec![Media::from_path("a.wav".into(), "2026/diary".into()).unwrap()];
+        let mut catalog = DiaryCatalog::default();
+        catalog.ensure(&items, "2026", Arc::new(Source));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while catalog.is_loading() {
+            catalog.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            catalog
+                .date(Path::new("a.wav"))
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .date_label(),
+            "01.01.2026"
+        );
+        catalog.ensure(&items, "2026", Arc::new(Source));
+        assert!(!catalog.is_loading());
+        catalog.cancel();
+        assert!(catalog.date(Path::new("a.wav")).is_none());
     }
     #[test]
     fn whole_year_is_prepared_in_order_and_selected_file_sets_global_start() {

@@ -12,4 +12,6 @@ int photosuite_trash_file(const char *path);
 // Probe on a worker thread. Birth timestamp buffer is caller-owned and always NUL-terminated.
 int photosuite_audio_probe(const char *path, double *duration, int *audioOnly, char *created, size_t capacity);
 // Main thread only. All arrays/strings are copied synchronously; composition builds on a worker.
-int photosuite_audio_open(const char **paths, const char **labels, const double *durations, size_t count, const char *year, double start);
+int photosuite_audio_open(const char **paths, const char **labels, const double *durations, const double *recorded_at, size_t count, const char *year, double start);
+
+// recorded_at contains civil clock seconds (UTC reference for formatting only, no timezone shift).

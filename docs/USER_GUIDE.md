@@ -124,7 +124,7 @@ Integrationstests brauchen ExifTool, native Videotests auf macOS Zugriff auf Sys
 Einstellungen werden automatisch im Hintergrund als lesbare XML-Property-List gespeichert:
 
 ```text
-~/Library/Preferences/de.photosuite.PhotoSuite.plist
+~/Library/Preferences/de.photosuite.PhotoSuite.settings.plist
 ```
 
 Die Key-Value-Datei enthält `preview_size` (0–4), `square_previews`, `show_library`, `videos_only`, `write_exif`, `reopen_library`, `last_library` und `shortcuts`. Die Tastenkürzel liegen als verschachtelte Key-Value-Einträge vor. Die Datei verwendet das macOS-Plist-Format, wird direkt durch die Anwendung verwaltet und benötigt keinen externen Dienst. Quellbibliotheken enthalten keine Konfigurationsdateien.
@@ -203,8 +203,10 @@ Die optionale Detailansicht des Importprotokolls stellt jeden Schritt als eigene
 
 ## Audio-Diary
 
-Audio wird im bestehenden Import mitkopiert: `Jahr/diary/aud_JJJJMMTT_HHMMSS.ext`. Quellen bleiben unverändert und werden niemals gelöscht. Zum Anhören ein Jahr aufklappen, „♪ Diary“ wählen und eine Datei anklicken. Der Jahresplayer enthält alle Aufnahmen dieses Diary-Ordners chronologisch auf einer einzigen, nach Dauer proportionalen Hörleiste. Der Schieber navigiert auch über Dateigrenzen hinweg; es wird keine Sammeldatei exportiert und keine Playlist dargestellt.
+Audio wird im bestehenden Import mitkopiert: `Jahr/diary/aud_JJJJMMTT_HHMMSS.ext`. Quellen bleiben unverändert und werden niemals gelöscht. Zum Anhören ein Jahr aufklappen, „Diary“ wählen und eine Datei anklicken. Der Jahresplayer enthält alle Aufnahmen dieses Diary-Ordners chronologisch auf einer einzigen, nach Dauer proportionalen Hörleiste. Der Schieber navigiert auch über Dateigrenzen hinweg; es wird keine Sammeldatei exportiert und keine Playlist dargestellt.
 
 Eingebettete Aufnahmezeit vor Inhalts-/Containerdatum; ohne diese Daten zuerst den vollständigen Zeitstempel im Dateinamen (z. B. `2023-12-27_22-51-32`, mit `-`, `_` oder ohne Trenner; einschließlich aud-Importnamen), zuletzt das Dateisystem-Erstellungsdatum als gekennzeichneten Fallback verwenden. Datum und Quelle im Prüflauf kontrollieren. Bei Fotos/Videos bleiben die strikten bisherigen Regeln unverändert. Audio-Kollisionen werden bytegenau verglichen. Formatliste, Einschränkungen und genaue Priorität stehen in der aktuellen Repository-README.
 
 Das Importprotokoll ist standardmäßig kompakt: ein Ergebnis pro Datei, vollständige Pfade und Datumsquelle im Tooltip. „Alle Schritte anzeigen“ öffnet das detaillierte, mehrzeilige Protokoll. „Protokoll kopieren“ kopiert jeweils die gewählte Ansicht.
+
+Diary zeigt jetzt Kacheln statt einer Dateinamenliste. Die gewählte Vorschaugröße steuert 10/8/6/5/4 Spalten auf ausreichend breiten Fenstern. Unter dem Audiosymbol stehen Datum und Uhrzeit; vollständiger Dateiname und Datumsquelle erscheinen im Tooltip. Der Player zeigt das laufende Aufnahmedatum und die Aufnahmeuhrzeit, einschließlich des Fortschritts innerhalb der aktuellen Datei. Vorhandene Preferences werden in die separate Datei `de.photosuite.PhotoSuite.settings.plist` übernommen; das alte App-Domain bleibt erhalten. Importe in andere Ziele ändern die ausgewählte Fotobibliothek nicht mehr.

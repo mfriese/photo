@@ -109,6 +109,7 @@ impl AudioPlayer for NativeAudioPlayer {
                     paths: *const *const std::ffi::c_char,
                     labels: *const *const std::ffi::c_char,
                     durations: *const f64,
+                    recorded_at: *const f64,
                     count: usize,
                     year: *const std::ffi::c_char,
                     start: f64,
@@ -134,12 +135,18 @@ impl AudioPlayer for NativeAudioPlayer {
             let path_ptrs: Vec<_> = paths.iter().map(|s| s.as_ptr()).collect();
             let label_ptrs: Vec<_> = labels.iter().map(|s| s.as_ptr()).collect();
             let durations: Vec<_> = timeline.recordings().iter().map(|r| r.duration()).collect();
+            let recorded_at: Vec<_> = timeline
+                .recordings()
+                .iter()
+                .map(|r| r.captured().civil_seconds() as f64)
+                .collect();
             let year = CString::new(timeline.year()).map_err(|e| e.to_string())?;
             let status = unsafe {
                 photosuite_audio_open(
                     path_ptrs.as_ptr(),
                     label_ptrs.as_ptr(),
                     durations.as_ptr(),
+                    recorded_at.as_ptr(),
                     paths.len(),
                     year.as_ptr(),
                     start,

@@ -119,14 +119,14 @@ fn viewer_controls(
             ui.horizontal(|ui| {
                 actions.previous = ui
                     .add_enabled_ui(position.is_some_and(|p| p > 0), |ui| {
-                        ui.add_sized([cell_width, 28.], button("← Zurück"))
+                        ui.add_sized([cell_width, 28.], button("Zurück"))
                     })
                     .inner
                     .on_hover_text("Vorheriges Medium · Pfeiltaste links")
                     .clicked();
                 actions.next = ui
                     .add_enabled_ui(position.is_some_and(|p| p + 1 < total), |ui| {
-                        ui.add_sized([cell_width, 28.], button("Weiter →"))
+                        ui.add_sized([cell_width, 28.], button("Weiter"))
                     })
                     .inner
                     .on_hover_text("Nächstes Medium · Pfeiltaste rechts")
@@ -144,7 +144,7 @@ fn viewer_controls(
             ui.horizontal(|ui| {
                 if video {
                     if ui
-                        .add_sized([cell_width, 28.], button("▶ Abspielen"))
+                        .add_sized([cell_width, 28.], button("Abspielen"))
                         .on_hover_text("Im PhotoSuite-Player abspielen · Leertaste (Standard)")
                         .clicked()
                     {
@@ -159,12 +159,12 @@ fn viewer_controls(
                     for (command, label, help) in [
                         (
                             Command::RotateLeft,
-                            "↶ Links drehen",
+                            "Links drehen",
                             "90° gegen den Uhrzeigersinn drehen",
                         ),
                         (
                             Command::RotateRight,
-                            "↷ Rechts drehen",
+                            "Rechts drehen",
                             "90° im Uhrzeigersinn drehen",
                         ),
                         (
@@ -294,6 +294,7 @@ mod tests {
                     assert!(height < 110., "Controls exceed two rows: {height}");
                     for shape in output.shapes {
                         if let egui::Shape::Text(text) = shape.shape {
+                            crate::theme::assert_text_glyphs(&ctx, &text);
                             assert!(text.galley.rows.len() <= 1, "Control text wrapped");
                             assert!(
                                 text.visual_bounding_rect().right() <= width + 1.,

@@ -13,7 +13,7 @@ impl super::Suite {
                 ui.add_space(4.);
                 ui.strong("Mediathek");
                 ui.add_space(2.);
-                if theme::navigation(ui, self.group.is_none(), "▦  Alle Erinnerungen").clicked() {
+                if theme::navigation(ui, self.group.is_none(), "Alle Erinnerungen").clicked() {
                     self.group = None;
                 }
 
@@ -36,7 +36,7 @@ impl super::Suite {
                                     self.group = Some(year.clone());
                                 }
                                 let diary = format!("{year}/diary");
-                                if theme::navigation(ui, self.group.as_ref() == Some(&diary), "♪ Diary").clicked() {
+                                if theme::navigation(ui, self.group.as_ref() == Some(&diary), "Diary").clicked() {
                                     self.group = Some(diary);
                                 }
                                 for g in months {
@@ -58,6 +58,7 @@ impl super::Suite {
             self.selected = None;
             self.storyboard.clear();
             self.diary.cancel();
+            self.diary_catalog.cancel();
         }
     }
 }

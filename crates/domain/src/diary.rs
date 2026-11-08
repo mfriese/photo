@@ -77,6 +77,10 @@ impl YearTimeline {
     pub fn offset(&self, index: usize) -> Option<f64> {
         self.offsets.get(index).copied()
     }
+    pub fn recorded_time(&self, seconds: f64) -> Result<CaptureTime, String> {
+        let (index, local) = self.locate(seconds)?;
+        self.recordings[index].captured.shifted(local)
+    }
     pub fn locate(&self, seconds: f64) -> Result<(usize, f64), String> {
         if !seconds.is_finite() {
             return Err("Ungültige Zeitposition".into());
@@ -103,6 +107,20 @@ pub fn diary_year(group: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn player_clock_uses_recorded_date_plus_local_position_across_midnight() {
+        let recording = Recording::new(
+            "a.wav".into(),
+            CaptureTime::parse("2023:12:27 23:59:59", "test").unwrap(),
+            30.,
+        )
+        .unwrap();
+        let timeline = YearTimeline::new("2023".into(), vec![recording]).unwrap();
+        let now = timeline.recorded_time(2.25).unwrap();
+        assert_eq!(now.date_label(), "28.12.2023");
+        assert_eq!(now.time_label(), "00:00:01");
+        assert_eq!(timeline.recorded_time(0.).unwrap().time_label(), "23:59:59");
+    }
     #[test]
     fn segments_follow_dates_and_have_proportional_durations_and_boundary_seeking() {
         let a = Recording::new(

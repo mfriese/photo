@@ -47,4 +47,8 @@ Automatisierte Layout-/Kontrasttests ergänzen die Sichtprüfung. Ein Regression
 
 ## Audio-Diary
 
-Unter jedem eingeklappten Jahr einen „♪ Diary“-Eintrag anbieten. Die Dateiansicht bleibt kompakt und kontrastreich; Audio ersetzt keine Fotokacheln in der allgemeinen Galerie. Der native Audioplayer verwendet eine einzelne segmentierte Jahresleiste mit heller Positionsmarke. Segmentbreiten ausschließlich nach Dauer, keine gleich breiten Titel und keine Playlist. Aktuelle Datei und Datumsquelle mit vollständigem Tooltip zeigen; Fallbacks ausdrücklich kennzeichnen. Die Dateiübersicht ist weiterhin separat erreichbar.
+Unter jedem eingeklappten Jahr einen „Diary“-Eintrag anbieten. Audio-Kacheln analog zur Fotowand: fünf Zoomstufen mit 10/8/6/5/4 Zielspalten, bei Platzmangel weniger; vollständige Zeilen füllen die Breite. Stilisiertes Audio-Symbol vektoriell zeichnen, keine Wellenformanalyse behaupten. Unter jeder Kachel ausschließlich Datum und darunter Uhrzeit in mindestens 12 Punkten; Dateiname und Datumsquelle nur im Tooltip. Metadaten im Hintergrund lesen und bei Aktualisierung neu bestimmen.
+
+Der native Audioplayer verwendet eine einzelne segmentierte Jahresleiste mit heller Positionsmarke. Segmentbreiten ausschließlich nach Dauer, keine gleich breiten Titel und keine Playlist. Sichtbare Zeitangaben ausschließlich aktuelles Aufnahmedatum und Aufnahmeuhrzeit, berechnet aus Dateibeginn plus lokaler Dateiposition. Dateiquellen bleiben im Tooltip zugänglich. Keine zusätzlichen Dateinamen oder verstrichenen Gesamtdauern in der Hauptanzeige.
+
+Buttons benutzen klare Textbeschriftungen statt Unicode-Dekorationen wie Drehsymbolen oder Musiknoten. Grafische Symbole als Vektor zeichnen. Tests prüfen echte UI-Texte auf Glyphenabdeckung.

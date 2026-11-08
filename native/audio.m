@@ -59,7 +59,7 @@ static AVMutableComposition *PSBuildAudioComposition(NSArray<NSString *> *paths,
 @property(nonatomic,strong) NSButton *playButton;
 @property(nonatomic,strong) NSTextField *titleLabel;
 @property(nonatomic,strong) NSTextField *detailLabel;
-@property(nonatomic,strong) NSTextField *timeLabel;
+@property(nonatomic,copy) NSArray<NSNumber *> *recordedAt;
 @property(nonatomic,copy) NSArray<NSString *> *paths;
 @property(nonatomic,copy) NSArray<NSString *> *labels;
 @property(nonatomic,copy) NSArray<NSNumber *> *durations;
@@ -74,9 +74,15 @@ static AVMutableComposition *PSBuildAudioComposition(NSArray<NSString *> *paths,
 - (void)shutdown;
 @end
 static PSAudioController *PSAudio = nil;
-static NSString *PSAudioTime(double seconds) {
-    NSUInteger value = isfinite(seconds) ? (NSUInteger)MAX(0,seconds) : 0;
-    return [NSString stringWithFormat:@"%02lu:%02lu:%02lu", value/3600,(value/60)%60,value%60];
+static NSString *PSAudioDateText(double civil) {
+    static NSDateFormatter *formatter; static dispatch_once_t once;
+    dispatch_once(&once, ^{formatter=[NSDateFormatter new];formatter.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];formatter.timeZone=[NSTimeZone timeZoneForSecondsFromGMT:0];formatter.dateFormat=@"dd.MM.yyyy";});
+    return [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:civil]];
+}
+static NSString *PSAudioClockText(double civil) {
+    static NSDateFormatter *formatter; static dispatch_once_t once;
+    dispatch_once(&once, ^{formatter=[NSDateFormatter new];formatter.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];formatter.timeZone=[NSTimeZone timeZoneForSecondsFromGMT:0];formatter.dateFormat=@"HH:mm:ss";});
+    return [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:civil]];
 }
 @implementation PSAudioTimeline
 - (BOOL)acceptsFirstResponder { return YES; }
@@ -111,7 +117,8 @@ static NSString *PSAudioTime(double seconds) {
     double offset=0;
     for (NSUInteger i=0;i<self.durations.count;++i) {
         if (position<offset+self.durations[i].doubleValue || i+1==self.durations.count) {
-            self.toolTip=[NSString stringWithFormat:@"%@ · %@\n%@",self.controller.paths[i].lastPathComponent,PSAudioTime(self.durations[i].doubleValue),self.controller.labels[i]];
+            double civil=self.controller.recordedAt[i].doubleValue;
+            self.toolTip=[NSString stringWithFormat:@"%@ %@",PSAudioDateText(civil),PSAudioClockText(civil)];
             break;
         }
         offset+=self.durations[i].doubleValue;
@@ -152,19 +159,19 @@ static NSString *PSAudioTime(double seconds) {
     double position=self.seeking ? self.timeline.position : CMTimeGetSeconds(self.player.currentTime);
     if (!isfinite(position)) position=0;
     self.timeline.position=position; self.timeline.needsDisplay=YES;
-    self.timeLabel.stringValue=[NSString stringWithFormat:@"%@ / %@",PSAudioTime(position),PSAudioTime(self.timeline.total)];
     double offset=0;
     for (NSUInteger i=0;i<self.durations.count;++i) {
         double end=offset+self.durations[i].doubleValue;
         if (position<end || i+1==self.durations.count) {
-            self.titleLabel.stringValue=self.paths[i].lastPathComponent;
-            self.detailLabel.stringValue=[self.labels[i] containsString:@"FALLBACK"] ? [@"⚠ Datumsfallback · " stringByAppendingString:self.labels[i]] : self.labels[i];
-            self.detailLabel.toolTip=self.detailLabel.stringValue;
+            double civil=self.recordedAt[i].doubleValue+MAX(0,position-offset);
+            self.titleLabel.stringValue=PSAudioDateText(civil);
+            self.detailLabel.stringValue=PSAudioClockText(civil);
+            self.detailLabel.toolTip=self.labels[i];
             break;
         }
         offset=end;
     }
-    self.playButton.title=self.player.rate==0 ? @"▶ Wiedergabe" : @"Ⅱ Pause";
+    self.playButton.title=self.player.rate==0 ? @"Wiedergabe" : @"Pause";
     self.playButton.enabled=self.player.currentItem.status==AVPlayerItemStatusReadyToPlay;
 }
 - (void)toggle:(id)sender {
@@ -196,37 +203,37 @@ static NSString *PSAudioTime(double seconds) {
 static NSTextField *PSAudioLabel(NSRect frame, CGFloat size) {
     NSTextField *label=[NSTextField labelWithString:@""];
     label.frame=frame; label.font=[NSFont systemFontOfSize:size]; label.textColor=NSColor.labelColor;
+    label.alignment=NSTextAlignmentCenter;
     label.lineBreakMode=NSLineBreakByTruncatingMiddle;
     label.autoresizingMask=NSViewWidthSizable;
     return label;
 }
-int photosuite_audio_open(const char **paths, const char **labels, const double *durations, size_t count, const char *year, double start) {
+int photosuite_audio_open(const char **paths, const char **labels, const double *durations, const double *recorded_at, size_t count, const char *year, double start) {
     if (![NSThread isMainThread] || count==0 || !isfinite(start)) return 1;
     @autoreleasepool {
-        NSMutableArray *names=[NSMutableArray array], *descriptions=[NSMutableArray array], *lengths=[NSMutableArray array];
+        NSMutableArray *names=[NSMutableArray array], *descriptions=[NSMutableArray array], *lengths=[NSMutableArray array], *recorded=[NSMutableArray array];
         double total=0;
         for (size_t i=0;i<count;++i) {
-            if (!isfinite(durations[i]) || durations[i]<=0) return 2;
+            if (!isfinite(durations[i]) || durations[i]<=0 || !isfinite(recorded_at[i])) return 2;
             [names addObject:PSAudioPath(paths[i])]; [descriptions addObject:[NSString stringWithUTF8String:labels[i]]];
-            [lengths addObject:@(durations[i])]; total+=durations[i];
+            [recorded addObject:@(recorded_at[i])]; [lengths addObject:@(durations[i])]; total+=durations[i];
         }
         if (!isfinite(total)) return 2;
         if (PSAudio) { [PSAudio shutdown]; [PSAudio close]; }
-        NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,740,235) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+        NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,740,210) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
         window.acceptsMouseMovedEvents=YES;
         window.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
         window.title=[NSString stringWithFormat:@"Diary %@ · Jahresverlauf",[NSString stringWithUTF8String:year]];
-        window.minSize=NSMakeSize(440,257); window.maxSize=NSMakeSize(1600,257); window.releasedWhenClosed=NO;
+        window.minSize=NSMakeSize(440,232); window.maxSize=NSMakeSize(1600,232); window.releasedWhenClosed=NO;
         PSAudioController *controller=[[PSAudioController alloc] initWithWindow:window]; PSAudio=controller;
-        controller.volumeLevel=0.8; controller.paths=names; controller.labels=descriptions; controller.durations=lengths;
+        controller.volumeLevel=0.8; controller.paths=names; controller.labels=descriptions; controller.durations=lengths; controller.recordedAt=recorded;
         window.delegate=controller;
         NSView *view=window.contentView;
-        controller.titleLabel=PSAudioLabel(NSMakeRect(20,190,700,24),17); controller.titleLabel.stringValue=@"Jahresaufnahme wird geladen …"; [view addSubview:controller.titleLabel];
-        controller.detailLabel=PSAudioLabel(NSMakeRect(20,164,700,22),12); controller.detailLabel.stringValue=[NSString stringWithFormat:@"%zu Aufnahmen · durchgehende Hörleiste ohne Kalenderpausen",count]; [view addSubview:controller.detailLabel];
-        controller.timeline=[[PSAudioTimeline alloc] initWithFrame:NSMakeRect(12,95,716,58)];
+        controller.titleLabel=PSAudioLabel(NSMakeRect(20,168,700,24),20); controller.titleLabel.stringValue=@"Jahresaufnahme wird geladen …"; [view addSubview:controller.titleLabel];
+        controller.detailLabel=PSAudioLabel(NSMakeRect(20,142,700,22),16); controller.detailLabel.stringValue=@""; [view addSubview:controller.detailLabel];
+        controller.timeline=[[PSAudioTimeline alloc] initWithFrame:NSMakeRect(12,75,716,58)];
         controller.timeline.autoresizingMask=NSViewWidthSizable; controller.timeline.controller=controller; controller.timeline.durations=lengths; controller.timeline.total=total; [view addSubview:controller.timeline];
-        controller.timeLabel=PSAudioLabel(NSMakeRect(20,72,700,20),12); controller.timeLabel.stringValue=[NSString stringWithFormat:@"%@ / %@",PSAudioTime(start),PSAudioTime(total)]; [view addSubview:controller.timeLabel];
-        NSArray *titles=@[@"−15 s",@"▶ Wiedergabe",@"+15 s"];
+        NSArray *titles=@[@"-15 s",@"Wiedergabe",@"+15 s"];
         SEL selectors[]={@selector(back:),@selector(toggle:),@selector(forward:)};
         for (NSUInteger i=0;i<3;++i) {
             NSButton *button=[NSButton buttonWithTitle:titles[i] target:controller action:selectors[i]];

@@ -45,15 +45,30 @@ impl Preferences {
         &self,
         arguments: impl IntoIterator<Item = std::ffi::OsString>,
     ) -> Option<PathBuf> {
-        arguments
-            .into_iter()
-            .find(|argument| !argument.to_string_lossy().starts_with("-psn_"))
-            .map(PathBuf::from)
-            .or_else(|| {
-                self.reopen_library
-                    .then(|| self.last_library.clone())
-                    .flatten()
-            })
+        let mut arguments = arguments.into_iter().peekable();
+        while let Some(argument) = arguments.next() {
+            let text = argument.to_string_lossy();
+            if text == "--" {
+                return arguments.next().map(PathBuf::from);
+            }
+            if text.starts_with("-psn_") {
+                continue;
+            }
+            if text.starts_with('-') {
+                if !text.contains('=')
+                    && arguments
+                        .peek()
+                        .is_some_and(|value| !value.to_string_lossy().starts_with('-'))
+                {
+                    arguments.next();
+                }
+                continue;
+            }
+            return Some(PathBuf::from(argument));
+        }
+        self.reopen_library
+            .then(|| self.last_library.clone())
+            .flatten()
     }
 }
 pub trait PreferencesStore: Send + Sync + 'static {
@@ -95,6 +110,18 @@ impl Persistence {
             if self.sender.as_ref().unwrap().send(preferences).is_err() {
                 self.worker_error = Some("Preferences-Dienst wurde unerwartet beendet".into());
             }
+        }
+    }
+    /// Save even an unchanged startup snapshot, including migration to a dedicated store.
+    pub fn flush_current(&mut self) {
+        if self
+            .sender
+            .as_ref()
+            .unwrap()
+            .send(self.last.clone())
+            .is_err()
+        {
+            self.worker_error = Some("Preferences-Dienst wurde unerwartet beendet".into());
         }
     }
     pub fn poll_error(&mut self) -> Option<String> {
@@ -149,6 +176,27 @@ mod tests {
         let saved = store.0.lock().unwrap();
         assert_eq!(saved.last(), Some(&changed));
         assert_eq!(saved.len(), 1);
+    }
+    #[test]
+    fn macos_launch_options_never_replace_the_saved_library() {
+        let prefs = Preferences {
+            last_library: Some("/Fotos".into()),
+            ..Default::default()
+        };
+        for arguments in [
+            vec!["-NSDocumentRevisionsDebugMode", "YES"],
+            vec!["-ApplePersistenceIgnoreState", "NO"],
+            vec!["-psn_0_123", "-NSFoo", "YES"],
+        ] {
+            assert_eq!(
+                prefs.startup_library(arguments.into_iter().map(Into::into)),
+                prefs.last_library
+            );
+        }
+        assert_eq!(
+            prefs.startup_library(["-NSFoo".into(), "YES".into(), "/Andere Fotos".into()]),
+            Some("/Andere Fotos".into())
+        );
     }
     #[test]
     fn startup_restores_saved_library_and_respects_explicit_path_and_opt_out() {
