@@ -13,6 +13,15 @@ pub const ALL: [Command; 4] = [
     Command::PlayVideo,
 ];
 impl Command {
+    /// Stable persistence identity, independent of translated labels and GUI frameworks.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::RotateLeft => "rotate_left",
+            Self::RotateRight => "rotate_right",
+            Self::ResetRotation => "reset_rotation",
+            Self::PlayVideo => "play_video",
+        }
+    }
     pub fn apply(self, turns: u8) -> Option<u8> {
         match self {
             Self::RotateLeft => Some((turns % 4 + 3) % 4),

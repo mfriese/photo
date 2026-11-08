@@ -130,7 +130,7 @@ Audio erhält dieselben sicheren Kopier- und Kollisionsregeln wie Fotos: bytegle
 - Bilder: JPEG, PNG, WebP, TIFF, GIF und BMP. **HEIC und Kamera-RAW werden derzeit nicht unterstützt.** Animierte Formate sind kein vollständiger Animationsplayer.
 - Videos: Dateiendungen werden erkannt; tatsächlich dekodierbare Formate hängen von AVFoundation und installierten macOS-Codecs ab. Native Videovorschau, Player und Papierkorb sind auf macOS ausgelegt.
 - Duplikatfreigabe: konservativer, vollständiger Pixelvergleich statischer JPEG-/PNG-Dateien; keine unscharfe Ähnlichkeitssuche. Farbprofilunterschiede und unklare Formate verhindern automatische Freigaben. Grenzen: 32 Megapixel bzw. 256 MiB pro Datei.
-- Zwei Decoder und maximal 32 wartende Bildaufträge begrenzen die Arbeitsqueue. Bild-/GPU-Cache und Importprotokoll haben noch kein globales Speicherlimit; sehr große Sammlungen oder Protokolle können viel Speicher benötigen.
+- Zwei Decoder, 32 wartende Aufträge und ein Galeriecache mit höchstens 256 MiB dekodierten RGBA-Daten bzw. 1024 Einträgen begrenzen die Bildhaltung. Rastervorschauen haben 256/512/1024 Pixel, die Großansicht maximal 4096 Pixel. Alte Cachetexturen werden freigegeben. Temporäre vollständige Dekodierungen und Grafiktreiber benötigen zusätzlichen Speicher; das vollständige Importprotokoll wächst mit dem jeweiligen Lauf.
 - Audio-Diary ist ein erster macOS-Entwurf: das Vorschaubild ist ein Symbol und keine berechnete Wellenform; keine manuelle Datumskorrektur und keine garantierte Unterstützung jedes Systemformats. Die Startbreiten sind bewusst nur Dateigrößen-Schätzungen und besonders bei gemischten Formaten ungenau. Vor dem Start werden noch die Größen aller Dateien gelesen; auf langsamen oder entfernten Laufwerken kann das dauern. Dauer und Datumsmetadaten werden anschließend einzeln im Hintergrund geprüft; einzelne Systemaufrufe sind nicht sofort abbrechbar. Die Wiedergabe verwendet einen AVPlayer für die jeweils aktuelle Originaldatei; beim automatischen Dateiwechel kann eine kurze Ladepause entstehen, lückenlose Wiedergabe ist nicht garantiert. Sekundensprünge über mehrere noch ungeprüfte Dateien können vorläufig ungenau sein. Geprüfte Breiten sind exakt proportional zur Dauer, ohne Mindestbreiten. Es gibt noch keinen persistenten Dauercache.
 - Keine Bearbeitungs-Suite für Zuschnitt, Belichtung oder Farbkorrekturen. Nicht gespeicherte Drehungen sind Sitzungskorrekturen.
 - Defekte Preferences werden sichtbar gemeldet und nicht überschrieben. Beim normalen Beenden werden ausstehende Einstellungen gespeichert; erzwungenes Beenden kann laufende Schreibvorgänge unterbrechen.
@@ -139,6 +139,7 @@ Audio erhält dieselben sicheren Kopier- und Kollisionsregeln wie Fotos: bytegle
 
 ```sh
 cargo run -- /Pfad/zur/Fotosammlung
+make check-architecture
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -173,3 +174,5 @@ Domäne und Anwendung kennen weder egui noch konkrete Dateisystem-/Bilddecoderad
 - [Verbindliche Projektregeln](AGENTS.md)
 
 Build-Dateien unter `target/` gehören nicht ins Repository. README und Screenshots werden bei wesentlichen Änderungen an Oberfläche, Funktionen oder Installation gemeinsam aktualisiert.
+
+Der vertiefte Architekturreview und die korrigierten Stellen sind unter [Architekturreview](docs/ARCHITECTURE_REVIEW.md) dokumentiert. Bibliotheks-/Videowechsel verwenden begrenzte Anwendungssitzungen; Importabschlüsse und Preferences-Schreibaufträge werden ebenfalls zentral in der Anwendung verwaltet.

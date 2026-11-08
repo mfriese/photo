@@ -4,7 +4,7 @@ use eframe::egui;
 use photosuite_application::storyboard::{self, Event, FRAME_COUNT};
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::Arc,
 };
 enum Tile {
     Loading,
@@ -13,7 +13,6 @@ enum Tile {
 }
 struct State {
     path: PathBuf,
-    receiver: Option<mpsc::Receiver<Event>>,
     tiles: [Tile; FRAME_COUNT],
     duration: Option<f64>,
     error: Option<String>,
@@ -21,68 +20,52 @@ struct State {
 #[derive(Default)]
 pub struct StoryboardView {
     state: Option<State>,
+    session: storyboard::StoryboardSession,
 }
 impl StoryboardView {
     pub fn clear(&mut self) {
         self.state = None;
+        self.session.cancel();
+        self.session.poll();
     }
     pub fn show(&mut self, ui: &mut egui::Ui, path: &Path, source: Arc<dyn VideoPreviewSource>) {
         if self.state.as_ref().is_none_or(|s| s.path != path) {
+            self.session.request(source, path.into());
             self.state = Some(State {
                 path: path.into(),
-                receiver: Some(storyboard::load(source.clone(), path.into())),
                 tiles: std::array::from_fn(|_| Tile::Loading),
                 duration: None,
                 error: None,
             });
         }
         let state = self.state.as_mut().unwrap();
-        let mut done = false;
-        if let Some(receiver) = &state.receiver {
-            loop {
-                match receiver.try_recv() {
-                    Ok(Event::Started(duration)) => state.duration = Some(duration),
-                    Ok(Event::Frame(index, result)) => {
-                        state.tiles[index] = match result {
-                            Ok(frame) => {
-                                let image = egui::ColorImage::from_rgba_unmultiplied(
-                                    [frame.image.width as usize, frame.image.height as usize],
-                                    &frame.image.rgba,
-                                );
-                                Tile::Ready(
-                                    ui.ctx().load_texture(
-                                        format!("storyboard:{}:{index}", path.display()),
-                                        image,
-                                        egui::TextureOptions::LINEAR,
-                                    ),
-                                    frame.seconds,
-                                )
-                            }
-                            Err(error) => Tile::Failed(error),
+        for event in self.session.poll() {
+            match event {
+                Event::Started(duration) => state.duration = Some(duration),
+                Event::Frame(index, result) => {
+                    state.tiles[index] = match result {
+                        Ok(frame) => {
+                            let image = egui::ColorImage::from_rgba_unmultiplied(
+                                [frame.image.width() as usize, frame.image.height() as usize],
+                                frame.image.rgba(),
+                            );
+                            Tile::Ready(
+                                ui.ctx().load_texture(
+                                    format!("storyboard:{}:{index}", path.display()),
+                                    image,
+                                    egui::TextureOptions::LINEAR,
+                                ),
+                                frame.seconds,
+                            )
                         }
-                    }
-                    Ok(Event::Failed(error)) => {
-                        state.error = Some(error);
-                        done = true;
-                    }
-                    Ok(Event::Done) => {
-                        done = true;
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        if !done {
-                            state.error = Some("Videovorschau unerwartet beendet".into());
-                        }
-                        done = true;
-                        break;
-                    }
+                        Err(error) => Tile::Failed(error),
+                    };
                 }
+                Event::Failed(error) => state.error = Some(error),
+                Event::Done => {}
             }
         }
-        if done {
-            state.receiver = None;
-        } else {
+        if self.session.is_loading() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
@@ -153,7 +136,7 @@ impl StoryboardView {
                                         ui.painter().text(
                                             rect.center(),
                                             egui::Align2::CENTER_CENTER,
-                                            if state.receiver.is_some() {
+                                            if self.session.is_loading() {
                                                 "Wird geladen …"
                                             } else {
                                                 "Keine Vorschau"

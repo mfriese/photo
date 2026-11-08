@@ -15,25 +15,7 @@ fn family(media: &Media) -> Option<(String, bool)> {
     if !base.get(..4)?.eq_ignore_ascii_case("img_") {
         return None;
     }
-    let date = base.get(4..12)?;
-    let time = base.get(13..19)?;
-    if base.as_bytes()[12] != b'_' || !date.bytes().chain(time.bytes()).all(|b| b.is_ascii_digit())
-    {
-        return None;
-    }
-    CaptureTime::parse(
-        &format!(
-            "{}:{}:{} {}:{}:{}",
-            &date[..4],
-            &date[4..6],
-            &date[6..],
-            &time[..2],
-            &time[2..4],
-            &time[4..]
-        ),
-        "filename",
-    )
-    .ok()?;
+    CaptureTime::from_photo_filename(stem)?;
     Some((base.to_lowercase(), stem.len() > 19))
 }
 pub fn collision_groups(media: &[Media]) -> Vec<CollisionGroup> {

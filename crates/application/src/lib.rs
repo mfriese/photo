@@ -13,3 +13,7 @@ pub mod storyboard;
 pub mod diary;
 
 pub mod photo_context;
+
+pub mod collection;
+
+pub mod import_session;

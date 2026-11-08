@@ -37,11 +37,7 @@ fn frame_at(path: &Path, seconds: f64) -> Result<crate::ports::VideoFrame, Strin
     let rgba = decoded.map_err(|e| e.to_string())?.to_rgba8();
     Ok(crate::ports::VideoFrame {
         seconds: actual,
-        image: DecodedImage {
-            width: rgba.width(),
-            height: rgba.height(),
-            rgba: rgba.into_raw(),
-        },
+        image: DecodedImage::new(rgba.width(), rgba.height(), rgba.into_raw())?,
     })
 }
 pub struct NativeVideoSource;
@@ -95,9 +91,9 @@ mod tests {
             "/tests/fixtures/preview.mp4"
         )))
         .unwrap();
-        assert_eq!((frame.width, frame.height), (96, 64));
-        assert_eq!(frame.rgba.len(), 96 * 64 * 4);
-        assert!(frame.rgba[2] > 200);
+        assert_eq!((frame.width(), frame.height()), (96, 64));
+        assert_eq!(frame.rgba().len(), 96 * 64 * 4);
+        assert!(frame.rgba()[2] > 200);
     }
     #[test]
     fn invalid_video_returns_error() {
@@ -116,29 +112,35 @@ mod storyboard_tests {
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/storyboard.mp4"
         ));
-        let rx = storyboard::load(Arc::new(NativeVideoSource), path.into());
+        let mut session = storyboard::StoryboardSession::default();
+        session.request(Arc::new(NativeVideoSource), path.into());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         let mut frames = Vec::new();
         let mut duration = 0.;
-        loop {
-            match rx.recv_timeout(std::time::Duration::from_secs(20)).unwrap() {
-                Event::Started(d) => duration = d,
-                Event::Frame(index, result) => {
-                    assert_eq!(index, frames.len());
-                    frames.push(result.unwrap());
+        while session.is_loading() {
+            assert!(std::time::Instant::now() < deadline);
+            for event in session.poll() {
+                match event {
+                    Event::Started(d) => duration = d,
+                    Event::Frame(index, result) => {
+                        assert_eq!(index, frames.len());
+                        frames.push(result.unwrap());
+                    }
+                    Event::Failed(e) => panic!("{e}"),
+                    Event::Done => {}
                 }
-                Event::Failed(e) => panic!("{e}"),
-                Event::Done => break,
             }
+            std::thread::yield_now();
         }
         assert_eq!(frames.len(), 6);
         assert!((duration - 6.).abs() < 0.01);
         for pair in frames.windows(2) {
             assert!(pair[0].seconds < pair[1].seconds);
-            assert_ne!(pair[0].image.rgba, pair[1].image.rgba);
+            assert_ne!(pair[0].image.rgba(), pair[1].image.rgba());
         }
         for frame in frames {
             assert!((0.0..duration).contains(&frame.seconds));
-            assert_eq!((frame.image.width, frame.image.height), (96, 64));
+            assert_eq!((frame.image.width(), frame.image.height()), (96, 64));
         }
     }
 }

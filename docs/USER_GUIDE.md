@@ -103,7 +103,7 @@ Cargo-Workspace mit durch den Compiler getrennten Schichten:
 
 Domäne und Anwendung verbieten unsicheren Rust-Code. Ein Rückgriff auf Desktop-Module ist aus diesen Crates nicht möglich. Buttonbeschriftungen liegen außerhalb der Domäne. Fachlogik wird zusätzlich mit In-Memory-Adaptern ohne GUI und Dateisystem getestet. Architekturentscheidungen und Grenzen: `ARCHITECTURE.md`.
 
-HEIC/RAW, Zoom/Pan und ein persistenter Thumbnail-Cache fehlen weiterhin. Ein installierbares macOS-App-Bundle und ein .pkg-Installer sind vorhanden. Bildcache und Protokoll wachsen derzeit mit der Sitzung; Bildladeaufträge verwenden zwei Worker mit einer Queue von höchstens 32 wartenden Aufträgen. Diese Betriebsgrenzen sind unabhängig von der Schichtentrennung.
+HEIC/RAW, Zoom/Pan und ein persistenter Thumbnail-Cache fehlen weiterhin. Ein installierbares macOS-App-Bundle und ein .pkg-Installer sind vorhanden. Der Galeriecache ist auf 256 MiB RGBA-Daten und 1024 Einträge begrenzt; das vollständige Importprotokoll wächst mit dem Lauf; Bildladeaufträge verwenden zwei Worker mit einer Queue von höchstens 32 wartenden Aufträgen. Diese Betriebsgrenzen sind unabhängig von der Schichtentrennung.
 
 ## Prüfen
 
@@ -183,7 +183,7 @@ Gruppierungsregeln liegen in der Domäne, Vergleichsablauf und Entscheidungen in
 
 Die gesamte Anwendung ist in `ARCHITECTURE.md` nach Bereichen geprüft; `AGENTS.md` schreibt diese Pflege für künftige Erweiterungen verbindlich vor. Fachliche Workflows bleiben in unabhängig testbaren Anwendungssitzungen. Die Duplikatprüfung nutzt `ReviewSession`; die Desktop-Ansichten sind nach Toolbar, Bibliothek, Wand und Viewer gegliedert. Native Video-, Player- und Dateisystemadapter sind getrennt.
 
-Bildaufträge laufen über einen begrenzten Pool (zwei Decoder, 32 wartende Aufträge); veraltete Ergebnisse dürfen nach Neuladen keinen neueren Cacheeintrag überschreiben. Das begrenzt die Arbeitsqueue, nicht den gesamten Bild-/GPU-Cache. Die Architekturprüfung dokumentiert diese und weitere verbleibende Betriebsgrenzen ausdrücklich.
+Bildaufträge laufen über einen begrenzten Pool (zwei Decoder, 32 wartende Aufträge); veraltete Ergebnisse dürfen nach Neuladen keinen neueren Cacheeintrag überschreiben. Zusätzlich begrenzen 256 MiB RGBA-Daten und 1024 Einträge den Galeriecache; alte Texturen werden freigegeben. Die Großansicht verwendet höchstens 4096 Pixel. Temporäre Originaldekodierungen und Grafiktreiberressourcen sind zusätzlich zu berücksichtigen. Die Architekturprüfung dokumentiert diese und weitere verbleibende Betriebsgrenzen ausdrücklich.
 
 
 Paketierungsprüfungen: `python3 -m unittest discover -s scripts -p 'test_*.py'` prüft Installation ausschließlich in temporären Verzeichnissen. `verify` kontrolliert Plist, Signatur, dynamische Abhängigkeiten und den gebündelten ExifTool-Aufruf mit minimalem System-PATH. `PhotoSuite.app/Contents/MacOS/photosuite --check-installation` prüft die Hilfsprogrammauflösung ohne Öffnen einer Bibliothek oder Schreiben von Preferences.

@@ -6,6 +6,13 @@ pub struct FileSystemRepository {
 }
 impl MediaRepository for FileSystemRepository {
     fn scan(&self, root: &Path) -> (Vec<Media>, usize) {
+        self.scan_cancellable(root, &std::sync::atomic::AtomicBool::new(false))
+    }
+    fn scan_cancellable(
+        &self,
+        root: &Path,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> (Vec<Media>, usize) {
         let mut items = Vec::new();
         let mut errors = 0;
         if !std::fs::symlink_metadata(root)
@@ -14,6 +21,9 @@ impl MediaRepository for FileSystemRepository {
             return (items, 1);
         }
         for entry in walkdir::WalkDir::new(root).follow_links(false) {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => {
@@ -142,6 +152,37 @@ pub struct RasterDecoder {
     pub videos: std::sync::Arc<dyn crate::ports::VideoPreviewSource>,
 }
 impl crate::ports::ImageDecoder for RasterDecoder {
+    fn decode_preview(
+        &self,
+        path: &Path,
+        turns: u8,
+        max_edge: u32,
+    ) -> Result<crate::ports::DecodedImage, String> {
+        if !(1..=4096).contains(&max_edge) {
+            return Err("Ungültige Vorschauauflösung".into());
+        }
+        let pixels = if crate::domain::is_video(path) {
+            let frame = self.videos.frame_at(path, 0.)?;
+            image::DynamicImage::ImageRgba8(
+                image::RgbaImage::from_raw(
+                    frame.image.width(),
+                    frame.image.height(),
+                    frame.image.rgba().to_vec(),
+                )
+                .ok_or("Ungültiges Videobild")?,
+            )
+        } else {
+            decode_oriented(path, turns).map_err(|e| e.to_string())?
+        };
+        let pixels = if pixels.width() > max_edge || pixels.height() > max_edge {
+            pixels.thumbnail(max_edge, max_edge)
+        } else {
+            pixels
+        };
+        let rgba = pixels.to_rgba8();
+        crate::ports::DecodedImage::new(rgba.width(), rgba.height(), rgba.into_raw())
+    }
+
     fn decode(&self, path: &Path, turns: u8) -> Result<crate::ports::DecodedImage, String> {
         if crate::domain::is_video(path) {
             return self.videos.frame_at(path, 0.).map(|frame| frame.image);
@@ -149,11 +190,7 @@ impl crate::ports::ImageDecoder for RasterDecoder {
         let rgba = decode_oriented(path, turns)
             .map_err(|e| e.to_string())?
             .to_rgba8();
-        Ok(crate::ports::DecodedImage {
-            width: rgba.width(),
-            height: rgba.height(),
-            rgba: rgba.into_raw(),
-        })
+        crate::ports::DecodedImage::new(rgba.width(), rgba.height(), rgba.into_raw())
     }
 }
 pub struct SystemMediaOpener;
@@ -268,5 +305,35 @@ mod write_tests {
         std::fs::write(&path, b"unchanged").unwrap();
         assert!(writer().write_rotation(&path, 1).is_err());
         assert_eq!(std::fs::read(path).unwrap(), b"unchanged");
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    struct NoVideo;
+    impl crate::ports::VideoPreviewSource for NoVideo {
+        fn duration(&self, _: &Path) -> Result<f64, String> {
+            unreachable!()
+        }
+        fn frame_at(&self, _: &Path, _: f64) -> Result<crate::ports::VideoFrame, String> {
+            unreachable!()
+        }
+    }
+    #[test]
+    fn preview_sizes_preserve_orientation_and_source_bytes() {
+        use crate::ports::ImageDecoder;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.png");
+        image::RgbImage::new(800, 400).save(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let decoder = RasterDecoder {
+            videos: std::sync::Arc::new(NoVideo),
+        };
+        let small = decoder.decode_preview(&path, 1, 256).unwrap();
+        assert_eq!((small.width(), small.height()), (128, 256));
+        let large = decoder.decode_preview(&path, 0, 4096).unwrap();
+        assert_eq!((large.width(), large.height()), (800, 400));
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
 }

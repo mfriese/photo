@@ -2,7 +2,7 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, mpsc},
+    sync::{Arc, Condvar, Mutex, mpsc},
     thread,
 };
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,8 +75,13 @@ pub trait PreferencesStore: Send + Sync + 'static {
     fn load(&self) -> Result<Preferences, String>;
     fn save(&self, preferences: &Preferences) -> Result<(), String>;
 }
+#[derive(Default)]
+struct Mailbox {
+    pending: Option<Preferences>,
+    stopping: bool,
+}
 pub struct Persistence {
-    sender: Option<mpsc::Sender<Preferences>>,
+    mailbox: Arc<(Mutex<Mailbox>, Condvar)>,
     errors: mpsc::Receiver<String>,
     worker: Option<thread::JoinHandle<()>>,
     last: Preferences,
@@ -84,20 +89,30 @@ pub struct Persistence {
 }
 impl Persistence {
     pub fn new(store: Arc<dyn PreferencesStore>, initial: Preferences) -> Self {
-        let (tx, rx) = mpsc::channel::<Preferences>();
-        let (errors_tx, errors) = mpsc::channel();
+        let mailbox = Arc::new((Mutex::new(Mailbox::default()), Condvar::new()));
+        let inbox = mailbox.clone();
+        let (errors_tx, errors) = mpsc::sync_channel(1);
         let worker = thread::spawn(move || {
-            while let Ok(mut preferences) = rx.recv() {
-                while let Ok(newer) = rx.try_recv() {
-                    preferences = newer;
-                }
-                if let Err(e) = store.save(&preferences) {
-                    let _ = errors_tx.send(e);
+            loop {
+                let preferences = {
+                    let (lock, wake) = &*inbox;
+                    let mut state = lock.lock().unwrap();
+                    while state.pending.is_none() && !state.stopping {
+                        state = wake.wait(state).unwrap();
+                    }
+                    match state.pending.take() {
+                        Some(value) => value,
+                        None => break,
+                    }
+                };
+                // Never hold the mailbox lock while calling a slow/failing store.
+                if let Err(error) = store.save(&preferences) {
+                    let _ = errors_tx.try_send(error);
                 }
             }
         });
         Self {
-            sender: Some(tx),
+            mailbox,
             errors,
             worker: Some(worker),
             last: initial,
@@ -106,23 +121,23 @@ impl Persistence {
     }
     pub fn update(&mut self, preferences: Preferences) {
         if preferences != self.last {
-            self.last = preferences.clone();
-            if self.sender.as_ref().unwrap().send(preferences).is_err() {
-                self.worker_error = Some("Preferences-Dienst wurde unerwartet beendet".into());
-            }
+            self.last = preferences;
+            self.flush_current();
         }
     }
-    /// Save even an unchanged startup snapshot, including migration to a dedicated store.
+    /// One replaceable pending snapshot; unchanged startup snapshots include migration.
     pub fn flush_current(&mut self) {
         if self
-            .sender
+            .worker
             .as_ref()
-            .unwrap()
-            .send(self.last.clone())
-            .is_err()
+            .is_some_and(thread::JoinHandle::is_finished)
         {
             self.worker_error = Some("Preferences-Dienst wurde unerwartet beendet".into());
+            return;
         }
+        let (lock, wake) = &*self.mailbox;
+        lock.lock().unwrap().pending = Some(self.last.clone());
+        wake.notify_one();
     }
     pub fn poll_error(&mut self) -> Option<String> {
         self.worker_error
@@ -138,7 +153,9 @@ impl Persistence {
 }
 impl Drop for Persistence {
     fn drop(&mut self) {
-        self.sender.take();
+        let (lock, wake) = &*self.mailbox;
+        lock.lock().unwrap().stopping = true;
+        wake.notify_one();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -246,5 +263,53 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
+    }
+    #[test]
+    fn slow_store_keeps_only_latest_pending_snapshot_and_flushes_it_on_shutdown() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct SlowStore {
+            entered: AtomicBool,
+            release: AtomicBool,
+            saved: Mutex<Vec<Preferences>>,
+        }
+        impl PreferencesStore for SlowStore {
+            fn load(&self) -> Result<Preferences, String> {
+                Ok(Default::default())
+            }
+            fn save(&self, value: &Preferences) -> Result<(), String> {
+                self.entered.store(true, Ordering::SeqCst);
+                while !self.release.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                self.saved.lock().unwrap().push(value.clone());
+                Ok(())
+            }
+        }
+        let store = Arc::new(SlowStore {
+            entered: AtomicBool::new(false),
+            release: AtomicBool::new(false),
+            saved: Mutex::new(Vec::new()),
+        });
+        let mut persistence = Persistence::new(store.clone(), Preferences::default());
+        persistence.flush_current();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !store.entered.load(Ordering::SeqCst) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        for i in 0..1000 {
+            persistence.update(Preferences {
+                last_library: Some(format!("library/{i}").into()),
+                ..Default::default()
+            });
+        }
+        store.release.store(true, Ordering::SeqCst);
+        drop(persistence);
+        let saved = store.saved.lock().unwrap();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(
+            saved.last().unwrap().last_library,
+            Some("library/999".into())
+        );
     }
 }

@@ -11,3 +11,7 @@ pkg:
 .PHONY: test-audio
 test-audio:
 	python3 scripts/check_native_audio.py
+
+.PHONY: check-architecture
+check-architecture:
+	python3 scripts/check_architecture.py

@@ -8,8 +8,11 @@ use std::{
     sync::{Arc, Mutex, mpsc},
 };
 type Entry = Option<Result<Arc<ColorImage>, String>>;
+const CACHE_BYTES: usize = 256 * 1024 * 1024;
+const CACHE_ENTRIES: usize = 1024;
 struct CacheEntry {
     generation: u64,
+    last_used: u64,
     state: Entry,
 }
 type Cache = Arc<Mutex<HashMap<String, CacheEntry>>>;
@@ -18,22 +21,28 @@ struct Task {
     key: String,
     path: String,
     turns: u8,
+    max_edge: u32,
     ctx: egui::Context,
 }
 pub struct OrientedLoader {
     cache: Cache,
     sender: mpsc::SyncSender<Task>,
-    generation: std::sync::atomic::AtomicU64,
+    generation: Arc<std::sync::atomic::AtomicU64>,
 }
 impl OrientedLoader {
     pub fn new(decoder: Arc<dyn crate::ports::ImageDecoder>) -> Self {
+        Self::with_budget(decoder, CACHE_BYTES)
+    }
+    fn with_budget(decoder: Arc<dyn crate::ports::ImageDecoder>, budget: usize) -> Self {
         let cache: Cache = Default::default();
+        let generation = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let (sender, receiver) = mpsc::sync_channel::<Task>(32);
         let receiver = Arc::new(Mutex::new(receiver));
         for index in 0..2 {
             let receiver = receiver.clone();
             let cache = cache.clone();
             let decoder = decoder.clone();
+            let clock = generation.clone();
             std::thread::Builder::new()
                 .name(format!("photosuite-images-{index}"))
                 .spawn(move || {
@@ -51,16 +60,43 @@ impl OrientedLoader {
                             continue;
                         }
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            decoder.decode(std::path::Path::new(&task.path), task.turns)
+                            decoder
+                                .decode_preview(
+                                    std::path::Path::new(&task.path),
+                                    task.turns,
+                                    task.max_edge,
+                                )
+                                .and_then(|image| {
+                                    if image.width() > task.max_edge
+                                        || image.height() > task.max_edge
+                                    {
+                                        return Err(
+                                            "Bildadapter überschreitet die Vorschauauflösung"
+                                                .into(),
+                                        );
+                                    }
+                                    Ok(image)
+                                })
                         }))
                         .unwrap_or_else(|_| Err("Bilddecoder wurde unerwartet beendet".into()))
                         .map(|image| {
                             Arc::new(ColorImage::from_rgba_unmultiplied(
-                                [image.width as usize, image.height as usize],
-                                &image.rgba,
+                                [image.width() as usize, image.height() as usize],
+                                image.rgba(),
                             ))
                         });
-                        publish(&cache, &task.key, task.generation, result);
+                        let victims = publish(
+                            &cache,
+                            &task.key,
+                            task.generation,
+                            result,
+                            clock.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                            budget,
+                        );
+                        // Never call egui while holding the cache lock: forget reenters this loader.
+                        for victim in victims {
+                            task.ctx.forget_image(&victim);
+                        }
                         task.ctx.request_repaint();
                     }
                 })
@@ -69,16 +105,49 @@ impl OrientedLoader {
         Self {
             cache,
             sender,
-            generation: std::sync::atomic::AtomicU64::new(0),
+            generation,
         }
     }
 }
-fn publish(cache: &Cache, key: &str, generation: u64, result: Result<Arc<ColorImage>, String>) {
-    if let Some(entry) = cache.lock().unwrap().get_mut(key)
+fn publish(
+    cache: &Cache,
+    key: &str,
+    generation: u64,
+    result: Result<Arc<ColorImage>, String>,
+    used: u64,
+    budget: usize,
+) -> Vec<String> {
+    let mut cache = cache.lock().unwrap();
+    if let Some(entry) = cache.get_mut(key)
         && entry.generation == generation
     {
         entry.state = Some(result);
+        entry.last_used = used;
+    } else {
+        return Vec::new();
     }
+    let cost = |entry: &CacheEntry| match &entry.state {
+        Some(Ok(image)) => image.pixels.len() * 4,
+        Some(Err(error)) => error.len(),
+        None => 0,
+    };
+    let mut bytes: usize = cache.values().map(cost).sum();
+    let mut victims = Vec::new();
+    while bytes > budget || cache.len() > CACHE_ENTRIES {
+        let Some(oldest) = cache
+            .iter()
+            .filter(|(_, e)| e.state.is_some())
+            .min_by_key(|(_, e)| e.last_used)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        if let Some(entry) = cache.remove(&oldest) {
+            bytes -= cost(&entry);
+            victims.push(oldest);
+        }
+    }
+    victims
 }
 impl ImageLoader for OrientedLoader {
     fn id(&self) -> &str {
@@ -89,9 +158,17 @@ impl ImageLoader for OrientedLoader {
             .strip_prefix("oriented://")
             .ok_or(LoadError::NotSupported)?;
         let (turns, path) = rest.split_once('/').ok_or(LoadError::NotSupported)?;
+        let (turns, edge) = turns.split_once(':').unwrap_or((turns, "4096"));
         let turns: u8 = turns.parse().map_err(|_| LoadError::NotSupported)?;
+        let max_edge: u32 = edge.parse().map_err(|_| LoadError::NotSupported)?;
+        if turns > 3 || ![256, 512, 1024, 4096].contains(&max_edge) {
+            return Err(LoadError::NotSupported);
+        }
         let mut cache = self.cache.lock().unwrap();
-        if let Some(entry) = cache.get(uri) {
+        if let Some(entry) = cache.get_mut(uri) {
+            entry.last_used = self
+                .generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return match &entry.state {
                 None => Ok(ImagePoll::Pending { size: None }),
                 Some(Ok(image)) => Ok(ImagePoll::Ready {
@@ -108,6 +185,7 @@ impl ImageLoader for OrientedLoader {
             key: uri.into(),
             path: path.into(),
             turns,
+            max_edge,
             ctx: ctx.clone(),
         };
         match self.sender.try_send(task) {
@@ -116,6 +194,7 @@ impl ImageLoader for OrientedLoader {
                     uri.into(),
                     CacheEntry {
                         generation,
+                        last_used: generation,
                         state: None,
                     },
                 );
@@ -176,11 +255,7 @@ mod tests {
                 open = cv.wait(open).unwrap();
             }
             self.active.fetch_sub(1, Ordering::SeqCst);
-            Ok(crate::ports::DecodedImage {
-                width: 1,
-                height: 1,
-                rgba: vec![1, 2, 3, 255],
-            })
+            crate::ports::DecodedImage::new(1, 1, vec![1, 2, 3, 255])
         }
     }
     #[test]
@@ -218,13 +293,14 @@ mod tests {
             "image".into(),
             CacheEntry {
                 generation: 2,
+                last_used: 2,
                 state: None,
             },
         );
-        publish(&cache, "image", 1, Err("old".into()));
+        publish(&cache, "image", 1, Err("old".into()), 1, CACHE_BYTES);
         assert!(cache.lock().unwrap()["image"].state.is_none());
-        publish(&cache, "image", 2, Err("new".into()));
-        publish(&cache, "image", 1, Err("old".into()));
+        publish(&cache, "image", 2, Err("new".into()), 2, CACHE_BYTES);
+        publish(&cache, "image", 1, Err("old".into()), 1, CACHE_BYTES);
         assert_eq!(
             cache.lock().unwrap()["image"]
                 .state
@@ -234,5 +310,80 @@ mod tests {
                 .unwrap_err(),
             "new"
         );
+    }
+    #[test]
+    fn cache_budget_evicts_old_results_and_preserves_pending_requests() {
+        let cache: Cache = Default::default();
+        for (key, generation) in [("old", 1), ("recent", 2), ("new", 3), ("pending", 4)] {
+            cache.lock().unwrap().insert(
+                key.into(),
+                CacheEntry {
+                    generation,
+                    last_used: generation,
+                    state: None,
+                },
+            );
+        }
+        let pixel = || {
+            Ok(Arc::new(ColorImage::new(
+                [1, 1],
+                vec![egui::Color32::WHITE],
+            )))
+        };
+        assert!(publish(&cache, "old", 1, pixel(), 1, 8).is_empty());
+        assert!(publish(&cache, "recent", 2, pixel(), 2, 8).is_empty());
+        let evicted = publish(&cache, "new", 3, pixel(), 3, 8);
+        assert_eq!(evicted, vec!["old"]);
+        let cache = cache.lock().unwrap();
+        assert!(
+            cache.contains_key("recent")
+                && cache.contains_key("new")
+                && cache["pending"].state.is_none()
+        );
+    }
+    #[test]
+    fn eviction_releases_egui_texture_cache_without_lock_reentry_deadlock() {
+        struct Immediate;
+        impl crate::ports::ImageDecoder for Immediate {
+            fn decode(
+                &self,
+                _: &std::path::Path,
+                _: u8,
+            ) -> Result<crate::ports::DecodedImage, String> {
+                crate::ports::DecodedImage::new(1, 1, vec![1, 2, 3, 255])
+            }
+        }
+        let ctx = egui::Context::default();
+        let loader = Arc::new(OrientedLoader::with_budget(Arc::new(Immediate), 8));
+        ctx.add_image_loader(loader.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        for i in 0..3 {
+            loop {
+                match ctx
+                    .try_load_texture(
+                        &format!("oriented://0:256/{i}.jpg"),
+                        egui::TextureOptions::LINEAR,
+                        SizeHint::default(),
+                    )
+                    .unwrap()
+                {
+                    egui::load::TexturePoll::Ready { .. } => break,
+                    egui::load::TexturePoll::Pending { .. } => {
+                        assert!(std::time::Instant::now() < deadline);
+                        std::thread::yield_now();
+                    }
+                }
+            }
+        }
+        assert!(loader.byte_size() <= 8);
+        assert!(matches!(
+            ctx.try_load_texture(
+                "oriented://0:256/0.jpg",
+                egui::TextureOptions::LINEAR,
+                SizeHint::default()
+            )
+            .unwrap(),
+            egui::load::TexturePoll::Pending { .. }
+        ));
     }
 }

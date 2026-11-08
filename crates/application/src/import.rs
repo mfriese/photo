@@ -99,13 +99,18 @@ pub struct Job {
     pub events: mpsc::Receiver<Event>,
     pub cancel: Arc<AtomicBool>,
 }
+impl Drop for Job {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
 pub fn start(
     adapter: Arc<dyn ImportAdapter>,
     source: PathBuf,
     target: PathBuf,
     preview: bool,
 ) -> Job {
-    let (tx, events) = mpsc::channel();
+    let (tx, events) = mpsc::sync_channel(128);
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
     std::thread::spawn(move || {

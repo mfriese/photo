@@ -60,7 +60,7 @@ Dateischritte bilden keine globale Transaktion: abgeschlossene Kopien oder Papie
 
 ## Bewusst verbleibende Grenzen
 
-- Der CPU-/GPU-Bildcache und die Protokolle sind weiterhin nicht global speicherbegrenzt. Die Arbeitsqueue ist jetzt begrenzt; ein LRU-Budget für alle Cache-Ebenen ist eine separate Betriebsverbesserung.
+- Der Galeriecache ist auf 256 MiB dekodierte RGBA-Daten und 1024 Einträge begrenzt; Verdrängung gibt auch die zugehörigen egui-Texturen frei. Temporäre Originaldekodierungen, laufende Frame-/Audioaufträge und Grafiktreiberressourcen kommen hinzu. Das vollständige Importprotokoll wächst absichtlich mit dem aktuellen Lauf und wird beim nächsten Lauf ersetzt.
 - Bestimmte Adapterfehler sind Strings; der Scan liefert weiterhin Medien und Fehleranzahl als Tupel. Für gezieltes Wiederholen und umfangreichere Fehleroberflächen wären benannte Fehler-/Reporttypen sinnvoll.
 - Einige Hintergrundaufträge können während eines nativen Decodier-/Dateiaufrufs nicht sofort abbrechen. Beim normalen Beenden wartet Preferences-Persistenz auf ausstehende Schreibvorgänge.
 - Die zentrale `Suite` hält weiterhin gemeinsamen Präsentationszustand; sie ist kein fachliches Aggregat. Fachliche Sitzungen bleiben in der Anwendung.
@@ -153,3 +153,9 @@ Regressionen: native Bitmaptests prüfen echte gefüllte Hoch-/Querformat-Kachel
 Bewusste Grenzen: Größenabfragen aller Einträge vor dem Fenster, kein persistenter Dauercache, schlechte Startproportionen bei gemischten Formaten, vorläufig ungenaue Sprünge über mehrere ungeprüfte Clips und mögliche kurze Ladepausen beim Dateiwechsel. Keine Dateien werden für Korrekturen umbenannt oder verschoben. Automatisierte Kern- und native Tests prüfen Freigabe erst nach Wiedergabestart, blockierte Prüfung bei bereits offenem Player, Teilfehler, Farbzustände, Umordnung, stabile Itemidentität/lokale Position, Seek, Übergang und Schließen. Screenshots/manuelle Prüfung bleiben getrennt.
 
 Die Fensterreihenfolge nach Fotoklick wird ausschließlich im nativen UI-Adapter über `PSAudioCreateWindow` festgelegt: schwebend über normalen PhotoSuite-Fenstern, beim Wechsel zu anderen Anwendungen ausgeblendet. Der bestehende Fokusbefehl für den normalen Betrachter bleibt erhalten. Domäne, Anwendung und Ports benötigen dafür keine Fensterreferenzen oder neuen Zustände. Ein nativer Regressionstest prüft die tatsächlich erzeugte Fensterkonfiguration ohne manuelle Sichtprüfung.
+
+## Vertiefter Review vom 08.11.2026
+
+Prüfung und Korrekturen sind in [docs/ARCHITECTURE_REVIEW.md](docs/ARCHITECTURE_REVIEW.md) beschrieben. Neue Anwendungsfälle: `collection::CollectionSession`, `storyboard::StoryboardSession`, `import_session::ImportSession`. Die UI wertet deren technische Kanäle nicht mehr selbst aus. `DecodedImage` schützt die Pixelinvarianten an der technischen Portgrenze; Command-IDs und Foto-Dateinamenvalidierung haben jeweils eine gemeinsame Domänenquelle. Preferences verwenden einen einzelnen ersetzbaren Snapshot statt einer unbeschränkten Queue. Galerie- und Großansichtsvorschauen besitzen getrennte Auflösungsidentitäten und ein begrenztes Cache-Budget. Präsentationstests liegen getrennt unter `src/presentation/tests.rs`.
+
+`make check-architecture` prüft die freigegebenen Kernabhängigkeiten anhand von Cargo-Metadaten. Die Modulkonvention zwischen UI und Infrastruktur innerhalb der Desktop-Crate bleibt zusätzlich reviewpflichtig. Diese Prüfung garantiert keine generelle Fehlerfreiheit oder harte Obergrenze für den gesamten Prozessspeicher.

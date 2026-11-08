@@ -1,4 +1,4 @@
-use super::image_uri;
+use super::preview_uri;
 use crate::theme;
 use eframe::egui;
 impl super::Suite {
@@ -66,7 +66,7 @@ impl super::Suite {
                         .color(theme::MUTED),
                 );
                 ui.add_space(6.);
-                if visible.is_empty() && self.receiver.is_none() {
+                if visible.is_empty() && !self.collection.is_loading() {
                     ui.add_space(16.);
                     ui.label(
                         egui::RichText::new("Hier ist noch Platz für Erinnerungen.").size(17.),
@@ -98,9 +98,10 @@ impl super::Suite {
                                     ui.vertical(|ui| {
                                         ui.set_width(tile);
                                         let response = {
-                                            let mut image = egui::Image::from_uri(image_uri(
+                                            let mut image = egui::Image::from_uri(preview_uri(
                                                 m.path(),
                                                 self.editor.rotations(),
+                                                tile,
                                             ));
                                             let size = egui::vec2(tile, tile);
                                             if self.square_previews {

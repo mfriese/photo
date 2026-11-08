@@ -1,30 +1,23 @@
-use crate::import::{self, Event, ImportAdapter, Job};
+use crate::import::{self, Event, ImportAdapter};
 use eframe::egui;
-use std::{
-    path::PathBuf,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{path::PathBuf, sync::Arc};
 #[derive(Default)]
 pub struct ImportPanel {
     duplicate_review: crate::duplicates_ui::DuplicateReview,
     pub visible: bool,
     source: Option<PathBuf>,
     target: Option<PathBuf>,
-    job: Option<Job>,
-    log: Vec<Event>,
+    session: photosuite_application::import_session::ImportSession,
     detailed_log: bool,
-    current: usize,
-    total: usize,
-    summary: String,
-    imported: bool,
+    start_error: Option<String>,
 }
 impl ImportPanel {
     pub fn running(&self) -> bool {
-        self.job.is_some() || self.duplicate_review.running()
+        self.session.running() || self.duplicate_review.running()
     }
     pub fn open(&mut self, library: Option<PathBuf>) {
         self.visible = true;
-        if self.job.is_none() && self.target.is_none() {
+        if !self.session.running() && self.target.is_none() {
             self.target = library;
         }
     }
@@ -44,36 +37,9 @@ impl ImportPanel {
         if self.duplicate_review.poll(duplicates.clone()) {
             refresh = self.target.clone();
         }
-        if let Some(job) = &self.job {
-            let mut finished = false;
-            for _ in 0..500 {
-                let event = match job.events.try_recv() {
-                    Ok(event) => event,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        if !finished {
-                            self.summary="Importauftrag unerwartet beendet. Bereits kopierte Dateien bleiben erhalten.".into();
-                        }
-                        finished = true;
-                        break;
-                    }
-                };
-                if event.total > 0 {
-                    self.current = event.file;
-                    self.total = event.total;
-                }
-                if event.is_terminal() {
-                    self.summary = event.message.clone();
-                    finished = true;
-                }
-                self.log.push(event);
-            }
-            if finished {
-                self.job = None;
-                if self.imported && self.log.last().is_some_and(|e| matches!(&e.outcome, Some(import::ImportOutcome::Completed(s)) if s.copied > 0)) {
-                    refresh = self.target.clone();
-                }
-            }
+        self.session.poll();
+        refresh = self.session.take_refresh().or(refresh);
+        if self.session.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         egui::Window::new("Importieren · Schritt für Schritt")
@@ -85,7 +51,7 @@ impl ImportPanel {
             .show(ctx, |ui| {
                 crate::options_ui::spacing(ui);
                 ui.label("Dateien in die Bibliothek kopieren und nach Aufnahmedatum benennen.");
-                ui.add_enabled_ui(self.job.is_none() && !self.duplicate_review.running(), |ui| {
+                ui.add_enabled_ui(!self.session.running() && !self.duplicate_review.running(), |ui| {
                     crate::options_ui::section(ui, "Quelle", |ui| {
                         if ui.button("Quellverzeichnis wählen …").clicked()
                             && let Some(path) = rfd::FileDialog::new().pick_folder() { self.source = Some(path); }
@@ -104,30 +70,28 @@ impl ImportPanel {
                         let ready = self.source.is_some() && self.target.is_some();
                         for (title, preview) in [("1. Prüflauf", true), ("2. Import starten", false)] {
                             if ui.add_enabled(ready, egui::Button::new(title)).clicked() {
-                                self.log.clear(); self.current = 0; self.total = 0; self.summary.clear(); self.imported = !preview;
-                                self.job = Some(import::start(adapter.clone(), self.source.clone().unwrap(), self.target.clone().unwrap(), preview));
+                                self.start_error=self.session.start(adapter.clone(),self.source.clone().unwrap(),self.target.clone().unwrap(),preview).err();
                             }
                         }
                     });
                 });
-                if self.job.is_none()
+                if !self.session.running()
                     && self.duplicate_review.show(ui,self.target.as_ref(),repository,duplicates,opener){refresh=self.target.clone();}
                 ui.small("Prüflauf ohne Kopieren. Identische Fotos und vorhandene Videonamen werden übersprungen; unterschiedliche Fotos erhalten einen Nummernzusatz.");
                 crate::options_ui::section(ui, "Fortschritt", |ui| {
-                    if let Some(job) = &self.job
-                        && ui.button("Abbrechen").clicked() { job.cancel.store(true, Ordering::Relaxed); }
-                    if self.total > 0 {
-                        ui.add(egui::ProgressBar::new(self.current as f32 / self.total as f32).text(format!("Datei {} / {}", self.current, self.total)));
-                    }
-                    if !self.summary.is_empty() { ui.label(&self.summary); }
+                    if self.session.running() && ui.button("Abbrechen").clicked(){self.session.cancel();}
+                    let (current,total)=self.session.progress();
+                    if total>0{ui.add(egui::ProgressBar::new(current as f32/total as f32).text(format!("Datei {current} / {total}")));}
+                    if !self.session.status().is_empty(){ui.label(self.session.status());}
+                    if let Some(error)=&self.start_error{ui.colored_label(egui::Color32::LIGHT_RED,error);}
                     ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut self.detailed_log, "Alle Schritte anzeigen");
                         if ui.button("Protokoll kopieren").clicked() {
-                            ctx.copy_text(export_log(&self.log, self.detailed_log, self.target.as_deref()));
+                            ctx.copy_text(export_log(self.session.log(), self.detailed_log, self.target.as_deref()));
                         }
                     });
-                    if self.detailed_log { show_import_log(ui, &self.log); }
-                    else { show_compact_log(ui, &self.log, self.target.as_deref(), self.job.is_some()); }
+                    if self.detailed_log { show_import_log(ui, self.session.log()); }
+                    else { show_compact_log(ui, self.session.log(), self.target.as_deref(), self.session.running()); }
                 });
             });
         refresh

@@ -90,7 +90,7 @@ pub struct Job {
 }
 pub fn discover(repo: Arc<dyn MediaRepository>, library: PathBuf) -> Job {
     job(move |tx, cancel| {
-        let (items, errors) = repo.scan(&library);
+        let (items, errors) = repo.scan_cancellable(&library, &cancel);
         if cancel.load(Ordering::Relaxed) {
             return;
         }

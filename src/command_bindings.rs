@@ -37,7 +37,7 @@ impl CommandBindings {
             .iter()
             .map(|(command, s)| {
                 (
-                    command_id(*command).into(),
+                    command.id().into(),
                     s.map(|s| photosuite_application::preferences::Shortcut {
                         key: s.logical_key.name().into(),
                         alt: s.modifiers.alt,
@@ -59,7 +59,7 @@ impl CommandBindings {
     ) -> Result<(), String> {
         let mut candidate = Self::default().bindings;
         for (command, shortcut) in &mut candidate {
-            if let Some(saved) = saved.get(command_id(*command)) {
+            if let Some(saved) = saved.get(command.id()) {
                 *shortcut = match saved {
                     None => None,
                     Some(s) => Some(egui::KeyboardShortcut::new(
@@ -165,15 +165,6 @@ impl CommandBindings {
         if !self.visible {
             self.capturing = None;
         }
-    }
-}
-
-fn command_id(command: Command) -> &'static str {
-    match command {
-        Command::RotateLeft => "rotate_left",
-        Command::RotateRight => "rotate_right",
-        Command::ResetRotation => "reset_rotation",
-        Command::PlayVideo => "play_video",
     }
 }
 
