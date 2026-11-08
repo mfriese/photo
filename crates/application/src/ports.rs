@@ -2,6 +2,19 @@
 use crate::domain::Media;
 /// Read-only repository port owned by the application core.
 pub trait MediaRepository: Send + Sync + 'static {
+    /// Shallow read-only directory index. None preserves compatibility with flat repositories.
+    fn partitions(&self, _root: &std::path::Path) -> Result<Option<Vec<String>>, String> {
+        Ok(None)
+    }
+    /// Read one indexed directory, or only root files for the empty partition.
+    fn scan_partition(
+        &self,
+        root: &std::path::Path,
+        _partition: &str,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> (Vec<Media>, usize) {
+        self.scan_cancellable(root, cancel)
+    }
     fn scan(&self, root: &std::path::Path) -> (Vec<Media>, usize);
     /// Override for cooperative cancellation. The session still bounds non-cooperative adapters.
     fn scan_cancellable(

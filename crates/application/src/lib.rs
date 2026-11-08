@@ -19,3 +19,5 @@ pub mod collection;
 pub mod import_session;
 
 pub mod import_cleanup;
+
+pub mod work_priority;

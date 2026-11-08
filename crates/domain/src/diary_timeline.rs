@@ -1,4 +1,4 @@
-//! Progressive diary layout: byte weights first, measured duration after verification.
+//! Progressive diary layout: filename draft first, measured duration after verification.
 use crate::{CaptureTime, audio_date::date_from_filename, diary::Recording};
 use std::{
     collections::HashSet,
@@ -11,10 +11,17 @@ const WEIGHT_PER_SECOND: f64 = 16_000.;
 pub struct DiaryClip {
     path: PathBuf,
     bytes: u64,
+    provisional_weight: Option<f64>,
     captured: Option<CaptureTime>,
     duration: Option<f64>,
 }
 impl DiaryClip {
+    /// Equal provisional slots until actual durations are available; no I/O required.
+    pub fn from_filename(path: PathBuf) -> Self {
+        let mut clip = Self::from_file(path, 1);
+        clip.provisional_weight = Some(WEIGHT_PER_SECOND);
+        clip
+    }
     pub fn from_file(path: PathBuf, bytes: u64) -> Self {
         let captured = path
             .file_stem()
@@ -23,6 +30,7 @@ impl DiaryClip {
         Self {
             path,
             bytes,
+            provisional_weight: None,
             captured,
             duration: None,
         }
@@ -42,6 +50,7 @@ impl DiaryClip {
     pub fn weight(&self) -> f64 {
         self.duration
             .map(|d| d * WEIGHT_PER_SECOND)
+            .or(self.provisional_weight)
             .unwrap_or(self.bytes.max(1) as f64)
     }
 }
@@ -88,12 +97,22 @@ impl DiaryTimeline {
             return Err("Audiodauer überschreitet den Darstellungsbereich".into());
         }
         let weight = recording.duration() * WEIGHT_PER_SECOND;
+        let (sum, count) = self
+            .clips
+            .iter()
+            .filter(|c| c.is_verified() && c.path != recording.path())
+            .fold((weight, 1usize), |(sum, count), clip| {
+                (sum + clip.weight(), count + 1)
+            });
+        let provisional = sum / count as f64;
         let total: f64 = self
             .clips
             .iter()
             .map(|clip| {
                 if clip.path == recording.path() {
                     weight
+                } else if !clip.is_verified() && clip.provisional_weight.is_some() {
+                    provisional
                 } else {
                     clip.weight()
                 }
@@ -109,6 +128,11 @@ impl DiaryTimeline {
             .ok_or("Aufnahme gehört nicht zum Jahresverlauf")?;
         clip.captured = Some(recording.captured().clone());
         clip.duration = Some(recording.duration());
+        for clip in &mut self.clips {
+            if !clip.is_verified() && clip.provisional_weight.is_some() {
+                clip.provisional_weight = Some(provisional);
+            }
+        }
         self.sort();
         Ok(())
     }
@@ -116,6 +140,33 @@ impl DiaryTimeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn name_only_draft_stays_balanced_during_refinement_then_has_exact_duration_ratios() {
+        let a = PathBuf::from("2023-12-27_22-51-32.wav");
+        let b = PathBuf::from("2023-12-28_22-51-32.wav");
+        let mut timeline = DiaryTimeline::new(
+            "2023".into(),
+            vec![
+                DiaryClip::from_filename(a.clone()),
+                DiaryClip::from_filename(b.clone()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(timeline.clips()[0].weight(), timeline.clips()[1].weight());
+        let date = CaptureTime::parse("2023:12:27 22:51:32", "metadata").unwrap();
+        timeline
+            .refine(Recording::new(a, date.clone(), 10.).unwrap())
+            .unwrap();
+        assert_eq!(timeline.clips()[0].weight(), timeline.clips()[1].weight());
+        assert!(!timeline.clips()[1].is_verified());
+        timeline
+            .refine(Recording::new(b, date, 30.).unwrap())
+            .unwrap();
+        assert_eq!(
+            timeline.clips()[1].weight() / timeline.clips()[0].weight(),
+            3.
+        );
+    }
     #[test]
     fn filename_order_byte_ratios_and_refinement_keep_identity() {
         let a = PathBuf::from("2023-12-27_22-51-32.wav");

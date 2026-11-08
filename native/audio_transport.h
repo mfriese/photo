@@ -16,6 +16,8 @@
 @property(nonatomic,copy) void (^onSeek)(void);
 - (void)openPath:(NSString *)path fraction:(double)fraction offset:(double)seconds;
 - (void)seekSeconds:(double)seconds;
+// Correct duration without replacing/reseeking the active item.
+- (void)useVerifiedDuration:(double)duration forPath:(NSString *)path;
 - (void)tick;
 - (void)shutdown;
 @end

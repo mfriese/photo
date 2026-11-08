@@ -103,6 +103,12 @@ int main(int argc,char **argv) {
         [controller tick:nil];assert(controller.photoRequest==1);
         controller.transport.wantsPlay=NO;[controller.transport.player pause];
         double paused=CMTimeGetSeconds(controller.transport.player.currentTime);AVPlayerItem *item=controller.transport.player.currentItem;
+        [controller.transport useVerifiedDuration:3.25 forPath:controller.transport.path];
+        assert(fabs(controller.transport.duration-3.25)<0.001 && controller.transport.player.currentItem==item);
+        assert(fabs(CMTimeGetSeconds(controller.transport.player.currentTime)-paused)<0.01);
+        [controller.transport useVerifiedDuration:99 forPath:@"/unrelated.wav"];
+        assert(fabs(controller.transport.duration-3.25)<0.001);
+        [controller.transport useVerifiedDuration:3 forPath:controller.transport.path];
         const char *reordered[]={argv[2],argv[1]},*checkedLabels[]={"verified b","verified a"};
         double correctedWeights[]={48000,16000},correctedDates[]={late-86400,late},correctedDurations[]={3,1};unsigned int checked[]={1,1};
         assert(photosuite_audio_revise(41,reordered,checkedLabels,correctedWeights,correctedDates,correctedDurations,checked,2,"stale")==1);

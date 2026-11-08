@@ -188,24 +188,28 @@ impl eframe::App for Suite {
         if let Some(result) = self.collection.poll() {
             match result {
                 Ok(collection) => {
+                    self.items.extend(collection.items);
                     self.status = format!(
                         "{} Medien · {} nicht lesbare Einträge",
-                        collection.items.len(),
+                        self.items.len(),
                         collection.unreadable
                     );
                     if self.remember_after_scan
-                        && (collection.unreadable == 0 || !collection.items.is_empty())
+                        && (collection.unreadable == 0 || !self.items.is_empty())
                     {
                         self.preferences.last_library = Some(collection.root);
                         self.persist_preferences();
                     }
-                    self.items = collection.items;
                 }
                 Err(error) => self.status = error,
             }
             self.remember_after_scan = false;
         }
         if self.collection.is_loading() {
+            self.status = format!(
+                "{} Medien geladen · Weitere Jahre werden gelesen …",
+                self.items.len()
+            );
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         if ctx.input_mut(|i| {
@@ -278,8 +282,12 @@ pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Se
         persistence.flush_current();
     }
     let mut app = Suite {
-        diary: Default::default(),
-        diary_catalog: Default::default(),
+        diary: photosuite_application::diary::DiarySession::with_priority(
+            services.work_priority.clone(),
+        ),
+        diary_catalog: photosuite_application::diary::DiaryCatalog::with_priority(
+            services.work_priority.clone(),
+        ),
         remember_after_scan: false,
         storyboard: Default::default(),
         preferences: preferences.clone(),

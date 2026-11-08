@@ -6,6 +6,7 @@ use std::path::Path;
 #[path = "audio_player_projection.rs"]
 mod projection;
 pub struct NativeAudioPlayer {
+    priority: std::sync::Arc<photosuite_application::work_priority::WorkPriority>,
     source: std::sync::Arc<dyn photosuite_application::photo_context::ContextPhotoSource>,
     context: std::sync::Mutex<Option<photosuite_application::photo_context::PhotoContext>>,
     session: std::sync::atomic::AtomicU64,
@@ -13,9 +14,11 @@ pub struct NativeAudioPlayer {
 impl NativeAudioPlayer {
     pub fn new(
         source: std::sync::Arc<dyn photosuite_application::photo_context::ContextPhotoSource>,
+        priority: std::sync::Arc<photosuite_application::work_priority::WorkPriority>,
     ) -> Self {
         Self {
             source,
+            priority,
             context: Default::default(),
             session: std::sync::atomic::AtomicU64::new(0),
         }
@@ -40,11 +43,13 @@ impl AudioPlayer for NativeAudioPlayer {
                 .filter(|p| p.is_photo())
                 .map(|p| p.path().to_owned())
                 .collect();
-            *self.context.lock().unwrap() =
-                Some(photosuite_application::photo_context::PhotoContext::new(
+            *self.context.lock().unwrap() = Some(
+                photosuite_application::photo_context::PhotoContext::with_priority(
                     self.source.clone(),
                     candidates,
-                ));
+                    self.priority.clone(),
+                ),
+            );
             Ok(())
         }
         #[cfg(not(target_os = "macos"))]

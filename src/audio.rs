@@ -53,13 +53,7 @@ impl AudioSource for NativeAudioSource {
             Err("Diary-Audio derzeit nur unter macOS verfügbar".into())
         }
     }
-    fn file_size(&self, path: &Path) -> Result<u64, String> {
-        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err("Keine reguläre Audiodatei".into());
-        }
-        Ok(metadata.len())
-    }
+
     fn inspect(&self, path: &Path) -> Result<crate::domain::diary::Recording, String> {
         let probe = self.probe(path)?;
         crate::domain::diary::Recording::new(
@@ -195,6 +189,7 @@ mod tests {
         std::fs::rename(m4a, &mp4).unwrap();
         assert!(source.probe(&mp4).unwrap().audio_only);
         let repository = crate::infrastructure::FileSystemRepository {
+            priority: Default::default(),
             audio: std::sync::Arc::new(source),
         };
         let (items, errors) = crate::ports::MediaRepository::scan(&repository, dir.path());

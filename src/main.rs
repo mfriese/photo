@@ -41,10 +41,13 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    let priority =
+        std::sync::Arc::new(photosuite_application::work_priority::WorkPriority::default());
     let audio_source = std::sync::Arc::new(audio::NativeAudioSource {
         tool: exiftool.clone(),
     });
     let repository = std::sync::Arc::new(infrastructure::FileSystemRepository {
+        priority: priority.clone(),
         audio: audio_source.clone(),
     });
     let preferences_path = match std::env::var_os("PHOTOSUITE_PREFERENCES_PATH")
@@ -60,9 +63,11 @@ fn main() -> eframe::Result {
     };
     let video_preview = std::sync::Arc::new(video::NativeVideoSource);
     let services = application::Services {
+        work_priority: priority.clone(),
         audio_source: audio_source.clone(),
         audio_player: std::sync::Arc::new(audio_player::NativeAudioPlayer::new(
             std::sync::Arc::new(context_photos::PhotoContextAdapter),
+            priority.clone(),
         )),
         duplicates: std::sync::Arc::new(duplicates_fs::PixelDuplicates),
         video_player: std::sync::Arc::new(video::NativeVideoPlayer),
@@ -81,6 +86,7 @@ fn main() -> eframe::Result {
         }),
         repository,
         decoder: std::sync::Arc::new(infrastructure::RasterDecoder {
+            priority,
             videos: video_preview,
         }),
         opener: std::sync::Arc::new(infrastructure::SystemMediaOpener),

@@ -20,16 +20,18 @@ impl super::Suite {
                 ui.add_space(8.);
                 theme::eyebrow(ui, "Jahre");
                 ui.add_space(2.);
-                let mut groups: Vec<_> = self.items.iter().map(|m| m.group().to_owned()).collect();
-                groups.sort(); groups.dedup();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let mut years = std::collections::BTreeMap::<String, Vec<String>>::new();
-                    for g in groups {
-                        let year = g.split(std::path::MAIN_SEPARATOR).next().unwrap_or(&g).to_owned();
-                        years.entry(year).or_default().push(g);
+                let mut years = self.collection.groups().clone();
+                // Tests and a manually supplied collection may have no loading session.
+                if years.is_empty() {
+                    for media in &self.items {
+                        let group = media.group();
+                        let year = group.split(std::path::MAIN_SEPARATOR).next().unwrap_or(group);
+                        years.entry(year.into()).or_default().insert(group.into());
                     }
+                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
                     for (year, months) in years.into_iter().rev() {
-                        egui::CollapsingHeader::new(egui::RichText::new(&year).size(14.).strong())
+                        let response = egui::CollapsingHeader::new(egui::RichText::new(&year).size(14.).strong())
                             .id_salt((&self.root, &year)).default_open(false)
                             .open((self.scroll_to_photo.is_some() && self.group.as_deref()==Some(year.as_str())).then_some(true))
                             .show(ui, |ui| {
@@ -48,6 +50,12 @@ impl super::Suite {
                                     }
                                 }
                             });
+                        if response.header_response.clicked()
+                            && egui::collapsing_header::CollapsingState::load(ctx, response.header_response.id)
+                                .is_some_and(|state| state.is_open()) {
+                            self.collection.prioritize(&year);
+                            self.group = Some(year.clone());
+                        }
                         ui.add_space(4.);
                     }
                     if self.root.is_none() {

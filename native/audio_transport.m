@@ -18,7 +18,7 @@
 @implementation PSAudioTransport
 - (instancetype)init {
     self=[super init];
-    if(self){_player=[AVPlayer new];_path=@"";_error=@"";_wantsPlay=YES;}
+    if(self){_player=[AVPlayer new];_player.automaticallyWaitsToMinimizeStalling=NO;_path=@"";_error=@"";_wantsPlay=YES;}
     return self;
 }
 - (void)openPath:(NSString *)path fraction:(double)fraction offset:(double)seconds {
@@ -28,12 +28,12 @@
     [self.player pause];[self.player replaceCurrentItemWithPlayerItem:nil];
     if(self.endObserver){[[NSNotificationCenter defaultCenter] removeObserver:self.endObserver];self.endObserver=nil;}
     static dispatch_queue_t loader;static dispatch_once_t once;
-    dispatch_once(&once,^{loader=dispatch_queue_create("de.photosuite.audio-asset",DISPATCH_QUEUE_SERIAL);});
+    dispatch_once(&once,^{loader=dispatch_queue_create("de.photosuite.audio-asset",dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,QOS_CLASS_USER_INITIATED,0));});
     __weak PSAudioTransport *weakSelf=self;
     dispatch_async(loader,^{
         @autoreleasepool {
             if(!weakSelf || weakSelf.cancelled || weakSelf.generation!=generation)return;
-            AVURLAsset *asset=[AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:@{AVURLAssetPreferPreciseDurationAndTimingKey:@YES}];
+            AVURLAsset *asset=[AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:path] options:@{AVURLAssetPreferPreciseDurationAndTimingKey:@NO}];
             double duration=CMTimeGetSeconds(asset.duration);
             BOOL valid=asset.playable && isfinite(duration) && duration>0 && [asset tracksWithMediaType:AVMediaTypeAudio].count>0 && [asset tracksWithMediaType:AVMediaTypeVideo].count==0;
             dispatch_async(dispatch_get_main_queue(),^{
@@ -67,10 +67,16 @@
         });
     }];
 }
+- (void)useVerifiedDuration:(double)duration forPath:(NSString *)path {
+    if(!self.cancelled && [self.path isEqualToString:path] && isfinite(duration) && duration>0)self.duration=duration;
+}
 - (void)tick {
     if(self.cancelled)return;
     if(self.player.currentItem.status==AVPlayerItemStatusFailed){self.error=self.player.currentItem.error.localizedDescription ?: @"Audio konnte nicht geladen werden";self.loading=NO;return;}
-    if(self.needsSeek && self.player.currentItem.status==AVPlayerItemStatusReadyToPlay){self.needsSeek=NO;[self seekSeconds:self.target];}
+    if(self.needsSeek && self.player.currentItem.status==AVPlayerItemStatusReadyToPlay){self.needsSeek=NO;
+        if(self.target<=0){self.loading=NO;if(self.wantsPlay)[self.player play];}
+        else [self seekSeconds:self.target];
+    }
     if(self.player.timeControlStatus==AVPlayerTimeControlStatusPlaying)self.hasStarted=YES;
 }
 - (void)shutdown {

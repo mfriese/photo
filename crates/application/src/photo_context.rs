@@ -33,6 +33,10 @@ pub enum PhotoEvent {
         result: Result<Arc<Vec<u8>>, String>,
     },
 }
+enum Refinement {
+    Photo(Result<TimedPhoto, String>),
+    Done,
+}
 struct Request {
     id: u64,
     civil: i64,
@@ -47,6 +51,13 @@ pub struct PhotoContext {
 }
 impl PhotoContext {
     pub fn new(source: Arc<dyn ContextPhotoSource>, candidates: Vec<PathBuf>) -> Self {
+        Self::with_priority(source, candidates, Arc::default())
+    }
+    pub fn with_priority(
+        source: Arc<dyn ContextPhotoSource>,
+        candidates: Vec<PathBuf>,
+        priority: Arc<crate::work_priority::WorkPriority>,
+    ) -> Self {
         let (sender, requests) = mpsc::channel::<Request>();
         let (events, receiver) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -59,17 +70,72 @@ impl PhotoContext {
                 return;
             };
             let mut dated = Vec::new();
+            let mut missing = Vec::new();
             let mut unreadable = 0;
             for path in candidates {
                 if halted.load(Ordering::Relaxed) {
                     return;
                 }
-                match source.captured_at(&path) {
-                    Ok(date) => dated.push(TimedPhoto::new(path, date)),
-                    Err(_) => unreadable += 1,
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let date = CaptureTime::from_photo_filename(stem)
+                    .or_else(|| crate::domain::audio_date::date_from_filename(stem));
+                if let Some(date) = date {
+                    dated.push(TimedPhoto::new(path, date));
+                } else {
+                    missing.push(path);
                 }
             }
-            let timeline = PhotoTimeline::new(dated);
+            // Legacy libraries without any dated names still have an EXIF fallback.
+            if dated.is_empty() {
+                for path in missing.drain(..) {
+                    if halted.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if !priority.wait_background(&halted) {
+                        return;
+                    }
+                    match source.captured_at(&path) {
+                        Ok(date) => dated.push(TimedPhoto::new(path, date)),
+                        Err(_) => unreadable += 1,
+                    }
+                }
+            }
+            let mut timeline = PhotoTimeline::new(dated);
+            // Unnamed files are refined independently, after the first previews.
+            // They can never hold up filename selections or later seek requests.
+            let (refined_tx, refined_rx) = mpsc::sync_channel(16);
+            let (begin_tx, begin_rx) = mpsc::channel::<()>();
+            let mut refinement_open = !missing.is_empty();
+            let mut begin = if refinement_open {
+                Some(begin_tx)
+            } else {
+                None
+            };
+            if refinement_open {
+                let source = source.clone();
+                let halted = halted.clone();
+                let priority = priority.clone();
+                std::thread::spawn(move || {
+                    if begin_rx.recv().is_err() {
+                        return;
+                    }
+                    for path in missing {
+                        if halted.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if !priority.wait_background(&halted) {
+                            return;
+                        }
+                        let result = source
+                            .captured_at(&path)
+                            .map(|date| TimedPhoto::new(path, date));
+                        if refined_tx.send(Refinement::Photo(result)).is_err() {
+                            return;
+                        }
+                    }
+                    let _ = refined_tx.send(Refinement::Done);
+                });
+            }
             let mut cache = HashMap::<PathBuf, Arc<Vec<u8>>>::new();
             let mut order = VecDeque::new();
             loop {
@@ -157,10 +223,67 @@ impl PhotoContext {
                         }
                     }
                 }
-                let Ok(newer) = requests.recv() else {
-                    return;
-                };
-                request = newer;
+                if let Some(begin) = begin.take() {
+                    let _ = begin.send(());
+                }
+                let mut changed = 0;
+                let mut additions = Vec::new();
+                let since = std::time::Instant::now();
+                loop {
+                    if halted.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if refinement_open {
+                        for _ in 0..256 {
+                            match refined_rx.try_recv() {
+                                Ok(Refinement::Photo(Ok(photo))) => {
+                                    additions.push(photo);
+                                    changed += 1;
+                                }
+                                Ok(Refinement::Photo(Err(_))) => {
+                                    unreadable += 1;
+                                    changed += 1;
+                                }
+                                Ok(Refinement::Done) => {
+                                    refinement_open = false;
+                                    break;
+                                }
+                                Err(mpsc::TryRecvError::Empty) => break,
+                                Err(mpsc::TryRecvError::Disconnected) => {
+                                    refinement_open = false;
+                                    let _ = events.send(PhotoEvent::Failed {
+                                        request: id,
+                                        message:
+                                            "Ergänzende Foto-Metadatensuche unerwartet beendet"
+                                                .into(),
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if changed > 0
+                        && (!refinement_open
+                            || changed >= 256
+                            || since.elapsed() >= std::time::Duration::from_millis(250))
+                    {
+                        if !additions.is_empty() {
+                            timeline.extend(additions.drain(..));
+                        }
+                        break;
+                    }
+                    match requests.recv_timeout(std::time::Duration::from_millis(25)) {
+                        Ok(newer) => {
+                            request = newer;
+                            if !additions.is_empty() {
+                                timeline.extend(additions.drain(..));
+                            }
+                            break;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                }
             }
         });
         Self {
@@ -336,6 +459,44 @@ mod tests {
                 | PhotoEvent::Failed { request, .. } => assert_eq!(request, 2),
             }
         }
+    }
+    #[test]
+    fn large_filename_index_delivers_photos_and_seek_updates_while_unnamed_exif_is_blocked() {
+        struct NamesFirst {
+            reads: AtomicUsize,
+            release: AtomicBool,
+        }
+        impl ContextPhotoSource for NamesFirst {
+            fn captured_at(&self, path: &Path) -> Result<CaptureTime, String> {
+                assert_eq!(path, Path::new("unnamed.jpg"));
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                while !self.release.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                CaptureTime::parse("2023:12:27 22:51:30", "EXIF")
+            }
+            fn thumbnail(&self, _: &Path, _: u32) -> Result<Vec<u8>, String> {
+                Ok(vec![1])
+            }
+        }
+        let source = Arc::new(NamesFirst {
+            reads: AtomicUsize::new(0),
+            release: AtomicBool::new(false),
+        });
+        let mut candidates: Vec<PathBuf> = (0..10_000)
+            .map(|i| format!("img_20231227_2251{:02}_{i:05}.jpg", i % 60).into())
+            .collect();
+        candidates.push("unnamed.jpg".into());
+        let mut context = PhotoContext::new(source.clone(), candidates);
+        assert_eq!(source.reads.load(Ordering::SeqCst), 0);
+        context.request(1, time(20));
+        let first = wait(&mut context, 5);
+        assert!(first.iter().any(|event| matches!(event, PhotoEvent::Selection { request: 1, photos, .. } if photos[2].as_ref().unwrap().captured().stamp() == "20231227_225120")));
+        context.request(2, time(40));
+        let second = wait(&mut context, 5);
+        assert!(second.iter().any(|event| matches!(event, PhotoEvent::Selection { request: 2, photos, .. } if photos[2].as_ref().unwrap().captured().stamp() == "20231227_225140")));
+        assert!(source.reads.load(Ordering::SeqCst) <= 1);
+        source.release.store(true, Ordering::SeqCst);
     }
     struct BrokenSource;
     impl ContextPhotoSource for BrokenSource {

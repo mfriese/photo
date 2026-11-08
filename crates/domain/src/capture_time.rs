@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
 pub struct CaptureTime {
     stamp: String,
+    civil_seconds: i64,
     year: String,
     month: String,
     origin: String,
@@ -16,6 +17,7 @@ impl CaptureTime {
             return Err("Aufnahmejahr muss vierstellig und größer als null sein".into());
         }
         Ok(Self {
+            civil_seconds: date.and_utc().timestamp(),
             stamp: date.format("%Y%m%d_%H%M%S").to_string(),
             year: date.format("%Y").to_string(),
             month: date.format("%m").to_string(),
@@ -92,10 +94,7 @@ impl CaptureTime {
     }
     /// Civil clock seconds, deliberately without implicit timezone conversion.
     pub fn civil_seconds(&self) -> i64 {
-        chrono::NaiveDateTime::parse_from_str(&self.stamp, "%Y%m%d_%H%M%S")
-            .expect("validated capture time")
-            .and_utc()
-            .timestamp()
+        self.civil_seconds
     }
     pub fn shifted(&self, seconds: f64) -> Result<Self, String> {
         if !seconds.is_finite() || seconds < 0. || seconds > i64::MAX as f64 {

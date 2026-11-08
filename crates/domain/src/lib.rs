@@ -33,6 +33,16 @@ impl Media {
         };
         Some(Self { path, group, kind })
     }
+    /// Fast browsing classification: diary containers are provisional audio candidates.
+    /// Playback/import must still validate their actual tracks through the audio port.
+    pub fn from_library_path(path: PathBuf, group: String) -> Option<Self> {
+        let in_diary = diary::diary_year(&group).is_some();
+        let mut media = Self::from_path(path, group)?;
+        if in_diary && media.is_video() {
+            media.kind = MediaKind::Audio;
+        }
+        Some(media)
+    }
     /// The adapter has confirmed an audio-only asset, including MP4/MOV containers.
     pub fn from_audio_asset(path: PathBuf, group: String) -> Option<Self> {
         if !is_audio_extension(&path) && !is_video(&path) {

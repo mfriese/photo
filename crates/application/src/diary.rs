@@ -21,8 +21,6 @@ pub struct AudioProbe {
 pub trait AudioSource: Send + Sync + 'static {
     fn probe(&self, path: &Path) -> Result<AudioProbe, String>;
     fn capture_time(&self, path: &Path) -> Result<CaptureTime, String>;
-    /// Only a regular-file stat; no media decoding or metadata processes.
-    fn file_size(&self, path: &Path) -> Result<u64, String>;
     fn inspect(&self, path: &Path) -> Result<Recording, String> {
         let probe = self.probe(path)?;
         if !probe.audio_only {
@@ -84,6 +82,7 @@ struct Pending {
 }
 #[derive(Default)]
 pub struct DiarySession {
+    priority: Arc<crate::work_priority::WorkPriority>,
     pending: Option<Pending>,
     timeline: Option<DiaryTimeline>,
     progress: VerificationProgress,
@@ -91,6 +90,16 @@ pub struct DiarySession {
     warnings: Vec<String>,
 }
 impl DiarySession {
+    pub fn with_priority(priority: Arc<crate::work_priority::WorkPriority>) -> Self {
+        Self {
+            priority,
+            pending: None,
+            timeline: None,
+            progress: Default::default(),
+            status: String::new(),
+            warnings: Vec::new(),
+        }
+    }
     pub fn is_loading(&self) -> bool {
         self.pending.is_some()
     }
@@ -147,20 +156,17 @@ impl DiarySession {
             gate: Some(go),
             opened: false,
         });
-        self.status = "Audioplayer wird mit Dateinamen und Dateigrößen geöffnet …".into();
+        self.status = "Audioplayer wird aus Dateinamen geöffnet …".into();
+        let audio_work = self.priority.audio();
         std::thread::spawn(move || {
+            let mut audio_work = Some(audio_work);
             let draft = (|| {
                 let mut clips = Vec::with_capacity(paths.len());
                 for path in &paths {
                     if stop.load(Ordering::Relaxed) {
                         return Err("Abgebrochen".into());
                     }
-                    clips.push(DiaryClip::from_file(
-                        path.clone(),
-                        source
-                            .file_size(path)
-                            .map_err(|e| format!("{}: {e}", path.display()))?,
-                    ));
+                    clips.push(DiaryClip::from_filename(path.clone()));
                 }
                 DiaryTimeline::new(year, clips)
             })();
@@ -203,6 +209,8 @@ impl DiarySession {
                     break;
                 }
                 let result = source.inspect(&path);
+                // Startup/selected recording first; background browsing can resume once it plays.
+                audio_work.take();
                 if sender.send(Event::Checked(path, result)).is_err() {
                     return;
                 }
@@ -338,11 +346,20 @@ enum CatalogEvent {
 }
 #[derive(Default)]
 pub struct DiaryCatalog {
+    priority: Arc<crate::work_priority::WorkPriority>,
     key: Option<(String, Vec<PathBuf>)>,
     dates: std::collections::BTreeMap<PathBuf, Result<CaptureTime, String>>,
     pending: Option<(mpsc::Receiver<CatalogEvent>, Arc<AtomicBool>)>,
 }
 impl DiaryCatalog {
+    pub fn with_priority(priority: Arc<crate::work_priority::WorkPriority>) -> Self {
+        Self {
+            priority,
+            key: None,
+            dates: Default::default(),
+            pending: None,
+        }
+    }
     pub fn date(&self, path: &Path) -> Option<&Result<CaptureTime, String>> {
         self.dates.get(path)
     }
@@ -372,15 +389,32 @@ impl DiaryCatalog {
         }
         self.key = Some(key);
         self.dates.clear();
+        let mut missing = Vec::new();
+        for path in paths {
+            if let Some(date) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(crate::domain::audio_date::date_from_filename)
+            {
+                self.dates.insert(path, Ok(date));
+            } else {
+                missing.push(path);
+            }
+        }
+        let paths = missing;
         if paths.is_empty() {
             return;
         }
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         self.pending = Some((rx, cancel.clone()));
+        let priority = self.priority.clone();
         std::thread::spawn(move || {
             for path in paths {
                 if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                if !priority.wait_background(&cancel) {
                     break;
                 }
                 let result = source.capture_time(&path);
@@ -448,9 +482,6 @@ mod tests {
     use std::sync::Mutex;
     struct Source;
     impl AudioSource for Source {
-        fn file_size(&self, _: &Path) -> Result<u64, String> {
-            Ok(16_000)
-        }
         fn probe(&self, path: &Path) -> Result<AudioProbe, String> {
             Ok(AudioProbe {
                 duration: if path.file_name().unwrap() == "a.wav" {
@@ -536,6 +567,48 @@ mod tests {
         assert!(catalog.date(Path::new("a.wav")).is_none());
     }
     #[test]
+    fn named_diary_grid_needs_no_metadata_and_audio_priority_is_released_after_start_or_cancel() {
+        struct NoReads;
+        impl AudioSource for NoReads {
+            fn probe(&self, _: &Path) -> Result<AudioProbe, String> {
+                panic!("must not read metadata before playback")
+            }
+            fn capture_time(&self, _: &Path) -> Result<CaptureTime, String> {
+                panic!("grid must use names")
+            }
+        }
+        let items =
+            vec![Media::from_path("2023-12-27_22-51-32.wav".into(), "2023/diary".into()).unwrap()];
+        let priority = Arc::new(crate::work_priority::WorkPriority::default());
+        let mut catalog = DiaryCatalog::with_priority(priority.clone());
+        catalog.ensure(&items, "2023", Arc::new(NoReads));
+        assert!(!catalog.is_loading());
+        assert_eq!(
+            catalog
+                .date(items[0].path())
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .stamp(),
+            "20231227_225132"
+        );
+        let player = Player::default();
+        let mut session = DiarySession::with_priority(priority.clone());
+        session.start(&items, &items[0], Arc::new(NoReads)).unwrap();
+        assert!(priority.audio_active());
+        until(&mut session, &player, |_, p| {
+            p.opened.lock().unwrap().is_some()
+        });
+        assert!(priority.audio_active());
+        session.cancel();
+        until(&mut session, &player, |s, _| !s.is_loading());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while priority.audio_active() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+    #[test]
     fn whole_year_is_prepared_in_order_and_selected_file_sets_global_start() {
         let items: Vec<_> = [
             ("b.wav", "2026/diary"),
@@ -592,9 +665,6 @@ mod tests {
             release: AtomicBool,
         }
         impl AudioSource for SlowSource {
-            fn file_size(&self, _: &Path) -> Result<u64, String> {
-                Ok(32_000)
-            }
             fn probe(&self, _: &Path) -> Result<AudioProbe, String> {
                 unreachable!()
             }
@@ -675,14 +745,14 @@ mod tests {
         assert!(player.revisions.lock().unwrap().is_empty());
     }
     #[test]
-    fn unreadable_size_and_unexpected_worker_exit_finish_without_opening() {
+    fn metadata_errors_and_worker_exit_finish_after_fast_open_without_reading_sizes() {
         struct BrokenSource(bool);
         impl AudioSource for BrokenSource {
-            fn file_size(&self, _: &Path) -> Result<u64, String> {
+            fn inspect(&self, _: &Path) -> Result<Recording, String> {
                 if self.0 {
                     panic!("simulated source failure")
                 } else {
-                    Err("Größe nicht lesbar".into())
+                    Err("Metadaten nicht lesbar".into())
                 }
             }
             fn probe(&self, _: &Path) -> Result<AudioProbe, String> {
@@ -695,17 +765,24 @@ mod tests {
         let items = vec![Media::from_path("a.wav".into(), "2026/diary".into()).unwrap()];
         for crash in [false, true] {
             let player = Player::default();
+            player.started.store(true, Ordering::Relaxed);
             let mut session = DiarySession::default();
             session
                 .start(&items, &items[0], Arc::new(BrokenSource(crash)))
                 .unwrap();
             until(&mut session, &player, |s, _| !s.is_loading());
-            assert!(player.opened.lock().unwrap().is_none());
-            assert!(session.status().contains(if crash {
-                "unerwartet"
+            assert!(player.opened.lock().unwrap().is_some());
+            if crash {
+                assert!(session.status().contains("unerwartet"));
             } else {
-                "Größe nicht lesbar"
-            }));
+                assert!(
+                    session
+                        .progress
+                        .errors
+                        .values()
+                        .any(|e| e.contains("Metadaten nicht lesbar"))
+                );
+            }
         }
     }
 }

@@ -6,7 +6,7 @@ use crate::{
 };
 use std::{
     fs::{self, File},
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read, Seek, Write},
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -44,6 +44,82 @@ fn compare(a: &Path, b: &Path) -> Result<bool, String> {
         }
     }
 }
+/// Preserve no-overwrite semantics even when rename-no-replace and hardlinks are unavailable.
+/// The portable path is deliberately not an ordinary rename: that could replace an existing file.
+fn finish_publication(
+    result: Result<File, tempfile::PersistError>,
+    source: &Path,
+    target: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    match result {
+        Ok(_) => Ok(()),
+        Err(error) if publication_unsupported(&error.error) => {
+            publish_portable(error.file, source, target, cancel)
+        }
+        Err(error) => Err(format!(
+            "Zieldatei konnte nicht veröffentlicht werden (vorhandene Ziele werden nicht überschrieben): {}",
+            error.error
+        )),
+    }
+}
+fn publication_unsupported(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::Unsupported || matches!(error.raw_os_error(), Some(45 | 95))
+}
+fn publish_portable(
+    mut staged: tempfile::NamedTempFile,
+    source: &Path,
+    target: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Abgebrochen; temporäre Kopie entfernt".into());
+    }
+    staged.as_file_mut().rewind().map_err(|e| e.to_string())?;
+    // O_EXCL also rejects existing files, directories and symlinks without touching them.
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+        .map_err(|e| {
+            format!("Zieldatei konnte nicht neu angelegt werden (kein Überschreiben): {e}")
+        })?;
+    let identity = output.metadata().map_err(|e| e.to_string())?;
+    let result = (|| {
+        let mut buffer = vec![0; 1024 * 1024];
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Abgebrochen".into());
+            }
+            let count = staged.read(&mut buffer).map_err(|e| e.to_string())?;
+            if count == 0 {
+                break;
+            }
+            output
+                .write_all(&buffer[..count])
+                .map_err(|e| e.to_string())?;
+        }
+        output.sync_all().map_err(|e| e.to_string())?;
+        if !compare(staged.path(), target)? || !compare(source, target)? {
+            return Err("Veröffentlichte Kopie stimmt nicht mit Quelle überein".into());
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Abgebrochen".into());
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        // Remove only the destination created by this attempt, never a replaced foreign file.
+        if fs::symlink_metadata(target).is_ok_and(|m| {
+            !m.file_type().is_symlink() && m.dev() == identity.dev() && m.ino() == identity.ino()
+        }) {
+            fs::remove_file(target).map_err(|e| format!("Import fehlgeschlagen; eigene unvollständige Zieldatei konnte nicht entfernt werden: {}: {e}", target.display()))?;
+        }
+    }
+    result
+}
+
 impl ImportAdapter for FileImportAdapter {
     fn validate(&self, source: &Path, target: &Path) -> Result<(), String> {
         let source = fs::canonicalize(source).map_err(|e| e.to_string())?;
@@ -154,7 +230,11 @@ impl ImportAdapter for FileImportAdapter {
         }
         let mut input = File::open(source).map_err(|e| e.to_string())?;
         let length = input.metadata().map_err(|e| e.to_string())?.len();
-        let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+        let mut temp = tempfile::Builder::new()
+            .prefix(".photosuite-import-")
+            .suffix(".tmp")
+            .tempfile_in(parent)
+            .map_err(|e| e.to_string())?;
         let mut buffer = vec![0; 1024 * 1024];
         let mut copied = 0;
         let mut reported = 0;
@@ -184,10 +264,7 @@ impl ImportAdapter for FileImportAdapter {
             return Err("Abgebrochen; temporäre Kopie entfernt".into());
         }
         progress(CopyProgress::Publish);
-        temp.persist_noclobber(target).map_err(|e| {
-            format!("Zieldatei nicht veröffentlicht (womöglich neue Kollision): {e}")
-        })?;
-        Ok(())
+        finish_publication(temp.persist_noclobber(target), source, target, cancel)
     }
 }
 
@@ -203,7 +280,10 @@ mod tests {
         FileImportAdapter {
             audio: audio.clone(),
             tool: crate::exiftool::ExifTool::development(),
-            repository: Arc::new(crate::infrastructure::FileSystemRepository { audio }),
+            repository: Arc::new(crate::infrastructure::FileSystemRepository {
+                audio,
+                priority: Default::default(),
+            }),
         }
     }
     fn photo(path: &Path, color: u8) {
@@ -478,5 +558,139 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), dst.path().join("2008")).unwrap();
         assert!(adapter().exists(&dst.path().join("2008/09/a.jpg")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod portable_publication_tests {
+    use super::*;
+    fn staged(parent: &Path, bytes: &[u8]) -> tempfile::NamedTempFile {
+        let mut file = tempfile::Builder::new()
+            .prefix(".photosuite-import-")
+            .suffix(".tmp")
+            .tempfile_in(parent)
+            .unwrap();
+        file.write_all(bytes).unwrap();
+        file.as_file().sync_all().unwrap();
+        file
+    }
+    fn unsupported(file: tempfile::NamedTempFile) -> Result<File, tempfile::PersistError> {
+        Err(tempfile::PersistError {
+            file,
+            error: std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "simulated exFAT unsupported publication",
+            ),
+        })
+    }
+    #[test]
+    fn unsupported_publication_copies_and_verifies_without_changing_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.wav");
+        let target = dir.path().join("target.wav");
+        let bytes = vec![37; 2 * 1024 * 1024 + 17];
+        fs::write(&source, &bytes).unwrap();
+        let temp = staged(dir.path(), &bytes);
+        let temp_path = temp.path().to_owned();
+        finish_publication(unsupported(temp), &source, &target, &AtomicBool::new(false)).unwrap();
+        assert_eq!(fs::read(&source).unwrap(), bytes);
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        assert!(!temp_path.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        #[cfg(target_os = "macos")]
+        assert!(publication_unsupported(&std::io::Error::from_raw_os_error(
+            45
+        )));
+    }
+    #[test]
+    fn portable_publication_never_overwrites_a_colliding_file_or_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.mp3");
+        let target = dir.path().join("target.mp3");
+        fs::write(&source, b"source").unwrap();
+        fs::write(&target, b"existing").unwrap();
+        assert!(
+            finish_publication(
+                unsupported(staged(dir.path(), b"source")),
+                &source,
+                &target,
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"existing");
+        let link = dir.path().join("link.mp3");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(
+            finish_publication(
+                unsupported(staged(dir.path(), b"source")),
+                &source,
+                &link,
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"existing");
+        assert_eq!(fs::read(source).unwrap(), b"source");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+    }
+    #[test]
+    fn changed_source_invalidates_portable_copy_and_removes_only_own_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.wav");
+        let target = dir.path().join("target.wav");
+        fs::write(&source, b"changed-source").unwrap();
+        assert!(
+            finish_publication(
+                unsupported(staged(dir.path(), b"old-source")),
+                &source,
+                &target,
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        assert!(!target.exists());
+        assert_eq!(fs::read(source).unwrap(), b"changed-source");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn cancelled_portable_publication_leaves_source_and_no_destination_or_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.m4a");
+        let target = dir.path().join("target.m4a");
+        fs::write(&source, b"source").unwrap();
+        assert!(
+            finish_publication(
+                unsupported(staged(dir.path(), b"source")),
+                &source,
+                &target,
+                &AtomicBool::new(true)
+            )
+            .is_err()
+        );
+        assert!(!target.exists());
+        assert_eq!(fs::read(source).unwrap(), b"source");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+    #[test]
+    fn other_publication_errors_are_not_masked_by_a_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.wav");
+        let target = dir.path().join("target.wav");
+        fs::write(&source, b"source").unwrap();
+        let error = tempfile::PersistError {
+            file: staged(dir.path(), b"source"),
+            error: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
+        };
+        let result = finish_publication(Err(error), &source, &target, &AtomicBool::new(false));
+        assert!(result.unwrap_err().contains("denied"));
+        assert!(!target.exists());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 }

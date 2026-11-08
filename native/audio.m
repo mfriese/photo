@@ -81,6 +81,7 @@ static unsigned long long PSNextPhotoSession=0;
     [self.transport tick];
     NSUInteger index=[self currentIndex];if(index==NSNotFound)return;
     PSAudioClipViewModel *clip=self.timeline.clips[index];
+    if(clip.verification==1)[self.transport useVerifiedDuration:clip.duration forPath:clip.path];
     double local=CMTimeGetSeconds(self.transport.player.currentTime);if(!isfinite(local))local=0;
     double fraction=self.transport.duration>0?MIN(1,MAX(0,local/self.transport.duration)):0;
     if(!self.transport.loading && !self.transport.seeking)self.timeline.position=[self.timeline offset:index]+clip.weight*fraction;

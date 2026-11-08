@@ -2,10 +2,6 @@ use super::*;
 use std::sync::Arc;
 struct UnusedAdapters;
 impl photosuite_application::diary::AudioSource for UnusedAdapters {
-    fn file_size(&self, _: &std::path::Path) -> Result<u64, String> {
-        panic!("layout must not stat")
-    }
-
     fn probe(
         &self,
         _: &std::path::Path,
@@ -154,6 +150,7 @@ fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            work_priority: Default::default(),
             import_cleanup: adapters.clone(),
             audio_source: adapters.clone(),
             audio_player: adapters.clone(),
@@ -411,6 +408,7 @@ fn library_years_start_collapsed_and_expand_on_click() {
     assert!(expanded.iter().any(|(text, _)| text == "September"));
     assert!(expanded.iter().any(|(text, _)| text == "Diary"));
     assert!(expanded.iter().any(|(text, _)| text == "Ganzes Jahr"));
+    assert_eq!(suite.group.as_deref(), Some("2026"));
 }
 #[test]
 fn importing_elsewhere_keeps_the_open_photo_library_and_saved_path() {
@@ -597,4 +595,82 @@ fn audio_photo_jump_renders_far_target_with_highlight_in_virtualized_wall() {
             assert!(suite.selected.is_none());
         }
     }
+}
+
+#[test]
+fn indexed_years_are_clickable_before_any_media_arrives_even_while_animating() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct SlowYears;
+    impl crate::ports::MediaRepository for SlowYears {
+        fn scan(&self, _: &std::path::Path) -> (Vec<Media>, usize) {
+            unreachable!()
+        }
+        fn partitions(&self, _: &std::path::Path) -> Result<Option<Vec<String>>, String> {
+            Ok(Some(vec!["2023".into(), "2025".into()]))
+        }
+        fn scan_partition(
+            &self,
+            _: &std::path::Path,
+            _: &str,
+            cancel: &AtomicBool,
+        ) -> (Vec<Media>, usize) {
+            while !cancel.load(Ordering::Relaxed) {
+                std::thread::yield_now();
+            }
+            (Vec::new(), 0)
+        }
+    }
+    let mut suite = test_suite();
+    suite.services.repository = Arc::new(SlowYears);
+    suite.load("/Fotos/Slow".into());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while suite.collection.years().is_empty() {
+        assert!(suite.collection.poll().is_none());
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert!(suite.items.is_empty());
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let input = |events| egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(800., 600.),
+        )),
+        events,
+        ..Default::default()
+    };
+    let output = ctx.run(input(vec![]), |ctx| suite.library_sidebar(ctx));
+    let target = output
+        .shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "2023" => {
+                Some(text.visual_bounding_rect().center())
+            }
+            _ => None,
+        })
+        .expect("year must be visible without media");
+    assert!(suite.group.is_none());
+    let _ = ctx.run(
+        input(vec![
+            egui::Event::PointerMoved(target),
+            egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]),
+        |ctx| suite.library_sidebar(ctx),
+    );
+    assert_eq!(suite.group.as_deref(), Some("2023"));
+    assert!(suite.collection.is_loading());
+    assert!(suite.items.is_empty());
 }

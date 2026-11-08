@@ -22,14 +22,19 @@ pub struct PhotoTimeline {
     photos: Vec<TimedPhoto>,
 }
 impl PhotoTimeline {
-    pub fn new(mut photos: Vec<TimedPhoto>) -> Self {
-        photos.sort_by(|a, b| {
+    pub fn new(photos: Vec<TimedPhoto>) -> Self {
+        let mut timeline = Self::default();
+        timeline.extend(photos);
+        timeline
+    }
+    pub fn extend(&mut self, photos: impl IntoIterator<Item = TimedPhoto>) {
+        self.photos.extend(photos);
+        self.photos.sort_by(|a, b| {
             a.captured
                 .civil_seconds()
                 .cmp(&b.captured.civil_seconds())
                 .then(a.path.cmp(&b.path))
         });
-        Self { photos }
     }
     pub fn len(&self) -> usize {
         self.photos.len()
