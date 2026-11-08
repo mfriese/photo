@@ -18,6 +18,10 @@ pub struct Media {
 }
 impl Media {
     pub fn from_path(path: PathBuf, group: String) -> Option<Self> {
+        // AppleDouble companion files are metadata, never collection/import media.
+        if path.file_name()?.to_string_lossy().starts_with("._") {
+            return None;
+        }
         let ext = path.extension()?.to_string_lossy().to_lowercase();
         let kind = if is_audio_extension(&path) {
             MediaKind::Audio
@@ -45,6 +49,9 @@ impl Media {
     }
     /// The adapter has confirmed an audio-only asset, including MP4/MOV containers.
     pub fn from_audio_asset(path: PathBuf, group: String) -> Option<Self> {
+        if path.file_name()?.to_string_lossy().starts_with("._") {
+            return None;
+        }
         if !is_audio_extension(&path) && !is_video(&path) {
             return None;
         }
@@ -89,6 +96,15 @@ pub fn is_video(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn appledouble_companions_are_not_media_but_other_hidden_media_remain_supported() {
+        for name in ["._aud_20231227_225132.wav", "._photo.jpg", "._video.mp4"] {
+            assert!(Media::from_path(name.into(), "2023/diary".into()).is_none());
+            assert!(Media::from_library_path(name.into(), "2023/diary".into()).is_none());
+            assert!(Media::from_audio_asset(name.into(), "2023/diary".into()).is_none());
+        }
+        assert!(Media::from_path(".recording.wav".into(), "2023/diary".into()).is_some());
+    }
     #[test]
     fn media_kind_cannot_disagree_with_supported_extension() {
         assert!(Media::from_path("a.JPG".into(), String::new()).is_some_and(|m| !m.is_video()));

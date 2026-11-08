@@ -44,6 +44,51 @@ fn compare(a: &Path, b: &Path) -> Result<bool, String> {
         }
     }
 }
+/// Automatic tempfile drop is best-effort only. Always report a failed cleanup explicitly.
+fn cleanup_staging(
+    staged: tempfile::NamedTempFile,
+    result: Result<(), String>,
+) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let (file, mut temporary_path) = staged.into_parts();
+    let path = temporary_path.to_path_buf();
+    // Do not let best-effort Drop retry removal of an unverified/replaced path.
+    temporary_path.disable_cleanup(true);
+    let identity = file.metadata();
+    drop(file); // Close before unlinking, including on removable filesystems.
+    let cleanup = (|| {
+        let current = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.to_string()),
+        };
+        let identity = identity.map_err(|e| e.to_string())?;
+        if !current.is_file()
+            || current.file_type().is_symlink()
+            || current.dev() != identity.dev()
+            || current.ino() != identity.ino()
+        {
+            return Err(
+                "Pfad wurde ersetzt oder kann nicht sicher zugeordnet werden; bleibt erhalten"
+                    .into(),
+            );
+        }
+        fs::remove_file(&path).map_err(|e| e.to_string())
+    })();
+    match cleanup {
+        Ok(()) => result,
+        Err(error) => {
+            let context = match result {
+                Ok(()) => "Zieldatei wurde vollständig geprüft. ".to_owned(),
+                Err(message) => format!("{message}. "),
+            };
+            Err(format!(
+                "{context}Temporäre Importdatei konnte nicht entfernt werden: {}: {error}",
+                path.display()
+            ))
+        }
+    }
+}
 /// Preserve no-overwrite semantics even when rename-no-replace and hardlinks are unavailable.
 /// The portable path is deliberately not an ordinary rename: that could replace an existing file.
 fn finish_publication(
@@ -57,24 +102,37 @@ fn finish_publication(
         Err(error) if publication_unsupported(&error.error) => {
             publish_portable(error.file, source, target, cancel)
         }
-        Err(error) => Err(format!(
-            "Zieldatei konnte nicht veröffentlicht werden (vorhandene Ziele werden nicht überschrieben): {}",
-            error.error
-        )),
+        Err(error) => {
+            let message = format!(
+                "Zieldatei konnte nicht veröffentlicht werden (vorhandene Ziele werden nicht überschrieben): {}",
+                error.error
+            );
+            cleanup_staging(error.file, Err(message))
+        }
     }
 }
 fn publication_unsupported(error: &std::io::Error) -> bool {
     error.kind() == std::io::ErrorKind::Unsupported || matches!(error.raw_os_error(), Some(45 | 95))
 }
 fn publish_portable(
-    mut staged: tempfile::NamedTempFile,
+    staged: tempfile::NamedTempFile,
+    source: &Path,
+    target: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let mut staged = staged;
+    let result = write_portable(&mut staged, source, target, cancel);
+    cleanup_staging(staged, result)
+}
+fn write_portable(
+    staged: &mut tempfile::NamedTempFile,
     source: &Path,
     target: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     if cancel.load(Ordering::Relaxed) {
-        return Err("Abgebrochen; temporäre Kopie entfernt".into());
+        return Err("Abgebrochen".into());
     }
     staged.as_file_mut().rewind().map_err(|e| e.to_string())?;
     // O_EXCL also rejects existing files, directories and symlinks without touching them.
@@ -85,7 +143,7 @@ fn publish_portable(
         .map_err(|e| {
             format!("Zieldatei konnte nicht neu angelegt werden (kein Überschreiben): {e}")
         })?;
-    let identity = output.metadata().map_err(|e| e.to_string())?;
+    let identity = output.metadata().map_err(|e| format!("Import abgebrochen; neu angelegte Zieldatei konnte nicht sicher identifiziert werden und bleibt erhalten: {}: {e}", target.display()))?;
     let result = (|| {
         let mut buffer = vec![0; 1024 * 1024];
         loop {
@@ -235,35 +293,41 @@ impl ImportAdapter for FileImportAdapter {
             .suffix(".tmp")
             .tempfile_in(parent)
             .map_err(|e| e.to_string())?;
-        let mut buffer = vec![0; 1024 * 1024];
-        let mut copied = 0;
-        let mut reported = 0;
-        loop {
+        let prepared = (|| {
+            let mut buffer = vec![0; 1024 * 1024];
+            let mut copied = 0;
+            let mut reported = 0;
+            loop {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Abgebrochen".into());
+                }
+                let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                temp.write_all(&buffer[..count])
+                    .map_err(|e| e.to_string())?;
+                copied += count as u64;
+                if copied - reported >= 8 * 1024 * 1024 {
+                    progress(CopyProgress::Bytes(copied, length));
+                    reported = copied;
+                }
+            }
+            temp.as_file().sync_all().map_err(|e| e.to_string())?;
+            progress(CopyProgress::Bytes(copied, length));
+            progress(CopyProgress::Verify);
+            if copied != length || !compare(source, temp.path())? {
+                return Err("Kopie stimmt nicht mit Quelle überein".into());
+            }
             if cancel.load(Ordering::Relaxed) {
-                return Err("Abgebrochen; temporäre Kopie entfernt".into());
+                return Err("Abgebrochen".into());
             }
-            let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
-            if count == 0 {
-                break;
-            }
-            temp.write_all(&buffer[..count])
-                .map_err(|e| e.to_string())?;
-            copied += count as u64;
-            if copied - reported >= 8 * 1024 * 1024 {
-                progress(CopyProgress::Bytes(copied, length));
-                reported = copied;
-            }
+            progress(CopyProgress::Publish);
+            Ok(())
+        })();
+        if let Err(error) = prepared {
+            return cleanup_staging(temp, Err(error));
         }
-        temp.as_file().sync_all().map_err(|e| e.to_string())?;
-        progress(CopyProgress::Bytes(copied, length));
-        progress(CopyProgress::Verify);
-        if copied != length || !compare(source, temp.path())? {
-            return Err("Kopie stimmt nicht mit Quelle überein".into());
-        }
-        if cancel.load(Ordering::Relaxed) {
-            return Err("Abgebrochen; temporäre Kopie entfernt".into());
-        }
-        progress(CopyProgress::Publish);
         finish_publication(temp.persist_noclobber(target), source, target, cancel)
     }
 }
@@ -582,6 +646,34 @@ mod portable_publication_tests {
                 "simulated exFAT unsupported publication",
             ),
         })
+    }
+    #[test]
+    fn cleanup_failure_is_visible_and_replaced_files_are_never_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = staged(dir.path(), b"temporary");
+        let path = temp.path().to_owned();
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, b"foreign replacement").unwrap();
+        let error = cleanup_staging(temp, Ok(())).unwrap_err();
+        assert!(error.contains("Zieldatei wurde vollständig geprüft"));
+        assert!(error.contains("Temporäre Importdatei konnte nicht entfernt werden"));
+        assert!(error.contains(path.to_str().unwrap()));
+        assert_eq!(fs::read(&path).unwrap(), b"foreign replacement");
+    }
+    #[test]
+    fn cleanup_retains_primary_error_and_already_absent_staging_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let temp = staged(dir.path(), b"temporary");
+        let path = temp.path().to_owned();
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        let error = cleanup_staging(temp, Err("Kopie fehlgeschlagen".into())).unwrap_err();
+        assert!(error.contains("Kopie fehlgeschlagen"));
+        assert!(error.contains("nicht entfernt"));
+        assert!(path.is_dir());
+        let temp = staged(dir.path(), b"temporary");
+        fs::remove_file(temp.path()).unwrap();
+        cleanup_staging(temp, Ok(())).unwrap();
     }
     #[test]
     fn unsupported_publication_copies_and_verifies_without_changing_source() {

@@ -163,3 +163,9 @@
 - Gemeinsamen `WorkPriority` in `main` erzeugen und explizit injizieren. Audio-Start/erste Clipprüfung haben kooperativen Vorrang vor Scans, Rasterdekodierung und ergänzenden Metadaten. RAII-Lease bei Ende/Fehler/Abbruch freigeben; bereits laufende OS-Aufrufe nicht als sofort abbrechbar darstellen. Metadatenports nicht mit Scheduler-Verantwortung vermischen.
 - Zeitwerte einmal beim Validieren berechnen und für Sortierung/Binärsuche wiederverwenden. Kein erneutes Datumsparsen pro Sortiervergleich und keine unnötige volle Indexkopie.
 - Durch Tests absichern: keine Metadaten-/Stat-Runde vor Playback, große Namensindizes, blockierte optionale Metadaten bei weiter nutzbarer Fotosuche, begrenzte Decoder, Prioritätsfreigabe, native Dauerkorrektur ohne Item-/Positionswechsel und unveränderte Quelldateien. Keine ungemessenen Geschwindigkeitsfaktoren behaupten.
+
+
+## Versteckte Begleitdateien und Stagingbereinigung
+- Reservierte `._`-AppleDouble-Begleitnamen in den Domänen-Medienfabriken von Galerie und Import ausschließen; andere versteckte echte Medien weiter unterstützen. Keine vorhandenen Begleitdateien automatisch löschen und `._aud_…` nicht mit `.photosuite-import-….tmp` verwechseln.
+- Eigene Stagingdateien auf regulären Fehler-, Abbruch- und portablen Veröffentlichungspfaden explizit bereinigen, statt Löschfehler im best-effort Drop zu verlieren. Vor Entfernen Identität prüfen; ersetzte fremde Pfade erhalten. Fehler mit konkretem Temp-Pfad sichtbar melden und bei vorhandenem geprüftem Ziel diesen Zustand ausdrücklich benennen. Absturzüberreste und Grenzen des schnellen Bibliotheks-Persistenzpfads ehrlich dokumentieren.
+- Ausschlussregeln sind Domänenregeln; Identität, Handles und Dateibereinigung gehören in den Infrastrukturadapter. Tests verwenden ausschließlich eigene temporäre Dateien und prüfen auch fehlgeschlagene Bereinigung und unveränderte Begleitdateien.

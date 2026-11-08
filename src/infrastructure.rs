@@ -218,6 +218,10 @@ mod tests {
         let video = directory.path().join("2023/12/img_20231227_225132.mp4");
         std::fs::write(&audio, b"audio-original").unwrap();
         std::fs::write(&video, b"video-original").unwrap();
+        let sidecar = directory
+            .path()
+            .join("2023/diary/._aud_20231227_225132.wav");
+        std::fs::write(&sidecar, [0, 5, 22, 7]).unwrap();
         let repository = FileSystemRepository {
             audio: std::sync::Arc::new(NoReads),
             priority: Default::default(),
@@ -233,6 +237,7 @@ mod tests {
         assert!(items.iter().find(|m| m.path() == video).unwrap().is_video());
         assert_eq!(std::fs::read(audio).unwrap(), b"audio-original");
         assert_eq!(std::fs::read(video).unwrap(), b"video-original");
+        assert_eq!(std::fs::read(sidecar).unwrap(), [0, 5, 22, 7]);
     }
     #[test]
     fn library_root_must_be_a_regular_directory() {
