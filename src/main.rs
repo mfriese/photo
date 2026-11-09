@@ -6,6 +6,7 @@ mod audio_player;
 mod command_bindings;
 mod command_labels;
 mod context_photos;
+mod desktop_menu;
 mod duplicates_fs;
 mod duplicates_ui;
 mod exiftool;
@@ -15,10 +16,17 @@ mod import_cleanup_ui;
 mod import_fs;
 mod import_ui;
 mod infrastructure;
+mod library_preferences_fs;
+mod metadata_fs;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod muda_menu;
 mod options_ui;
+mod preferences_codec;
 mod preferences_fs;
 mod presentation;
+mod staging_fs;
 mod storyboard_ui;
+mod tag_store;
 mod theme;
 mod video;
 use eframe::egui;
@@ -63,6 +71,7 @@ fn main() -> eframe::Result {
     };
     let video_preview = std::sync::Arc::new(video::NativeVideoSource);
     let services = application::Services {
+        organization: std::sync::Arc::new(tag_store::YamlTags),
         work_priority: priority.clone(),
         audio_source: audio_source.clone(),
         audio_player: std::sync::Arc::new(audio_player::NativeAudioPlayer::new(
@@ -72,7 +81,10 @@ fn main() -> eframe::Result {
         duplicates: std::sync::Arc::new(duplicates_fs::PixelDuplicates),
         video_player: std::sync::Arc::new(video::NativeVideoPlayer),
         video_preview: video_preview.clone(),
-        preferences: std::sync::Arc::new(preferences_fs::PlistPreferences::at(preferences_path)),
+        preferences: std::sync::Arc::new(library_preferences_fs::LibraryPreferences::new(
+            library_preferences_fs::LibraryPreferences::locator_path(&preferences_path),
+            std::sync::Arc::new(preferences_fs::PlistPreferences::at(preferences_path)),
+        )),
         import_cleanup: std::sync::Arc::new(import_cleanup_fs::SafeImportCleanup {
             trash: std::sync::Arc::new(import_cleanup_fs::NativeTrash),
         }),
@@ -97,8 +109,33 @@ fn main() -> eframe::Result {
             viewport: egui::ViewportBuilder::default()
                 .with_inner_size([1280., 850.])
                 .with_min_inner_size([360., 400.]),
+            event_loop_builder: Some(Box::new(|builder| {
+                #[cfg(target_os = "macos")]
+                {
+                    use winit::platform::macos::EventLoopBuilderExtMacOS;
+                    builder.with_default_menu(false);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    use winit::platform::windows::EventLoopBuilderExtWindows;
+                    builder.with_msg_hook(muda_menu::windows_message_hook);
+                }
+                let _ = builder;
+            })),
             ..Default::default()
         },
-        Box::new(move |cc| Ok(Box::new(presentation::create(cc, services)))),
+        Box::new(move |cc| {
+            #[cfg(not(any(target_os="macos",target_os="windows")))]
+            return Err(std::io::Error::other("PhotoSuite's native muda menu requires a GTK host on Linux/BSD; this port is not implemented. No fallback menu is installed.").into());
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
+            {
+                use raw_window_handle::HasWindowHandle;
+                let menu =
+                    muda_menu::MudaMenu::new(cc.egui_ctx.clone(), cc.window_handle()?.as_raw())
+                        .map_err(std::io::Error::other)?;
+                Ok(Box::new(presentation::create(cc, services, Box::new(menu)))
+                    as Box<dyn eframe::App>)
+            }
+        }),
     )
 }

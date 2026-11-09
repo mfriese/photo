@@ -17,8 +17,25 @@ tempfile = "3"
 kamadak-exif = "0.6"
 photosuite-domain = { path = "crates/domain" }
 photosuite-application = { path = "crates/application" }
+serde-saphyr = { version = "2", default-features = false, features = ["deserialize", "serialize"] }
+raw-window-handle = "0.6"
 
 [workspace]
 members = ["crates/domain", "crates/application"]
 default-members = [".", "crates/domain", "crates/application"]
 resolver = "3"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+muda = { version = "0.21.2", default-features = false }
+winit = "0.30"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSEvent"] }
+
+[[example]]
+name = "native-menu-check"
+path = "examples/native_menu_check.rs"

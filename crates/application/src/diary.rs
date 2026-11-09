@@ -47,6 +47,22 @@ pub struct VerificationProgress {
     pub errors: std::collections::BTreeMap<PathBuf, String>,
     pub cancelled: bool,
 }
+#[derive(Clone, Default)]
+pub struct AudioTransportSnapshot {
+    pub active: bool,
+    pub playing: bool,
+    pub loading: bool,
+    pub failed: bool,
+    pub fraction: f64,
+    pub current_date: Option<CaptureTime>,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AudioControl {
+    Toggle,
+    Seek(f64),
+    ShowWindow,
+    Stop,
+}
 pub trait AudioPlayer: Send + Sync + 'static {
     /// Main thread, lightweight snapshot; only the selected clip may load asynchronously.
     fn open(
@@ -55,6 +71,23 @@ pub trait AudioPlayer: Send + Sync + 'static {
         selected: &Path,
         photos: &[Media],
     ) -> Result<(), String>;
+    fn open_embedded(
+        &self,
+        timeline: &DiaryTimeline,
+        selected: &Path,
+        photos: &[Media],
+    ) -> Result<(), String> {
+        self.open(timeline, selected, photos)
+    }
+    fn transport(&self) -> AudioTransportSnapshot {
+        AudioTransportSnapshot {
+            active: self.state().is_open,
+            ..Default::default()
+        }
+    }
+    fn control(&self, _command: AudioControl) -> Result<(), String> {
+        Err("Audio-Steuerung nicht verfügbar".into())
+    }
     /// Update layout in place without replacing/reseeking the current recording.
     fn revise(
         &self,
@@ -79,6 +112,7 @@ struct Pending {
     cancel: Arc<AtomicBool>,
     gate: Option<mpsc::Sender<()>>,
     opened: bool,
+    embedded: bool,
 }
 #[derive(Default)]
 pub struct DiarySession {
@@ -99,6 +133,22 @@ impl DiarySession {
             status: String::new(),
             warnings: Vec::new(),
         }
+    }
+    pub fn timeline(&self) -> Option<&DiaryTimeline> {
+        self.timeline.as_ref()
+    }
+    pub fn progress(&self) -> &VerificationProgress {
+        &self.progress
+    }
+    pub fn start_embedded(
+        &mut self,
+        items: &[Media],
+        selected: &Media,
+        source: Arc<dyn AudioSource>,
+    ) -> Result<(), String> {
+        self.start(items, selected, source)?;
+        self.pending.as_mut().unwrap().embedded = true;
+        Ok(())
     }
     pub fn is_loading(&self) -> bool {
         self.pending.is_some()
@@ -155,6 +205,7 @@ impl DiarySession {
             cancel,
             gate: Some(go),
             opened: false,
+            embedded: false,
         });
         self.status = "Audioplayer wird aus Dateinamen geöffnet …".into();
         let audio_work = self.priority.audio();
@@ -254,9 +305,11 @@ impl DiarySession {
             let cancelled = pending.cancel.load(Ordering::Relaxed);
             match event {
                 Event::Draft(result) if !cancelled => match result {
-                    Ok((timeline, selected, photos)) => match player
-                        .open(&timeline, &selected, &photos)
-                    {
+                    Ok((timeline, selected, photos)) => match if pending.embedded {
+                        player.open_embedded(&timeline, &selected, &photos)
+                    } else {
+                        player.open(&timeline, &selected, &photos)
+                    } {
                         Ok(()) => {
                             self.timeline = Some(timeline);
                             pending.opened = true;
@@ -329,7 +382,6 @@ impl DiarySession {
         }
         if done {
             self.pending = None;
-            self.timeline = None;
         }
     }
 }
@@ -405,7 +457,7 @@ impl DiaryCatalog {
         if paths.is_empty() {
             return;
         }
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(16);
         let cancel = Arc::new(AtomicBool::new(false));
         self.pending = Some((rx, cancel.clone()));
         let priority = self.priority.clone();
@@ -432,7 +484,7 @@ impl DiaryCatalog {
         let cancelled = cancel.load(Ordering::Relaxed);
         let mut done = false;
         let mut disconnected = false;
-        loop {
+        for _ in 0..64 {
             match rx.try_recv() {
                 Ok(CatalogEvent::Date(path, result)) => {
                     if !cancelled {
@@ -784,5 +836,99 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// Names-only selection for the gallery header; all recordings of the year share one axis.
+pub fn gallery_audio<'a>(items: &'a [Media], group: &str) -> Option<&'a Media> {
+    let year = gallery_year(group)?;
+    let month = group
+        .split(std::path::MAIN_SEPARATOR)
+        .nth(1)
+        .filter(|m| m.len() == 2 && m.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)));
+    items
+        .iter()
+        .filter(|media| media.is_audio() && diary_year(media.group()) == Some(year))
+        .min_by_key(|media| {
+            let date = media
+                .path()
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(crate::domain::audio_date::date_from_filename);
+            let matching =
+                month.is_none_or(|month| date.as_ref().is_some_and(|d| d.month() == month));
+            (
+                !matching,
+                date.map(|d| d.stamp().to_owned())
+                    .unwrap_or_else(|| "99999999_999999".into()),
+                media.path().to_owned(),
+            )
+        })
+}
+pub fn gallery_year(group: &str) -> Option<&str> {
+    let year = group.split(std::path::MAIN_SEPARATOR).next()?;
+    (year.len() == 4
+        && year.bytes().all(|b| b.is_ascii_digit())
+        && year.parse::<u16>().is_ok_and(|n| n > 0))
+    .then_some(year)
+}
+
+/// Names-only gallery draft cache. Rebuilt only when the library/group or item count changes.
+#[derive(Default)]
+pub struct GalleryAudio {
+    key: Option<(PathBuf, String, usize)>,
+    timeline: Option<DiaryTimeline>,
+    selected: Option<PathBuf>,
+}
+impl GalleryAudio {
+    pub fn ensure(&mut self, items: &[Media], root: &Path, group: &str) {
+        let key = (root.to_owned(), group.to_owned(), items.len());
+        if self.key.as_ref() == Some(&key) {
+            return;
+        }
+        self.key = Some(key);
+        self.timeline = None;
+        self.selected = None;
+        let Some(year) = gallery_year(group) else {
+            return;
+        };
+        self.selected = gallery_audio(items, group).map(|m| m.path().to_owned());
+        let clips = items
+            .iter()
+            .filter(|m| m.is_audio() && diary_year(m.group()) == Some(year))
+            .map(|m| DiaryClip::from_filename(m.path().to_owned()))
+            .collect();
+        self.timeline = DiaryTimeline::new(year.into(), clips).ok();
+    }
+    pub fn timeline(&self) -> Option<&DiaryTimeline> {
+        self.timeline.as_ref()
+    }
+    pub fn selected(&self) -> Option<&Path> {
+        self.selected.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod gallery_tests {
+    use super::*;
+    #[test]
+    fn monthly_start_keeps_whole_year_and_ignores_other_years() {
+        let items: Vec<_> = [
+            ("aud_20230102_120000.wav", "2023/diary"),
+            ("aud_20230601_080000.mp3", "2023/diary"),
+            ("aud_20220601_080000.mp3", "2022/diary"),
+        ]
+        .into_iter()
+        .map(|(p, g)| Media::from_path(p.into(), g.into()).unwrap())
+        .collect();
+        let mut cache = GalleryAudio::default();
+        cache.ensure(&items, Path::new("/library"), "2023/06");
+        assert_eq!(cache.selected(), Some(items[1].path()));
+        assert_eq!(cache.timeline().unwrap().clips().len(), 2);
+        cache.ensure(&items, Path::new("/library"), "2023/07");
+        assert_eq!(cache.selected(), Some(items[0].path()));
+        cache.ensure(&items, Path::new("/library"), "albums");
+        assert!(cache.timeline().is_none());
+        assert!(gallery_year("0000/01").is_none());
     }
 }

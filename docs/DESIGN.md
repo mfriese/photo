@@ -27,7 +27,7 @@ Eine kompakte Fotoanwendung: Bilder dominieren, Bedienung und Dateinamen bleiben
 
 ## Ansichten
 
-- **Kopfbereich:** App-Icon und Name, kompakte umbrechende Aktionen mit Suche und Filter. Bibliothekspfad in eigener ruhiger Zeile mit vollständigem Tooltip; zusätzlich im Fenstertitel.
+- **Kein zusätzlicher Kopfbereich:** keine Suchzeile, Zoomregler, EXIF-Kennzeichnung oder Bibliothekspfadzeile. Hauptaktionen und Anzeigeoptionen in der nativen Menüleiste; Suche als separater Find-Dialog. Bibliothekspfad nur im Fenstertitel. Filter-/Schreibstatus in der einzeiligen Fußzeile.
 - **Seitenleiste:** volle Spaltenbreite für Einträge und Scrollbereich, vertikaler Scrollbalken ganz rechts. Kompakte 20-Punkte-Zeilen mit 1 Punkt Abstand; volle verfügbare Klickfläche, gekürzte lange Namen mit Tooltip. Abgesetzte Fläche, Gesamtansicht, absteigende aufklappbare Jahre, standardmäßig eingeklappt. Manuelles Aufklappen innerhalb der Sitzung respektieren. Monate als deutsche Namen darstellen; originale Gruppenschlüssel beibehalten. Kein zweiter fachlicher Filter in der UI.
 - **Fotowand:** bildbetonte, gleich große Kacheln, fünf Größenstufen, 8 Punkte horizontaler Abstand und gleichmäßig gefüllte vollständige Zeilen. Letzte Zeile unverändert. Dateinamen mit mindestens 12 Punkten und gekürzt; Videoabzeichen auf dunkler Fläche. Hover-Kontur ohne Größenverschiebung. Beide Vorschauformen zentrieren.
 - Allgemeine Bedienelemente 24 Punkte hoch, Navigationseinträge 26, Großansichtsbuttons 28. Größere Schrift nicht durch größere Ränder kompensieren.
@@ -58,3 +58,15 @@ Unter der nativen Audio-Jahresleiste stehen fünf kleine Fotoplätze mit gleichm
 ## Importquellen aufräumen
 
 Separater Button „Importquellen in den Papierkorb …“ nach einem tatsächlichen Import. Eigener scrollbarer Dialog mit einer klaren Zeile/Gruppe je Datei: Importentscheidung, Quelle, Ziel und Prüfergebnis. Lange Pfade kürzen und im Tooltip vollständig zeigen. Freigegebene und gesperrte Zeilen ausdrücklich beschriften; keine reine Farbcodierung. Bestätigung erst nach vollständiger Prüfung und mit exakter Anzahl freigegebener Quellen. Abbruch und Schließen bieten; Abschluss-, Fehler- und unklare Zustände sichtbar erhalten. Keine vorausgewählte automatische Quellenlöschung.
+
+- Ladeindikatoren in Fotowand und Großansicht zentrieren; ihr Durchmesser beträgt ein Drittel der kürzeren Bild-/Kachelkante. Die volle Bildfläche bleibt für Layout und Klicks erhalten. Darstellung zentral im Theme, ohne Fachlogik.
+
+- **Tags/Alben:** „Tags & Alben …“ als kompakter Einstieg in der Bibliotheksleiste. Promovierte Tags vor den Jahren im gemeinsamen vollbreiten Scrollbereich, gleiche kontrastreiche Auswahlzustände. Tagdialog mit umbrechenden Aktionen, begrenztem Scrollbereich, eindeutigen Datei-/Albumzuweisungen und sichtbarem Speicher-/Fehlerstatus. Default-Fotowand nicht durch zusätzliche Tag-Badges vergrößern; nur bei aktivem Filter eine kompakte Filterzeile zeigen.
+
+### Kompakte Audioleiste
+Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: Play/Pause, anklickbare/ziehbare Zeitachse und „Mehr“. Der Start bevorzugt eine Aufnahme des ausgewählten Monats. Graue Abschnitte werden im Hintergrund geprüft und anschließend proportional zur echten Dauer blau angezeigt. Während einer laufenden Vorbereitung kann keine weitere Jahresvorbereitung gestartet werden.
+
+„Mehr → Playerfenster öffnen“ zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.
+
+## Native Hauptmenüs
+Die Hauptaktionen liegen ausschließlich in nativen muda-Menüs: PhotoSuite, File, Edit, View, Window, Help. Keine zusätzliche egui-Menüleiste. Keine dauerhafte Kopfzeile im Fenster. Edit → Find… öffnet einen schmalen Suchdialog mit Textfeld und „Filter zurücksetzen“; der Filter bleibt beim Schließen erhalten. Vorschaugröße und EXIF-Einstellung über Menüs/Settings erreichen. Bibliothekspfad nur im Fenstertitel; Filter-/Schreibstatus in der Fußzeile. Keine doppelte App-Logo-/Buttonleiste. Native Häkchen spiegeln Einstellungen, nicht verfügbare Aktionen sind deaktiviert. Englische Standardbezeichnungen in der nativen Menüleiste; Galeriebeschriftungen bleiben deutsch. Screenshots bleiben auf ausdrücklichen Nutzerwunsch zurückgestellt.

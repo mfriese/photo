@@ -28,7 +28,10 @@ pub fn show(
 ) {
     egui::Window::new("Einstellungen").open(open).default_width(480.)
         .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
-            spacing(ui);ui.label("Änderungen werden automatisch gespeichert.");
+            spacing(ui);
+            if p.library_scope.is_some() { ui.label("Änderungen werden in photosuite.yaml in der Bibliothek gespeichert."); }
+            else { ui.label("Ohne geladene Bibliothek gelten Einstellungen nur für diese Sitzung."); }
+            ui.small("Der zuletzt geöffnete Bibliothekspfad bleibt lokal auf diesem Mac.");
             section(ui,"Darstellung",|ui|{
                 ui.checkbox(&mut p.show_library,"Jahre und Monate anzeigen");
                 ui.checkbox(&mut p.square_previews,"Quadratische Vorschau");

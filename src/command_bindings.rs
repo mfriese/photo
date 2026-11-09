@@ -7,6 +7,30 @@ pub struct CommandBindings {
     pub visible: bool,
     error: String,
 }
+// Native application and text-editing shortcuts must never be assigned to media commands.
+fn reserved(shortcut: egui::KeyboardShortcut) -> bool {
+    let m = shortcut.modifiers;
+    let primary = m.command || m.mac_cmd || m.ctrl;
+    primary
+        && !m.alt
+        && match shortcut.logical_key {
+            egui::Key::O
+            | egui::Key::R
+            | egui::Key::Comma
+            | egui::Key::F
+            | egui::Key::Q
+            | egui::Key::X
+            | egui::Key::C
+            | egui::Key::V
+            | egui::Key::A
+            | egui::Key::Z
+            | egui::Key::H
+            | egui::Key::M
+            | egui::Key::W => true,
+            egui::Key::I => m.shift,
+            _ => false,
+        }
+}
 impl Default for CommandBindings {
     fn default() -> Self {
         Self {
@@ -81,6 +105,11 @@ impl CommandBindings {
                 return Err("Gespeicherte Tastenkürzel sind mehrfach vergeben".into());
             }
         }
+        if candidate.iter().any(|(_, s)| s.is_some_and(reserved)) {
+            return Err(
+                "Gespeichertes Kürzel ist für ein Anwendungs- oder Textmenü reserviert".into(),
+            );
+        }
         self.bindings = candidate;
         Ok(())
     }
@@ -120,7 +149,11 @@ impl CommandBindings {
                     || (command == Command::PlayVideo && key == egui::Key::Space)
                 {
                     let shortcut = egui::KeyboardShortcut::new(modifiers, key);
-                    if self
+                    if reserved(shortcut) {
+                        self.error =
+                            "Dieses Kürzel ist für ein Anwendungs- oder Textmenü reserviert."
+                                .into();
+                    } else if self
                         .bindings
                         .iter()
                         .any(|(c, s)| *c != command && *s == Some(shortcut))
@@ -198,5 +231,29 @@ mod tests {
         let shortcut = bindings.export()["play_video"].clone().unwrap();
         assert_eq!(shortcut.key, "Space");
         assert!(!shortcut.alt && !shortcut.command && !shortcut.ctrl);
+    }
+}
+
+#[cfg(test)]
+mod menu_shortcut_tests {
+    use super::*;
+    #[test]
+    fn reserved_menu_shortcuts_are_rejected_without_losing_existing_bindings() {
+        let mut bindings = CommandBindings::default();
+        let before = bindings.export();
+        let mut saved = before.clone();
+        saved.insert(
+            "rotate_left".into(),
+            Some(photosuite_application::preferences::Shortcut {
+                key: "O".into(),
+                alt: false,
+                ctrl: false,
+                shift: false,
+                command: true,
+                mac_cmd: false,
+            }),
+        );
+        assert!(bindings.restore(&saved).unwrap_err().contains("reserviert"));
+        assert_eq!(bindings.export(), before);
     }
 }

@@ -101,6 +101,25 @@ pub fn navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Respo
     .on_hover_text(label)
 }
 
+/// Loading indicators occupy one third of the image's shorter edge.
+pub fn image_spinner(ui: &egui::Ui, rect: egui::Rect) {
+    let side = rect.width().min(rect.height()) / 3.;
+    egui::Spinner::new().paint_at(
+        ui,
+        egui::Rect::from_center_size(rect.center(), egui::vec2(side, side)),
+    );
+}
+pub fn paint_image(ui: &mut egui::Ui, image: egui::Image<'_>, rect: egui::Rect) {
+    let pending = matches!(
+        image.load_for_size(ui.ctx(), rect.size()),
+        Ok(egui::load::TexturePoll::Pending { .. })
+    );
+    image.show_loading_spinner(false).paint_at(ui, rect);
+    if pending {
+        image_spinner(ui, rect);
+    }
+}
+
 #[cfg(test)]
 pub fn assert_text_glyphs(ctx: &egui::Context, text: &egui::epaint::TextShape) {
     for section in &text.galley.job.sections {

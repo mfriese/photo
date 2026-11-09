@@ -13,6 +13,7 @@ PhotoSuite öffnet vorhandene Fotoordner als übersichtliche Galerie. Keine Clou
 
 | Funktion | Verhalten |
 | --- | --- |
+| **Native Menüs** | PhotoSuite, File, Edit, View, Window und Help über muda; Aktionen und Tastenkürzel zentral verbunden. |
 | **Fotowand** | Virtualisiertes Raster mit fünf Größenstufen, gleichmäßig gefüllten Zeilen und quadratischem Beschnitt oder vollständigem Seitenverhältnis. |
 | **In der Sammlung navigieren** | Aufklappbare Jahre, Monatsauswahl, Dateinamens-/Pfadsuche und Videofilter. |
 | **Großansicht** | Zentrierte Fotos, Pfeiltastennavigation und zwei feste Kontrollzeilen oberhalb des Bildes. |
@@ -21,7 +22,12 @@ PhotoSuite öffnet vorhandene Fotoordner als übersichtliche Galerie. Keine Clou
 | **Ausrichtung korrigieren** | EXIF inklusive Spiegelungen; manuelles Drehen zunächst nur für die Sitzung. Optional JPEG-EXIF ohne Neukompression speichern. |
 | **Kontrolliert importieren** | Prüflauf mit einem kompakten Ergebnis pro Datei, zuschaltbaren Arbeitsschritten, metadatenbasierten Zielnamen und Kollisionsprüfung. |
 | **Kollisionsduplikate prüfen** | Vollständiger Pixelvergleich geeigneter Bilder, jeweils eine Gruppe mit ausdrücklicher Entscheidung. |
-| **Einstellungen behalten** | Anzeige, Filter, Tastenkürzel, Schreibmodus und letzter Bibliothekspfad in macOS-Preferences. |
+| **Tags und Alben** | Dateien mehreren Tags zuordnen; Tags als virtuelle Alben anzeigen. Gesamter Katalog im Speicher, Speicherung als YAML in der Bibliothek. |
+| **Einstellungen behalten** | Anzeige, Filter, Tastenkürzel und Schreibmodus pro Bibliothek als YAML; nur der letzte Bibliothekspfad bleibt lokal. |
+
+Die obere Buttonsammlung ist durch native Menüs ersetzt. Ein zusätzlicher Kopfbereich entfällt vollständig. **Edit → Find… (⌘F)** öffnet die Suche als Dialog; die Vorschaugröße steht unter **View → Thumbnail Size**, der Bibliothekspfad im Fenstertitel. **File** öffnet/aktualisiert/importiert, **Edit** bietet Bildbefehle, Textbearbeitung und Tags, **View** die Anzeigeoptionen. **PhotoSuite → Settings…** öffnet die Einstellungen.
+
+Die Anwendung bleibt ein macOS-Prototyp: muda unterstützt weitere Systeme, aber die gesamte App ist damit noch nicht portiert. Windows-Menüanbindung ist vorbereitet und ungetestet; Linux/BSD benötigt für muda einen GTK-Fensterhost, den unser eframe-Host bisher nicht bietet. Es gibt keine Ersatz-Menüleiste.
 
 ## Das neue Galeriedesign
 
@@ -60,15 +66,41 @@ Es gibt noch keinen veröffentlichten Homebrew-Cask und keinen Mac-App-Store-Dow
 
 ## Erste Schritte
 
-1. **„Ordner öffnen …“** wählen und eine Fotosammlung öffnen. Der aktive Pfad steht oben und im Fenstertitel.
+1. **File → Open Library…** wählen und eine Fotosammlung öffnen. Der aktive Pfad steht im Fenstertitel.
 2. Ein zunächst eingeklapptes Jahr öffnen, einen Monat auswählen oder über das Suchfeld filtern.
 3. Ein Foto anklicken. **← / →** wechseln das Medium, **Escape** schließt die Großansicht. **Leertaste** startet bei Videos den nativen Player.
-4. Unter **„Ansicht“** Vorschaugröße, quadratischen Beschnitt und Seitenleiste einstellen.
-5. **„Einstellungen …“** beziehungsweise **⌘,** öffnet die Preferences. Beim nächsten Start wird die letzte Bibliothek automatisch wieder geöffnet, sofern diese Option aktiviert bleibt.
+4. Unter **View** Vorschaugröße, quadratischen Beschnitt und Seitenleiste einstellen.
+5. **PhotoSuite → Settings…** beziehungsweise **⌘,** öffnet die Preferences. Beim nächsten Start wird die letzte Bibliothek automatisch wieder geöffnet, sofern diese Option aktiviert bleibt.
 
-Die XML-Einstellungen liegen unter `~/Library/Preferences/de.photosuite.PhotoSuite.settings.plist`, getrennt vom macOS-eigenen App-Preferences-Domain. Vorhandene Einstellungen aus `de.photosuite.PhotoSuite.plist` werden beim ersten Start übernommen; die alte Datei bleibt erhalten. Das gemerkte Bibliotheksverzeichnis wird beim Start wieder geöffnet. macOS-Zusatzargumente, fehlgeschlagene Startpfade und Importe in andere Ziele ersetzen diese Auswahl nicht.
+Die Einstellungen liegen als lesbare **`photosuite.yaml` direkt im Hauptverzeichnis der jeweiligen Bibliothek**. Gespeichert werden Vorschaugröße und -form, Seitenleiste, Videofilter, EXIF-Schreibmodus, Startoption und Tastenkürzel. Beim Bibliothekswechsel werden deren eigene Werte geladen. Nur der zuletzt geöffnete Bibliothekspfad bleibt lokal unter `~/Library/Preferences/de.photosuite.PhotoSuite.library.plist`. Er steht nicht in der YAML-Datei und reist nicht mit der Sammlung mit.
 
-„Nur Lesen“ in der Fußzeile bedeutet: Das Betrachten und die Sitzungskorrekturen verändern deine Dateien nicht.
+Vorhandene `de.photosuite.PhotoSuite.settings.plist` und das frühere App-Domain bleiben als Migrationsquellen erhalten. Fehlt einer Bibliothek die YAML-Datei, werden bisherige Einstellungen übernommen und beim Laden/Speichern im neuen Format abgelegt. Einstellungen werden im Hintergrund geschrieben; schnelle Bibliothekswechsel erhalten auch noch ausstehende Änderungen der vorherigen Bibliothek. Schreibfehler erscheinen in Fußzeile und Einstellungsdialog. Defekte, unbekannte oder verlinkte Einstellungsdateien werden nicht überschrieben. Auf schreibgeschützten Bibliotheken gelten Änderungen nur in der Sitzung. Medien bleiben unverändert; die Verwaltungsdatei ist die ausdrückliche Ausnahme zum Nur-Lesen-Modus.
+
+„Originale: Nur Lesen“ in der Fußzeile bezieht sich auf die Mediendateien. `photosuite.yaml` wird als Verwaltungsdatei auch in diesem Modus gespeichert.
+
+## Tags und virtuelle Alben
+
+**„Tags & Alben …“** links öffnet die Verwaltung. Einen Tag anlegen, Dateien zuordnen und bei Bedarf **„Album“** aktivieren: Der Tag erscheint dann als Album in der linken Liste. Tags können umbenannt und entfernt werden; die Mediendateien bleiben immer erhalten. Mehrere Tags je Datei sind möglich. In einem Album funktionieren Suche, Videofilter, Vorschaugrößen und Großansicht weiter. Audiozuordnungen sind ebenfalls unterstützt; ein Audioklick öffnet den bestehenden Jahresplayer. Beim Browsen im Bildbetrachter werden Audioeinträge übersprungen.
+
+Eine Datei über **Rechtsklick → „Tags bearbeiten …“** markieren: das funktioniert in Fotowand und Diary-Raster. In der Großansicht gibt es zusätzlich **„Tags …“** oberhalb des Bildes. Häkchen ordnen die Datei einem Tag zu oder entfernen nur diese Zuordnung. In der Verwaltung zeigt **„Anzeigen“** auch nicht als Album markierte Tags als Filter. „Alle Erinnerungen“, ein Jahr/Monat oder „Filter aufheben“ führt zurück zur normalen Navigation.
+
+Der vollständige Katalog liegt als **`photosuite-tags.yaml` im Hauptverzeichnis der Bibliothek**:
+
+```yaml
+version: 1
+tags:
+  Urlaub:
+    - 2023/08/img_20230816_153000.jpg
+    - 2023/08/img_20230816_153500.mp4
+  Familie:
+    - 2023/08/img_20230816_153000.jpg
+albums:
+  - Urlaub
+```
+
+Relative Pfade unterscheiden gleichnamige Dateien verschiedener Jahre/Monate und erlauben, die Bibliothek als Ganzes zu verschieben. Alle Zuordnungen werden einmal im Hintergrund geladen und vollständig im Speicher gehalten; Albumfilter lesen keine Dateien oder EXIF nach. Für noch nicht geladene Albumjahre wird die Bibliotheksladung priorisiert. Speichern läuft im Hintergrund; wartende Zwischenstände werden zum neuesten vollständigen Katalog zusammengefasst. Fehler erscheinen im Dialog und in der Fußzeile; während ungespeicherter Tagänderungen wird ein Bibliothekswechsel verhindert. Mit „Erneut speichern“ oder bewusstem „Nicht gespeicherte Änderungen verwerfen“ lässt sich der Zustand auflösen. Beim normalen Beenden wird der neueste angenommene Stand gespeichert.
+
+Die App verschiebt, kopiert oder löscht für Tags keine Originale und schreibt keine Tags in EXIF. Gelöschte/extern umbenannte Dateien behalten ihre Zuordnungen als Verweise; fehlende oder noch nicht gescannte Dateien sind im Album nicht sichtbar. Keine automatische Suche nach beliebigen gleichnamigen Ersatzdateien. Manuelle YAML-Änderungen bei geschlossener App vornehmen oder danach **„Datei neu laden“** verwenden. Vorhandene externe Änderungen, ungültige YAML-Dateien und unbekannte Versionen werden nicht still überschrieben. Der erste Entwurf bietet Einzeldatei-Zuweisung, keine Mehrfachauswahl, automatische Tag-Erkennung oder manuelle Albumreihenfolge. Kataloggrenze: 32 MiB YAML; keine globale Sperre zwischen mehreren App-Instanzen. Fotos, Videos und Audio bleiben unverändert.
 
 ## Import und Umgang mit Originalen
 
@@ -151,6 +183,7 @@ make check-architecture
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+make test-native # Audio-/Videotransport mit kontrollierten Testmedien
 make test-audio  # Nativer Schnellstart, Korrekturen und Wiedergabe mit stummen Testdateien
 cargo build --workspace
 python3 -m unittest discover -s scripts -p 'test_*.py'
@@ -204,3 +237,11 @@ Jahres-/Monatsansichten verwenden zunächst Ordner und Endungen, ohne jedes MP4/
 Dateien wie `._aud_…wav` sind gewöhnlich macOS-AppleDouble-Begleitdateien für Zusatzmetadaten auf Dateisystemen wie exFAT. Sie sind von importereigenen `.photosuite-import-….tmp`-Dateien zu unterscheiden. PhotoSuite berücksichtigt `._`-Begleitdateien weder als Medien noch als Importquellen und löscht sie nicht automatisch. Andere versteckte, echte Medien bleiben unterstützt.
 
 Eigene Stagingdateien werden nach regulären Fehlern, Abbruch und dem exFAT-Ersatzweg ausdrücklich und mit Identitätsprüfung entfernt. Schlägt diese Bereinigung fehl, nennt das Importprotokoll den vollständigen Temp-Pfad und gegebenenfalls den bereits vollständig geprüften Zielstand. Fehlgeschlagene Aufräumvorgänge werden nicht stillschweigend als erfolgreicher Import gemeldet. Nach Abstürzen oder erzwungenem Beenden können weiterhin Überreste bleiben; vorhandene fremde Dateien werden nicht automatisch bereinigt.
+
+
+Die Startkonfiguration wird ebenfalls im Hintergrund gelesen; ein nicht verfügbares altes Laufwerk blockiert die Fenstererstellung nicht. Explizite Startpfade und manuell gewählte Bibliotheken haben Vorrang. Für Kollisionsduplikate gilt eine Grenze von 100.000 Paarvergleichen pro Gruppe; größere Gruppen werden ohne Dekodieren/Entfernen mit einem Fehler abgewiesen. Der aktuelle [Architekturreview](docs/ARCHITECTURE_REVIEW.md) dokumentiert Schichtentrennung, Ressourcenregeln, Korrekturen und verbleibende Grenzen.
+
+### Kompakte Audioleiste
+Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: Play/Pause, anklickbare/ziehbare Zeitachse und „Mehr“. Der Start bevorzugt eine Aufnahme des ausgewählten Monats. Graue Abschnitte werden im Hintergrund geprüft und anschließend proportional zur echten Dauer blau angezeigt. Während einer laufenden Vorbereitung kann keine weitere Jahresvorbereitung gestartet werden.
+
+„Mehr → Playerfenster öffnen“ zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.

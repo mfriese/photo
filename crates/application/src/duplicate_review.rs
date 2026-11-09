@@ -118,7 +118,7 @@ impl ReviewSession {
         let mut events = Vec::new();
         let mut disconnected = false;
         if let Some(job) = &self.job {
-            loop {
+            for _ in 0..128 {
                 match job.receiver.try_recv() {
                     Ok(e) => events.push(e),
                     Err(mpsc::TryRecvError::Empty) => break,

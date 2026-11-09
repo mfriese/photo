@@ -65,7 +65,16 @@ impl super::Suite {
                         .size(12.)
                         .color(theme::MUTED),
                 );
+                self.compact_audio(ui);
                 ui.add_space(6.);
+                if let Some(tag) = self.tag_view.active.clone() {
+                    ui.horizontal(|ui| {
+                        ui.strong(format!("Tag: {tag}"));
+                        if ui.small_button("Filter aufheben").clicked() {
+                            self.tag_view.active = None;
+                        }
+                    });
+                }
                 if visible.is_empty() && !self.collection.is_loading() {
                     ui.add_space(16.);
                     ui.label(
@@ -85,8 +94,12 @@ impl super::Suite {
                 let columns = ((width + gap) / (target + gap)).floor().max(1.) as usize;
                 let tile = ((width - gap * (columns - 1) as f32) / columns as f32).max(1.);
                 let row_height = tile + 24.;
-                let mut scroll =
-                    egui::ScrollArea::vertical().id_salt(("photo_wall", &self.root, &self.group));
+                let mut scroll = egui::ScrollArea::vertical().id_salt((
+                    "photo_wall",
+                    &self.root,
+                    &self.group,
+                    &self.tag_view.active,
+                ));
                 if let Some(path) = self.scroll_to_photo.take()
                     && let Some(position) = visible
                         .iter()
@@ -110,7 +123,9 @@ impl super::Suite {
                                     let m = &self.items[index];
                                     ui.vertical(|ui| {
                                         ui.set_width(tile);
-                                        let response = {
+                                        let response = if m.is_audio() {
+                                            super::diary::audio_preview(ui, tile)
+                                        } else {
                                             let mut image = egui::Image::from_uri(preview_uri(
                                                 m.path(),
                                                 self.editor.rotations(),
@@ -164,7 +179,11 @@ impl super::Suite {
                                                     texture.size * scale,
                                                 );
                                             }
-                                            image.corner_radius(8).paint_at(ui, paint_rect);
+                                            theme::paint_image(
+                                                ui,
+                                                image.corner_radius(8),
+                                                paint_rect,
+                                            );
                                             let highlighted =
                                                 self.highlighted_photo.as_deref() == Some(m.path());
                                             if response.hovered() || highlighted {
@@ -198,11 +217,30 @@ impl super::Suite {
                                             }
                                             response.on_hover_cursor(egui::CursorIcon::PointingHand)
                                         };
+                                        response.context_menu(|ui| {
+                                            if ui.button("Tags bearbeiten …").clicked() {
+                                                match self.organization.file(m.path()) {
+                                                    Ok(file) => self.tag_view.edit(file),
+                                                    Err(error) => self.status = error,
+                                                }
+                                                ui.close();
+                                            }
+                                        });
                                         if response
                                             .on_hover_text(m.path().display().to_string())
                                             .clicked()
                                         {
-                                            self.selected = Some(index);
+                                            if m.is_audio() {
+                                                if let Err(error) = self.diary.start(
+                                                    &self.items,
+                                                    m,
+                                                    self.services.audio_source.clone(),
+                                                ) {
+                                                    self.status = error;
+                                                }
+                                            } else {
+                                                self.selected = Some(index);
+                                            }
                                         }
                                         ui.add(
                                             egui::Label::new(

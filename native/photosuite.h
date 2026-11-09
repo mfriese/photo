@@ -33,3 +33,10 @@ void photosuite_audio_context_caption(unsigned long long session, unsigned long 
 
 // Main thread; consumes at most one click. IDs ensure the slot still belongs to this selection.
 int photosuite_audio_context_click(unsigned long long *session, unsigned long long *request, unsigned int *slot);
+
+// Main-thread shared transport. showWindow=0 starts without displaying/focusing a window.
+int photosuite_audio_open_mode(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *year,const char *selected,unsigned long long *session,int showWindow);
+// Flags: 1 active (also when hidden), 2 wants play, 4 loading/seeking, 8 failed. Civil time may be NAN.
+int photosuite_audio_transport_state(unsigned long long session,double *fraction,double *civil);
+// Commands: 0 toggle, 1 seek normalized [0,1], 2 show existing window, 3 stop.
+int photosuite_audio_control(unsigned long long session,int command,double fraction);

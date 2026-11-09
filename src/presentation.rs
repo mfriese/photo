@@ -1,6 +1,9 @@
+mod audio_header;
+mod chrome;
 mod diary;
 mod library;
-mod toolbar;
+mod menu;
+mod tags;
 mod viewer;
 mod wall;
 use crate::domain::Media;
@@ -9,12 +12,21 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc;
 pub struct Suite {
+    native_menu: Option<Box<dyn crate::desktop_menu::DesktopMenu>>,
+    focus_search: bool,
+    search_open: bool,
+    help_open: bool,
+    audio_header: audio_header::AudioHeader,
+    organization: photosuite_application::organization::OrganizationSession,
+    tag_view: tags::TagView,
     diary: photosuite_application::diary::DiarySession,
     diary_catalog: photosuite_application::diary::DiaryCatalog,
     remember_after_scan: bool,
     storyboard: crate::storyboard_ui::StoryboardView,
     preferences: photosuite_application::preferences::Preferences,
     persistence: Option<photosuite_application::preferences::Persistence>,
+    library_settings: photosuite_application::preferences::LibrarySettings,
+    startup: Option<photosuite_application::preferences::StartupPreferences>,
     preferences_error: String,
     options_open: bool,
     import_panel: crate::import_ui::ImportPanel,
@@ -41,10 +53,6 @@ impl Suite {
         self.load_path(path, true);
     }
     fn load_path(&mut self, path: PathBuf, remember: bool) {
-        self.storyboard.clear();
-        self.diary_catalog.cancel();
-        self.remember_after_scan = !remember;
-        self.diary.cancel();
         let path = if path.is_absolute() {
             path
         } else {
@@ -52,6 +60,28 @@ impl Suite {
                 .map(|cwd| cwd.join(&path))
                 .unwrap_or(path)
         };
+        if self.root.as_ref() != Some(&path) || self.organization.catalog().is_none() {
+            if let Err(error) = self.organization.open(path.clone()) {
+                self.status = error;
+                self.tag_view.open = true;
+                return;
+            }
+            self.tag_view.clear_scope();
+        }
+        self.persist_preferences();
+        self.preferences.library_scope = None;
+        self.storyboard.clear();
+        self.diary_catalog.cancel();
+        self.remember_after_scan = !remember;
+        if self.root.as_ref() != Some(&path) {
+            let _ = self
+                .services
+                .audio_player
+                .control(photosuite_application::diary::AudioControl::Stop);
+            self.diary.cancel();
+        }
+        self.library_settings
+            .request(self.services.preferences.clone(), path.clone());
         self.collection
             .request(self.services.repository.clone(), path.clone());
         if remember {
@@ -94,6 +124,55 @@ impl Suite {
             Err(error) => self.status = error,
         }
     }
+    fn settings_ready(&self) -> bool {
+        self.startup.is_none() && !self.library_settings.is_loading()
+    }
+    fn poll_startup(&mut self, ctx: &egui::Context) {
+        let Some(startup) = self.startup.as_mut() else {
+            return;
+        };
+        let Some(outcome) = startup.poll() else {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            return;
+        };
+        self.startup = None;
+        if self.root.is_none() {
+            let (mut preferences, mut error) = match outcome.result {
+                Ok((p, warning)) => (p, warning.unwrap_or_default()),
+                Err(error) => (
+                    Default::default(),
+                    format!("Einstellungen konnten nicht geladen werden: {error}"),
+                ),
+            };
+            let mut bindings = crate::command_bindings::CommandBindings::default();
+            if let Err(binding_error) = bindings.restore(&preferences.shortcuts) {
+                preferences.library_scope = None;
+                error = binding_error;
+            }
+            self.bindings = bindings;
+            self.apply_preferences(preferences);
+            self.preferences_error = error;
+        }
+        let snapshot = self.snapshot();
+        if let Some(persistence) = &mut self.persistence {
+            persistence.update(snapshot);
+        } else {
+            self.persistence = Some(photosuite_application::preferences::Persistence::new(
+                self.services.preferences.clone(),
+                snapshot,
+            ));
+        }
+        if self.root.is_some() {
+            self.persist_location();
+        } else {
+            self.persistence.as_mut().unwrap().flush_current();
+            if let Some(path) = self.preferences.startup_library(outcome.arguments) {
+                self.load_path(path, false);
+            } else {
+                self.status = "Bereit".into();
+            }
+        }
+    }
     fn snapshot(&self) -> photosuite_application::preferences::Preferences {
         let mut p = self.preferences.clone();
         p.preview_size = self.size;
@@ -113,6 +192,14 @@ impl Suite {
         self.preferences = p;
     }
     fn settings(&mut self, ctx: &egui::Context) {
+        if !self.settings_ready() {
+            egui::Window::new("Einstellungen")
+                .open(&mut self.options_open)
+                .show(ctx, |ui| {
+                    ui.label("Einstellungen werden geladen …");
+                });
+            return;
+        }
         let mut p = self.snapshot();
         crate::options_ui::show(
             ctx,
@@ -123,6 +210,44 @@ impl Suite {
             &self.preferences_error,
         );
         self.apply_preferences(p);
+        self.persist_preferences();
+    }
+    fn poll_library_settings(&mut self, ctx: &egui::Context) {
+        if let Some((root, result)) = self.library_settings.poll()
+            && self.root.as_ref() == Some(&root)
+        {
+            match result {
+                Ok(loaded) => {
+                    let mut preferences = loaded.unwrap_or_default();
+                    preferences.last_library = self.preferences.last_library.clone();
+                    preferences.library_scope = Some(root);
+                    let mut bindings = crate::command_bindings::CommandBindings::default();
+                    match bindings.restore(&preferences.shortcuts) {
+                        Ok(()) => {
+                            self.bindings = bindings;
+                            self.apply_preferences(preferences);
+                            self.preferences_error.clear();
+                            self.persist_preferences();
+                        }
+                        Err(error) => self.preferences_error = error,
+                    }
+                }
+                Err(error) => {
+                    self.preferences_error =
+                        format!("Bibliotheks-Einstellungen konnten nicht geladen werden: {error}")
+                }
+            }
+        }
+        if self.library_settings.is_loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+    fn persist_location(&mut self) {
+        let mut location = self.snapshot();
+        location.library_scope = None;
+        if let Some(persistence) = &mut self.persistence {
+            persistence.update(location);
+        }
         self.persist_preferences();
     }
     fn persist_preferences(&mut self) {
@@ -136,6 +261,19 @@ impl Suite {
         }
     }
     fn visible(&self) -> Vec<usize> {
+        if let Some(tag) = &self.tag_view.active {
+            return match (self.organization.root(), self.organization.catalog()) {
+                (Some(root), Some(catalog)) => photosuite_application::organization::visible(
+                    &self.items,
+                    &self.query,
+                    self.videos_only,
+                    root,
+                    catalog,
+                    tag,
+                ),
+                _ => Vec::new(),
+            };
+        }
         crate::application::visible(
             &self.items,
             &self.query,
@@ -146,6 +284,11 @@ impl Suite {
 }
 impl eframe::App for Suite {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.poll_startup(ctx);
+        self.organization.poll();
+        if self.organization.loading() || self.organization.saving() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.diary_catalog.poll();
         if self.diary_catalog.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -178,13 +321,20 @@ impl eframe::App for Suite {
         if self.editor.is_saving() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        let mut pending = self.bindings.shortcuts(
-            ctx,
-            self.selected.is_some()
-                && !self.editor.is_saving()
-                && !self.options_open
-                && !self.import_panel.visible,
-        );
+        let mut pending = if self.native_menu.is_some() {
+            Vec::new()
+        } else {
+            self.bindings.shortcuts(
+                ctx,
+                self.selected.is_some()
+                    && !self.editor.is_saving()
+                    && !self.options_open
+                    && !self.import_panel.visible
+                    && !self.tag_view.open
+                    && self.settings_ready(),
+            )
+        };
+        self.poll_library_settings(ctx);
         if let Some(result) = self.collection.poll() {
             match result {
                 Ok(collection) => {
@@ -198,7 +348,7 @@ impl eframe::App for Suite {
                         && (collection.unreadable == 0 || !self.items.is_empty())
                     {
                         self.preferences.last_library = Some(collection.root);
-                        self.persist_preferences();
+                        self.persist_location();
                     }
                 }
                 Err(error) => self.status = error,
@@ -206,21 +356,36 @@ impl eframe::App for Suite {
             self.remember_after_scan = false;
         }
         if self.collection.is_loading() {
+            if let (Some(tag), Some(catalog)) = (&self.tag_view.active, self.organization.catalog())
+                && catalog.tags().contains_key(tag)
+            {
+                let years = catalog.partitions(tag);
+                if let Some(year) = years.into_iter().rev().find(|year| {
+                    self.collection.years().iter().any(|y| y == year)
+                        && !self.collection.partition_loaded(year)
+                }) {
+                    self.collection.prioritize(year);
+                }
+            }
             self.status = format!(
                 "{} Medien geladen · Weitere Jahre werden gelesen …",
                 self.items.len()
             );
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        if ctx.input_mut(|i| {
-            i.consume_shortcut(&egui::KeyboardShortcut::new(
-                egui::Modifiers::COMMAND,
-                egui::Key::Comma,
-            ))
-        }) {
+        if self.native_menu.is_none()
+            && ctx.input_mut(|i| {
+                i.consume_shortcut(&egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND,
+                    egui::Key::Comma,
+                ))
+            })
+        {
             self.options_open = true;
         }
-        self.toolbar(ctx);
+        self.poll_menu(ctx);
+        self.window_title(ctx);
+        self.search_dialog(ctx);
         self.status_bar(ctx);
         self.library_sidebar(ctx);
         let visible = self.visible();
@@ -233,8 +398,19 @@ impl eframe::App for Suite {
         for command in pending {
             self.execute(command, ctx);
         }
+        let previous_tag = self.tag_view.active.clone();
+        self.tag_view.show(ctx, &mut self.organization);
+        if self.tag_view.active != previous_tag {
+            self.group = None;
+            self.selected = None;
+            self.scroll_to_photo = None;
+            self.highlighted_photo = None;
+            self.storyboard.clear();
+        }
         self.bindings.show(ctx);
         self.settings(ctx);
+        self.help(ctx);
+        self.poll_menu(ctx);
         if let Some(path) = self.import_panel.show(
             ctx,
             self.services.importer.clone(),
@@ -257,31 +433,31 @@ impl Suite {
     }
 }
 
-pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Services) -> Suite {
+pub fn create(
+    cc: &eframe::CreationContext<'_>,
+    services: crate::application::Services,
+    menu: Box<dyn crate::desktop_menu::DesktopMenu>,
+) -> Suite {
     egui_extras::install_image_loaders(&cc.egui_ctx);
     cc.egui_ctx.add_image_loader(std::sync::Arc::new(
         crate::image_loader::OrientedLoader::new(services.decoder.clone()),
     ));
     crate::theme::install(&cc.egui_ctx);
-    let (preferences, mut preferences_error) = match services.preferences.load() {
-        Ok(p) => (p, String::new()),
-        Err(error) => (
-            Default::default(),
-            format!("Einstellungen konnten nicht geladen werden: {error}"),
-        ),
-    };
-    let mut bindings = crate::command_bindings::CommandBindings::default();
-    if let Err(error) = bindings.restore(&preferences.shortcuts) {
-        preferences_error = error;
-    }
-    let mut persistence = Some(photosuite_application::preferences::Persistence::new(
+    let preferences = photosuite_application::preferences::Preferences::default();
+    let startup = photosuite_application::preferences::StartupPreferences::new(
         services.preferences.clone(),
-        preferences.clone(),
-    ));
-    if let Some(persistence) = &mut persistence {
-        persistence.flush_current();
-    }
-    let mut app = Suite {
+        std::env::args_os().skip(1).collect(),
+    );
+    Suite {
+        native_menu: Some(menu),
+        focus_search: false,
+        search_open: false,
+        help_open: false,
+        audio_header: Default::default(),
+        organization: photosuite_application::organization::OrganizationSession::new(
+            services.organization.clone(),
+        ),
+        tag_view: Default::default(),
         diary: photosuite_application::diary::DiarySession::with_priority(
             services.work_priority.clone(),
         ),
@@ -291,17 +467,22 @@ pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Se
         remember_after_scan: false,
         storyboard: Default::default(),
         preferences: preferences.clone(),
-        persistence,
-        preferences_error,
+        persistence: Some(photosuite_application::preferences::Persistence::new(
+            services.preferences.clone(),
+            preferences.clone(),
+        )),
+        library_settings: Default::default(),
+        startup: Some(startup),
+        preferences_error: String::new(),
         options_open: false,
         import_panel: Default::default(),
-        bindings,
+        bindings: Default::default(),
         write_exif: preferences.write_exif,
         editor: Default::default(),
         size: preferences.preview_size,
         square_previews: preferences.square_previews,
         show_library: preferences.show_library,
-        status: "Bereit".into(),
+        status: "Start-Einstellungen werden geladen …".into(),
         services,
         root: None,
         items: Vec::new(),
@@ -312,11 +493,7 @@ pub fn create(cc: &eframe::CreationContext<'_>, services: crate::application::Se
         scroll_to_photo: None,
         collection: Default::default(),
         videos_only: preferences.videos_only,
-    };
-    if let Some(path) = preferences.startup_library(std::env::args_os().skip(1)) {
-        app.load_path(path, false);
     }
-    app
 }
 
 fn image_uri(path: &std::path::Path, rotations: &std::collections::HashMap<PathBuf, u8>) -> String {

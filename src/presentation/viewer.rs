@@ -9,6 +9,7 @@ impl super::Suite {
     ) {
         if let Some(index) = self.selected {
             if !self.options_open
+                && !self.tag_view.open
                 && !self.bindings.visible
                 && ctx.input(|i| i.key_pressed(egui::Key::Escape))
             {
@@ -28,16 +29,33 @@ impl super::Suite {
                 .show(ctx, |ui| {
                     crate::options_ui::spacing(ui);
                     let m = &self.items[index];
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(
-                                m.path().file_name().unwrap_or_default().to_string_lossy(),
+                    ui.horizontal(|ui| {
+                        if ui.button("Tags …").clicked() {
+                            match self.organization.file(m.path()) {
+                                Ok(file) => self.tag_view.edit(file),
+                                Err(error) => self.status = error,
+                            }
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(
+                                    m.path().file_name().unwrap_or_default().to_string_lossy(),
+                                )
+                                .strong(),
                             )
-                            .strong(),
+                            .truncate(),
                         )
-                        .truncate(),
-                    )
-                    .on_hover_text(m.path().display().to_string());
+                        .on_hover_text(m.path().display().to_string())
+                        .context_menu(|ui| {
+                            if ui.button("Tags bearbeiten …").clicked() {
+                                match self.organization.file(m.path()) {
+                                    Ok(file) => self.tag_view.edit(file),
+                                    Err(error) => self.status = error,
+                                }
+                                ui.close();
+                            }
+                        });
+                    });
                     let actions = viewer_controls(
                         ui,
                         m.is_video(),
@@ -71,8 +89,10 @@ impl super::Suite {
                         );
                     }
                 });
-            next |= ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
-            previous |= ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            if !self.tag_view.open {
+                next |= ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
+                previous |= ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+            }
             if let Some(p) = position {
                 if next && p + 1 < visible.len() {
                     self.selected = Some(visible[p + 1]);
@@ -218,7 +238,16 @@ fn centered_preview(ui: &mut egui::Ui, image: egui::Image<'_>) -> egui::Response
         .show(ui, |ui| {
             ui.set_min_width(size.x);
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                ui.add(image.max_size(size).maintain_aspect_ratio(true))
+                let image = image.max_size(size).maintain_aspect_ratio(true);
+                let pending = matches!(
+                    image.load_for_size(ui.ctx(), size),
+                    Ok(egui::load::TexturePoll::Pending { .. })
+                );
+                let response = ui.add(image.show_loading_spinner(false));
+                if pending {
+                    crate::theme::image_spinner(ui, response.rect);
+                }
+                response
             })
             .inner
         })
@@ -234,7 +263,11 @@ impl super::Suite {
         {
             crate::application::visible(&self.items, "", Some(self.items[index].group()), false)
         } else {
-            visible.to_vec()
+            visible
+                .iter()
+                .copied()
+                .filter(|&index| !self.items[index].is_audio())
+                .collect()
         }
     }
 }

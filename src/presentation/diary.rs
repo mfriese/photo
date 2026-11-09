@@ -4,7 +4,7 @@ fn columns(width: f32, zoom: usize) -> usize {
     let desired = [10, 8, 6, 5, 4][zoom.min(4)];
     desired.min(((width + 8.) / 86.).floor().max(1.) as usize)
 }
-fn audio_preview(ui: &mut egui::Ui, size: f32) -> egui::Response {
+pub(super) fn audio_preview(ui: &mut egui::Ui, size: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     ui.painter().rect_filled(rect, 8., theme::RAISED);
     let levels = [0.24, 0.48, 0.72, 1., 0.60, 0.82, 0.42, 0.24];
@@ -55,6 +55,7 @@ impl super::Suite {
         let mut chosen = None;
         egui::CentralPanel::default().frame(theme::panel(theme::CANVAS,12)).show(ctx,|ui| {
             ui.heading(format!("Diary · {year}"));
+            self.compact_audio(ui);
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!ordered.is_empty()&&!self.diary.is_loading(),egui::Button::new("Jahresverlauf öffnen")).clicked(){chosen=ordered.first().copied();}
                 if self.diary.is_loading()&&ui.button("Laden abbrechen").clicked(){self.diary.cancel();}
@@ -82,7 +83,9 @@ impl super::Suite {
                                     Some(Err(error))=>("Datum fehlt".into(),"Nicht verfügbar".into(),format!("{}\n{error}",media.path().display())),
                                     None=>("Datum wird geladen".into(),String::new(),media.path().display().to_string()),
                                 };
-                                if audio_preview(ui,tile).on_hover_text(&detail).clicked(){chosen=Some(index);}
+                                let response=audio_preview(ui,tile).on_hover_text(&detail);
+                                response.context_menu(|ui|{if ui.button("Tags bearbeiten …").clicked(){match self.organization.file(media.path()){Ok(file)=>self.tag_view.edit(file),Err(error)=>self.status=error}ui.close();}});
+                                if response.clicked(){chosen=Some(index);}
                                 ui.add_sized([tile,18.],egui::Label::new(egui::RichText::new(day).size(12.).color(theme::TEXT)).truncate()).on_hover_text(&detail);
                                 ui.add_sized([tile,18.],egui::Label::new(egui::RichText::new(clock).size(12.).color(theme::MUTED)).truncate()).on_hover_text(detail);
                             });
@@ -115,6 +118,7 @@ impl super::Suite {
             match crate::application::locate_photo(&self.items, &path) {
                 Ok(location) => {
                     self.group = location.year;
+                    self.tag_view.active = None;
                     self.query.clear();
                     self.videos_only = false;
                     self.selected = None;

@@ -7,7 +7,7 @@ use std::{
     path::Path,
 };
 unsafe extern "C" {
-    fn photosuite_audio_open(
+    fn photosuite_audio_open_mode(
         paths: *const *const c_char,
         labels: *const *const c_char,
         weights: *const f64,
@@ -18,6 +18,7 @@ unsafe extern "C" {
         year: *const c_char,
         selected: *const c_char,
         session: *mut u64,
+        show_window: i32,
     ) -> i32;
     fn photosuite_audio_revise(
         session: u64,
@@ -93,14 +94,19 @@ impl NativeLayout {
         }
         Ok(layout)
     }
-    pub(super) fn open(&self, year: &str, selected: &Path) -> Result<u64, String> {
+    pub(super) fn open(
+        &self,
+        year: &str,
+        selected: &Path,
+        show_window: bool,
+    ) -> Result<u64, String> {
         let year = CString::new(year).map_err(|e| e.to_string())?;
         let selected = CString::new(selected.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
         let paths: Vec<_> = self.paths.iter().map(|s| s.as_ptr()).collect();
         let labels: Vec<_> = self.labels.iter().map(|s| s.as_ptr()).collect();
         let mut session = 0;
         let status = unsafe {
-            photosuite_audio_open(
+            photosuite_audio_open_mode(
                 paths.as_ptr(),
                 labels.as_ptr(),
                 self.weights.as_ptr(),
@@ -111,6 +117,7 @@ impl NativeLayout {
                 year.as_ptr(),
                 selected.as_ptr(),
                 &mut session,
+                i32::from(show_window),
             )
         };
         if status == 0 {

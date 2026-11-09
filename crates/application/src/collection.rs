@@ -53,6 +53,11 @@ impl CollectionSession {
     pub fn years(&self) -> &[String] {
         &self.years
     }
+    pub fn partition_loaded(&self, year: &str) -> bool {
+        self.active
+            .as_ref()
+            .is_none_or(|active| active.priority.lock().unwrap().completed.contains(year))
+    }
     pub fn prioritize(&mut self, year: &str) {
         if !self.years.iter().any(|y| y == year) {
             return;

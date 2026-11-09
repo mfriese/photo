@@ -7,7 +7,7 @@ use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc,
     },
@@ -41,8 +41,63 @@ struct Request {
     id: u64,
     civil: i64,
 }
+#[derive(Default)]
+struct RequestState {
+    latest: Option<Request>,
+    closed: bool,
+}
+#[derive(Default)]
+struct Requests {
+    state: Mutex<RequestState>,
+    wake: Condvar,
+}
+impl Requests {
+    fn send(&self, request: Request) {
+        let mut state = self.state.lock().unwrap();
+        state.latest = Some(request);
+        self.wake.notify_one();
+    }
+    fn try_recv(&self) -> Result<Request, mpsc::TryRecvError> {
+        let mut state = self.state.lock().unwrap();
+        state.latest.take().ok_or(if state.closed {
+            mpsc::TryRecvError::Disconnected
+        } else {
+            mpsc::TryRecvError::Empty
+        })
+    }
+    fn recv(&self) -> Result<Request, mpsc::RecvError> {
+        let mut state = self.state.lock().unwrap();
+        while state.latest.is_none() && !state.closed {
+            state = self.wake.wait(state).unwrap();
+        }
+        state.latest.take().ok_or(mpsc::RecvError)
+    }
+    fn recv_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Request, mpsc::RecvTimeoutError> {
+        let state = self.state.lock().unwrap();
+        let (mut state, _) = self
+            .wake
+            .wait_timeout_while(state, timeout, |state| {
+                state.latest.is_none() && !state.closed
+            })
+            .unwrap();
+        state.latest.take().ok_or(if state.closed {
+            mpsc::RecvTimeoutError::Disconnected
+        } else {
+            mpsc::RecvTimeoutError::Timeout
+        })
+    }
+    fn close(&self) {
+        let mut state = self.state.lock().unwrap();
+        state.closed = true;
+        state.latest = None;
+        self.wake.notify_all();
+    }
+}
 pub struct PhotoContext {
-    sender: Option<mpsc::Sender<Request>>,
+    requests: Arc<Requests>,
     receiver: mpsc::Receiver<PhotoEvent>,
     stop: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
@@ -58,8 +113,9 @@ impl PhotoContext {
         candidates: Vec<PathBuf>,
         priority: Arc<crate::work_priority::WorkPriority>,
     ) -> Self {
-        let (sender, requests) = mpsc::channel::<Request>();
-        let (events, receiver) = mpsc::channel();
+        let sender = Arc::new(Requests::default());
+        let requests = sender.clone();
+        let (events, receiver) = mpsc::sync_channel(16);
         let stop = Arc::new(AtomicBool::new(false));
         let generation = Arc::new(AtomicU64::new(0));
         let halted = stop.clone();
@@ -287,7 +343,7 @@ impl PhotoContext {
             }
         });
         Self {
-            sender: Some(sender),
+            requests: sender,
             receiver,
             stop,
             generation,
@@ -301,12 +357,10 @@ impl PhotoContext {
         }
         self.ended = false;
         self.generation.store(id, Ordering::Relaxed);
-        if let Some(sender) = &self.sender {
-            let _ = sender.send(Request {
-                id,
-                civil: civil.floor() as i64,
-            });
-        }
+        self.requests.send(Request {
+            id,
+            civil: civil.floor() as i64,
+        });
     }
     /// Resolve a clicked slot only against the current published selection.
     pub fn photo_at(&self, request: u64, slot: usize) -> Option<PathBuf> {
@@ -358,7 +412,7 @@ impl PhotoContext {
 impl Drop for PhotoContext {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        self.sender.take();
+        self.requests.close();
     }
 }
 
@@ -497,6 +551,35 @@ mod tests {
         assert!(second.iter().any(|event| matches!(event, PhotoEvent::Selection { request: 2, photos, .. } if photos[2].as_ref().unwrap().captured().stamp() == "20231227_225140")));
         assert!(source.reads.load(Ordering::SeqCst) <= 1);
         source.release.store(true, Ordering::SeqCst);
+    }
+    #[test]
+    fn repeated_seek_requests_replace_waiting_targets_while_metadata_is_blocked() {
+        let source = Arc::new(Source::default());
+        source.blocked.store(true, Ordering::SeqCst);
+        let mut context = PhotoContext::new(source.clone(), paths());
+        context.request(1, time(0));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while source.dates.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        for id in 2..=10_000 {
+            context.request(id, time(4));
+        }
+        source.release.store(true, Ordering::SeqCst);
+        let events = wait(&mut context, 3);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            PhotoEvent::Selection {
+                request: 10_000,
+                ..
+            }
+        )));
+        assert!(events.iter().all(|event| match event {
+            PhotoEvent::Selection { request, .. }
+            | PhotoEvent::Image { request, .. }
+            | PhotoEvent::Failed { request, .. } => *request == 10_000,
+        }));
     }
     struct BrokenSource;
     impl ContextPhotoSource for BrokenSource {

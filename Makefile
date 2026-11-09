@@ -15,3 +15,10 @@ test-audio:
 .PHONY: check-architecture
 check-architecture:
 	python3 scripts/check_architecture.py
+
+.PHONY: test-video test-menu test-native
+test-video:
+	python3 scripts/check_native_video.py
+test-menu:
+	python3 scripts/check_native_menu.py
+test-native: test-audio test-video test-menu

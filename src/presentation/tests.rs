@@ -138,18 +138,49 @@ impl photosuite_application::import_cleanup::CleanupPort for UnusedAdapters {
         panic!("layout must not trash files")
     }
 }
+impl photosuite_application::organization::CatalogRepository for UnusedAdapters {
+    fn load(
+        &self,
+        _: &std::path::Path,
+    ) -> Result<photosuite_application::organization::StoredCatalog, String> {
+        Ok(photosuite_application::organization::StoredCatalog {
+            catalog: Default::default(),
+            revision: None,
+        })
+    }
+    fn save(
+        &self,
+        _: &std::path::Path,
+        _: &crate::domain::tags::TagCatalog,
+        _: Option<&[u8]>,
+    ) -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+}
 fn test_suite() -> Suite {
     let adapters = Arc::new(UnusedAdapters);
     Suite {
+        native_menu: None,
+        focus_search: false,
+        search_open: false,
+        help_open: false,
+        audio_header: Default::default(),
+        organization: photosuite_application::organization::OrganizationSession::new(
+            adapters.clone(),
+        ),
+        tag_view: Default::default(),
         diary: Default::default(),
         diary_catalog: Default::default(),
         remember_after_scan: false,
         storyboard: Default::default(),
         preferences: Default::default(),
         persistence: None,
+        library_settings: Default::default(),
+        startup: None,
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            organization: adapters.clone(),
             work_priority: Default::default(),
             import_cleanup: adapters.clone(),
             audio_source: adapters.clone(),
@@ -319,7 +350,7 @@ fn gallery_theme_fits_small_and_large_windows() {
                         ..Default::default()
                     },
                     |ctx| {
-                        suite.toolbar(ctx);
+                        suite.window_title(ctx);
                         suite.status_bar(ctx);
                         suite.library_sidebar(ctx);
                         suite.photo_wall(ctx, &(0..suite.items.len()).collect::<Vec<_>>());
@@ -453,7 +484,7 @@ fn diary_file_view_remains_readable_at_supported_widths() {
                 ..Default::default()
             },
             |ctx| {
-                suite.toolbar(ctx);
+                suite.window_title(ctx);
                 suite.status_bar(ctx);
                 suite.library_sidebar(ctx);
                 suite.photo_wall(ctx, &[0]);
@@ -494,7 +525,7 @@ fn diary_file_view_remains_readable_at_supported_widths() {
     }
 }
 #[test]
-fn toolbar_text_stays_inside_narrow_and_wide_windows() {
+fn title_and_footer_stay_compact_without_a_header_panel() {
     for width in [360., 600., 1280.] {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
@@ -512,8 +543,19 @@ fn toolbar_text_stays_inside_narrow_and_wide_windows() {
                 ..Default::default()
             },
             |ctx| {
-                suite.toolbar(ctx);
+                let top = ctx.available_rect().top();
+                suite.window_title(ctx);
+                assert_eq!(
+                    ctx.available_rect().top(),
+                    top,
+                    "window title must not reserve a header"
+                );
                 suite.status_bar(ctx);
+                assert_eq!(
+                    ctx.available_rect().top(),
+                    top,
+                    "footer must not reserve a header"
+                );
             },
         );
         let mut text_count = 0;
@@ -533,7 +575,8 @@ fn toolbar_text_stays_inside_narrow_and_wide_windows() {
                 );
             }
         }
-        assert!(text_count > 3);
+        assert!(text_count >= 1);
+        assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|command|matches!(command,egui::ViewportCommand::Title(title) if title.contains("Meine Sammlung"))));
     }
 }
 
@@ -770,4 +813,531 @@ fn sidebar_months_are_compact_and_clickable_across_full_column_width() {
             "full-width month hit target at {width}"
         );
     }
+}
+
+#[test]
+fn library_switch_restores_yaml_and_keeps_previous_edits_in_previous_library() {
+    use photosuite_application::preferences::{Persistence, Preferences, PreferencesStore};
+    struct Empty;
+    impl crate::ports::MediaRepository for Empty {
+        fn scan(&self, _: &std::path::Path) -> (Vec<Media>, usize) {
+            (Vec::new(), 0)
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let a = directory.path().join("a");
+    let b = directory.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let legacy_path = directory.path().join("prefs.plist");
+    let store = Arc::new(crate::library_preferences_fs::LibraryPreferences::new(
+        crate::library_preferences_fs::LibraryPreferences::locator_path(&legacy_path),
+        Arc::new(crate::preferences_fs::PlistPreferences::at(legacy_path)),
+    ));
+    store
+        .save(&Preferences {
+            preview_size: 0,
+            show_library: false,
+            library_scope: Some(a.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    store
+        .save(&Preferences {
+            preview_size: 4,
+            square_previews: false,
+            library_scope: Some(b.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut suite = test_suite();
+    suite.services.repository = Arc::new(Empty);
+    suite.services.preferences = store.clone();
+    suite.persistence = Some(Persistence::new(store.clone(), suite.snapshot()));
+    let ctx = egui::Context::default();
+    let wait = |suite: &mut Suite| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while suite.library_settings.is_loading() {
+            suite.poll_library_settings(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    };
+    suite.load(a.clone());
+    wait(&mut suite);
+    assert_eq!(suite.size, 0);
+    assert!(!suite.show_library);
+    suite.size = 1;
+    suite.persist_preferences();
+    suite.load(b.clone());
+    wait(&mut suite);
+    assert_eq!(suite.size, 4);
+    assert!(!suite.square_previews);
+    assert!(suite.show_library);
+    drop(suite.persistence.take());
+    assert_eq!(store.load_library(&a).unwrap().unwrap().preview_size, 1);
+    assert_eq!(store.load_library(&b).unwrap().unwrap().preview_size, 4);
+    assert_eq!(store.load().unwrap().last_library, Some(b));
+}
+
+#[test]
+fn tag_album_click_filters_gallery_and_preserves_original_year_navigation() {
+    use photosuite_application::organization::Action;
+    let mut suite = test_suite();
+    suite.root = Some("/Fotos".into());
+    suite.organization.open("/Fotos".into()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while suite.organization.loading() {
+        suite.organization.poll();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    suite.items = vec![
+        Media::from_path("/Fotos/2023/01/a.jpg".into(), "2023/01".into()).unwrap(),
+        Media::from_path("/Fotos/2024/01/a.jpg".into(), "2024/01".into()).unwrap(),
+        Media::from_path("/Fotos/2023/diary/a.wav".into(), "2023/diary".into()).unwrap(),
+    ];
+    let file = suite.organization.file(suite.items[0].path()).unwrap();
+    suite
+        .organization
+        .apply(Action::Create {
+            name: "Urlaub".into(),
+            file: Some(file),
+        })
+        .unwrap();
+    suite
+        .organization
+        .apply(Action::Album {
+            tag: "Urlaub".into(),
+            enabled: true,
+        })
+        .unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    ctx.style_mut(|style| style.animation_time = 0.);
+    let input = |events| egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(800., 600.),
+        )),
+        events,
+        ..Default::default()
+    };
+    let output = ctx.run(input(vec![]), |ctx| suite.library_sidebar(ctx));
+    let target = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Urlaub" => {
+                Some(text.visual_bounding_rect().center())
+            }
+            _ => None,
+        })
+        .expect("album in sidebar");
+    let _ = ctx.run(
+        input(vec![
+            egui::Event::PointerMoved(target),
+            egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: target,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]),
+        |ctx| suite.library_sidebar(ctx),
+    );
+    assert_eq!(suite.tag_view.active.as_deref(), Some("Urlaub"));
+    suite.videos_only = false;
+    assert_eq!(suite.visible(), vec![0]);
+    suite.tag_view.active = None;
+    suite.group = Some("2024".into());
+    assert_eq!(suite.visible(), vec![1]);
+}
+#[test]
+fn tag_dialog_fits_narrow_windows_and_mixed_albums_do_not_send_audio_to_image_viewer() {
+    use photosuite_application::organization::Action;
+    for width in [360., 600., 1280.] {
+        let mut suite = test_suite();
+        suite.organization.open("/Fotos".into()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while suite.organization.loading() {
+            suite.organization.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        suite
+            .organization
+            .apply(Action::Create {
+                name: "Familienurlaub Sommer".into(),
+                file: None,
+            })
+            .unwrap();
+        suite.tag_view.open = true;
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| suite.tag_view.show(ctx, &mut suite.organization),
+            );
+            for shape in output.shapes {
+                if let egui::Shape::Text(text) = shape.shape {
+                    crate::theme::assert_text_glyphs(&ctx, &text);
+                    if text.galley.job.text.is_empty() {
+                        continue;
+                    }
+                    let rect = text.visual_bounding_rect();
+                    assert!(
+                        rect.left() >= -1. && rect.right() <= width + 1.,
+                        "tag dialog overflows {width}: {} {rect:?}",
+                        text.galley.job.text
+                    );
+                }
+            }
+        }
+        suite.items = vec![
+            Media::from_path("/Fotos/2023/01/a.jpg".into(), "2023/01".into()).unwrap(),
+            Media::from_path("/Fotos/2023/diary/a.wav".into(), "2023/diary".into()).unwrap(),
+        ];
+        suite.selected = Some(0);
+        assert_eq!(suite.viewer_items(&[0, 1]), vec![0]);
+    }
+}
+
+#[test]
+fn tag_checkbox_assigns_and_removes_the_current_file() {
+    use photosuite_application::organization::Action;
+    let mut suite = test_suite();
+    suite.organization.open("/Fotos".into()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while suite.organization.loading() {
+        suite.organization.poll();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    suite
+        .organization
+        .apply(Action::Create {
+            name: "Urlaub".into(),
+            file: None,
+        })
+        .unwrap();
+    let file = suite
+        .organization
+        .file(std::path::Path::new("/Fotos/2023/01/a.jpg"))
+        .unwrap();
+    suite.tag_view.edit(file);
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    ctx.style_mut(|style| style.animation_time = 0.);
+    let input = |events| egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(800., 600.),
+        )),
+        events,
+        ..Default::default()
+    };
+    let mut output = ctx.run(input(vec![]), |ctx| {
+        suite.tag_view.show(ctx, &mut suite.organization)
+    });
+    // First frame can be used by egui for automatic window sizing.
+    if !output.shapes.iter().any(
+        |shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="Urlaub"),
+    ) {
+        output = ctx.run(input(vec![]), |ctx| {
+            suite.tag_view.show(ctx, &mut suite.organization)
+        });
+    }
+    let target = output
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "Urlaub" => {
+                Some(text.visual_bounding_rect().center())
+            }
+            _ => None,
+        })
+        .unwrap();
+    for assigned in [true, false] {
+        let _ = ctx.run(
+            input(vec![
+                egui::Event::PointerMoved(target),
+                egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: target,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]),
+            |ctx| suite.tag_view.show(ctx, &mut suite.organization),
+        );
+        assert_eq!(
+            suite
+                .organization
+                .catalog()
+                .unwrap()
+                .contains("Urlaub", "2023/01/a.jpg"),
+            assigned
+        );
+    }
+}
+
+#[test]
+fn delayed_startup_never_overwrites_a_manually_opened_library_or_its_settings() {
+    use photosuite_application::preferences::{
+        Persistence, Preferences, PreferencesStore, StartupPreferences,
+    };
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct Slow {
+        entered: AtomicBool,
+        release: AtomicBool,
+        saved: Mutex<Vec<Preferences>>,
+    }
+    impl PreferencesStore for Slow {
+        fn load(&self) -> Result<Preferences, String> {
+            unreachable!()
+        }
+        fn load_for_startup(
+            &self,
+            _: Option<&std::path::Path>,
+        ) -> Result<(Preferences, Option<String>), String> {
+            self.entered.store(true, Ordering::SeqCst);
+            while !self.release.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            Ok((
+                Preferences {
+                    preview_size: 4,
+                    last_library: Some("/Old".into()),
+                    ..Default::default()
+                },
+                None,
+            ))
+        }
+        fn load_library(&self, _: &std::path::Path) -> Result<Option<Preferences>, String> {
+            Ok(Some(Preferences {
+                preview_size: 1,
+                ..Default::default()
+            }))
+        }
+        fn save(&self, p: &Preferences) -> Result<(), String> {
+            self.saved.lock().unwrap().push(p.clone());
+            Ok(())
+        }
+    }
+    struct Empty;
+    impl crate::ports::MediaRepository for Empty {
+        fn scan(&self, _: &std::path::Path) -> (Vec<Media>, usize) {
+            (Vec::new(), 0)
+        }
+    }
+    let store = Arc::new(Slow {
+        entered: AtomicBool::new(false),
+        release: AtomicBool::new(false),
+        saved: Mutex::new(Vec::new()),
+    });
+    let mut suite = test_suite();
+    suite.services.preferences = store.clone();
+    suite.services.repository = Arc::new(Empty);
+    suite.persistence = Some(Persistence::new(store.clone(), Preferences::default()));
+    suite.startup = Some(StartupPreferences::new(store.clone(), Vec::new()));
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    suite.poll_startup(&ctx);
+    assert!(!suite.settings_ready());
+    suite.load("/Chosen".into());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while suite.library_settings.is_loading() {
+        suite.poll_library_settings(&ctx);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(suite.size, 1);
+    store.release.store(true, Ordering::SeqCst);
+    while suite.startup.is_some() {
+        suite.poll_startup(&ctx);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(suite.root.as_deref(), Some(std::path::Path::new("/Chosen")));
+    assert_eq!(suite.size, 1);
+    drop(suite.persistence.take());
+    let saved = store.saved.lock().unwrap();
+    assert_eq!(
+        saved
+            .iter()
+            .rfind(|p| p.library_scope.is_none())
+            .unwrap()
+            .last_library
+            .as_deref(),
+        Some(std::path::Path::new("/Chosen"))
+    );
+}
+
+#[derive(Default)]
+struct MenuHarness {
+    queued: std::sync::Mutex<Vec<crate::desktop_menu::Action>>,
+    entries: std::sync::Mutex<Vec<crate::desktop_menu::Entry>>,
+}
+struct TestMenu(Arc<MenuHarness>);
+impl crate::desktop_menu::DesktopMenu for TestMenu {
+    fn sync(&mut self, entries: &[crate::desktop_menu::Entry]) -> Result<(), String> {
+        *self.0.entries.lock().unwrap() = entries.to_vec();
+        Ok(())
+    }
+    fn drain(&mut self) -> Vec<crate::desktop_menu::Action> {
+        std::mem::take(&mut *self.0.queued.lock().unwrap())
+    }
+}
+#[test]
+fn native_menu_actions_share_editing_dispatch_and_revalidate_modal_state() {
+    use crate::commands::Command;
+    use crate::desktop_menu::Action;
+    let ctx = egui::Context::default();
+    let mut suite = test_suite();
+    suite.write_exif = false;
+    suite.items = vec![
+        Media::from_path(
+            "/library/2023/01/img_20230101_120000.jpg".into(),
+            "2023/01".into(),
+        )
+        .unwrap(),
+    ];
+    suite.selected = Some(0);
+    let state = Arc::new(MenuHarness::default());
+    suite.native_menu = Some(Box::new(TestMenu(state.clone())));
+    *state.queued.lock().unwrap() = vec![Action::Edit(Command::RotateRight)];
+    let _ = ctx.run(egui::RawInput::default(), |ctx| suite.poll_menu(ctx));
+    assert_eq!(
+        suite.editor.rotations().get(suite.items[0].path()),
+        Some(&1)
+    );
+    // A queued Settings activation blocks subsequent edit events from the same batch.
+    *state.queued.lock().unwrap() = vec![Action::Settings, Action::Edit(Command::RotateRight)];
+    let _ = ctx.run(egui::RawInput::default(), |ctx| suite.poll_menu(ctx));
+    assert!(suite.options_open);
+    assert_eq!(
+        suite.editor.rotations().get(suite.items[0].path()),
+        Some(&1)
+    );
+}
+#[test]
+fn native_menu_updates_view_checks_and_focuses_search() {
+    use crate::desktop_menu::Action;
+    let ctx = egui::Context::default();
+    let mut suite = test_suite();
+    let state = Arc::new(MenuHarness::default());
+    suite.native_menu = Some(Box::new(TestMenu(state.clone())));
+    let original = suite.square_previews;
+    *state.queued.lock().unwrap() =
+        vec![Action::ToggleSquare, Action::PreviewSize(4), Action::Find];
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        suite.poll_menu(ctx);
+        suite.window_title(ctx);
+        suite.search_dialog(ctx);
+        suite.poll_menu(ctx);
+    });
+    assert_eq!(suite.square_previews, !original);
+    assert_eq!(suite.size, 4);
+    let entries = state.entries.lock().unwrap();
+    assert_eq!(
+        entries
+            .iter()
+            .find(|e| e.action == Action::ToggleSquare)
+            .unwrap()
+            .checked,
+        Some(!original)
+    );
+    assert!(
+        !entries
+            .iter()
+            .find(|e| matches!(e.action, Action::Edit(_)))
+            .unwrap()
+            .enabled
+    );
+    assert!(ctx.memory(|m| m.has_focus(egui::Id::new("library_search"))));
+}
+
+#[test]
+fn native_text_menu_selects_search_text_and_requests_clipboard_without_rotating_photos() {
+    use crate::desktop_menu::Action;
+    let ctx = egui::Context::default();
+    let mut suite = test_suite();
+    suite.query = "Sommerurlaub".into();
+    suite.focus_search = true;
+    suite.search_open = true;
+    let state = Arc::new(MenuHarness::default());
+    suite.native_menu = Some(Box::new(TestMenu(state.clone())));
+    for _ in 0..2 {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            suite.window_title(ctx);
+            suite.search_dialog(ctx);
+            suite.poll_menu(ctx);
+        });
+    }
+    *state.queued.lock().unwrap() = vec![Action::SelectAll, Action::Copy];
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        suite.poll_menu(ctx);
+        suite.search_dialog(ctx);
+    });
+    let text = egui::TextEdit::load_state(&ctx, egui::Id::new("library_search")).unwrap();
+    let [start, end] = text.cursor.char_range().unwrap().sorted_cursors();
+    assert_eq!((start.index, end.index), (0, suite.query.chars().count()));
+    assert!(
+        output.viewport_output[&egui::ViewportId::ROOT]
+            .commands
+            .contains(&egui::ViewportCommand::RequestCopy)
+    );
+    assert!(suite.editor.rotations().is_empty());
+}
+
+#[test]
+fn closing_search_preserves_filter_and_releases_text_focus() {
+    let ctx = egui::Context::default();
+    let mut suite = test_suite();
+    suite.query = "Urlaub".into();
+    suite.search_open = true;
+    suite.focus_search = true;
+    for _ in 0..2 {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| suite.search_dialog(ctx));
+    }
+    assert!(ctx.memory(|m| m.has_focus(egui::Id::new("library_search"))));
+    let _ = ctx.run(
+        egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |ctx| suite.search_dialog(ctx),
+    );
+    assert!(!suite.search_open);
+    assert_eq!(suite.query, "Urlaub");
+    assert!(!ctx.memory(|m| m.has_focus(egui::Id::new("library_search"))));
 }

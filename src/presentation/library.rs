@@ -6,6 +6,7 @@ impl super::Suite {
             return;
         }
         let previous_group = self.group.clone();
+        let previous_tag = self.tag_view.active.clone();
         egui::SidePanel::left("albums")
             .default_width(180.).min_width(120.).max_width((ctx.content_rect().width() * 0.4).clamp(120., 260.))
             .frame(theme::panel(theme::SURFACE, 8))
@@ -17,13 +18,13 @@ impl super::Suite {
                 ui.add_space(2.);
                 ui.strong("Mediathek");
                 ui.add_space(2.);
-                if theme::navigation(ui, self.group.is_none(), "Alle Erinnerungen").clicked() {
+                if theme::navigation(ui, self.group.is_none() && self.tag_view.active.is_none(), "Alle Erinnerungen").clicked() {
                     self.group = None;
+                    self.tag_view.active = None;
                 }
 
+                if theme::navigation(ui, self.tag_view.open, "Tags & Alben …").clicked() { self.tag_view.open=true;self.tag_view.file=None; }
                 ui.add_space(8.);
-                theme::eyebrow(ui, "Jahre");
-                ui.add_space(2.);
                 let mut years = self.collection.groups().clone();
                 // Tests and a manually supplied collection may have no loading session.
                 if years.is_empty() {
@@ -38,23 +39,30 @@ impl super::Suite {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
+                    let albums:Vec<_>=self.organization.catalog().map(|catalog|catalog.albums().iter().cloned().collect()).unwrap_or_default();
+                    if !albums.is_empty(){
+                        theme::eyebrow(ui,"Alben");
+                        for album in albums {if theme::navigation(ui,self.tag_view.active.as_ref()==Some(&album),&album).clicked(){self.tag_view.active=Some(album);self.group=None;}}
+                        ui.add_space(6.);
+                    }
+                    theme::eyebrow(ui,"Jahre");ui.add_space(2.);
                     for (year, months) in years.into_iter().rev() {
                         let response = egui::CollapsingHeader::new(egui::RichText::new(&year).size(14.).strong())
                             .id_salt((&self.root, &year)).default_open(false)
                             .open((self.scroll_to_photo.is_some() && self.group.as_deref()==Some(year.as_str())).then_some(true))
                             .show(ui, |ui| {
                                 if theme::navigation(ui, self.group.as_ref() == Some(&year), "Ganzes Jahr").clicked() {
-                                    self.group = Some(year.clone());
+                                    self.group = Some(year.clone());self.tag_view.active=None;
                                 }
                                 let diary = format!("{year}/diary");
                                 if theme::navigation(ui, self.group.as_ref() == Some(&diary), "Diary").clicked() {
-                                    self.group = Some(diary);
+                                    self.group = Some(diary);self.tag_view.active=None;
                                 }
                                 for g in months {
                                     if g == year || crate::domain::diary::diary_year(&g).is_some() { continue; }
                                     let label = g.strip_prefix(&format!("{year}/")).unwrap_or(&g);
                                     if theme::navigation(ui, self.group.as_ref() == Some(&g), month_label(label)).clicked() {
-                                        self.group = Some(g);
+                                        self.group = Some(g);self.tag_view.active=None;
                                     }
                                 }
                             });
@@ -62,7 +70,7 @@ impl super::Suite {
                             && egui::collapsing_header::CollapsingState::load(ctx, response.header_response.id)
                                 .is_some_and(|state| state.is_open()) {
                             self.collection.prioritize(&year);
-                            self.group = Some(year.clone());
+                            self.group = Some(year.clone());self.tag_view.active=None;
                         }
                         ui.add_space(2.);
                     }
@@ -71,12 +79,11 @@ impl super::Suite {
                     }
                 });
             });
-        if self.group != previous_group {
+        if self.group != previous_group || self.tag_view.active != previous_tag {
             self.selected = None;
             self.highlighted_photo = None;
             self.scroll_to_photo = None;
             self.storyboard.clear();
-            self.diary.cancel();
             self.diary_catalog.cancel();
         }
     }

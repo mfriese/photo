@@ -105,7 +105,17 @@ pub fn discover(repo: Arc<dyn MediaRepository>, library: PathBuf) -> Job {
 pub fn compare(adapter: Arc<dyn DuplicateImages>, group: CollisionGroup) -> Job {
     job(move |tx, cancel| {
         let mut pairs = Vec::new();
-        let total = group.files.len() * group.files.len().saturating_sub(1) / 2;
+        const MAX_PAIRS: usize = 100_000;
+        let Some(total) = group
+            .files
+            .len()
+            .checked_mul(group.files.len().saturating_sub(1))
+            .map(|n| n / 2)
+            .filter(|n| *n <= MAX_PAIRS)
+        else {
+            let _=tx.send(Event::Failed("Kollisionsgruppe ist zu groß (mehr als 100.000 Paarvergleiche); keine Datei wird entfernt. Gruppe zuerst aufteilen.".into()));
+            return;
+        };
         for a in 0..group.files.len() {
             for b in a + 1..group.files.len() {
                 if cancel.load(Ordering::Relaxed) {
@@ -162,8 +172,8 @@ pub fn remove(
         let _ = tx.send(Event::Removed(results));
     })
 }
-fn job(task: impl FnOnce(mpsc::Sender<Event>, Arc<AtomicBool>) + Send + 'static) -> Job {
-    let (tx, receiver) = mpsc::channel();
+fn job(task: impl FnOnce(mpsc::SyncSender<Event>, Arc<AtomicBool>) + Send + 'static) -> Job {
+    let (tx, receiver) = mpsc::sync_channel(32);
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
     std::thread::spawn(move || task(tx, stop));
@@ -200,6 +210,24 @@ mod tests {
         ) -> Result<(), String> {
             panic!("comparison must never remove files")
         }
+    }
+    #[test]
+    fn oversized_collision_groups_fail_before_decoding_or_removing_any_file() {
+        let adapter = Arc::new(Adapter(Mutex::new(Vec::new())));
+        let group = CollisionGroup {
+            name: "oversized".into(),
+            files: (0..450)
+                .map(|n| PathBuf::from(format!("{n}.jpg")))
+                .collect(),
+        };
+        let job = compare(adapter.clone(), group);
+        assert!(matches!(
+            job.receiver
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap(),
+            Event::Failed(_)
+        ));
+        assert!(adapter.0.lock().unwrap().is_empty());
     }
     #[test]
     fn every_pair_is_compared_and_review_is_explicit() {

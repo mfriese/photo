@@ -31,31 +31,96 @@ impl AudioPlayer for NativeAudioPlayer {
         selected: &Path,
         photos: &[crate::domain::Media],
     ) -> Result<(), String> {
+        self.open_mode(timeline, selected, photos, true)
+    }
+    fn open_embedded(
+        &self,
+        timeline: &DiaryTimeline,
+        selected: &Path,
+        photos: &[crate::domain::Media],
+    ) -> Result<(), String> {
+        self.open_mode(timeline, selected, photos, false)
+    }
+    fn transport(&self) -> photosuite_application::diary::AudioTransportSnapshot {
         #[cfg(target_os = "macos")]
         {
-            let session =
-                projection::NativeLayout::new(timeline, &VerificationProgress::default())?
-                    .open(timeline.year(), selected)?;
-            self.session
-                .store(session, std::sync::atomic::Ordering::Relaxed);
-            let candidates = photos
-                .iter()
-                .filter(|p| p.is_photo())
-                .map(|p| p.path().to_owned())
-                .collect();
-            *self.context.lock().unwrap() = Some(
-                photosuite_application::photo_context::PhotoContext::with_priority(
-                    self.source.clone(),
-                    candidates,
-                    self.priority.clone(),
-                ),
-            );
-            Ok(())
+            unsafe extern "C" {
+                fn photosuite_audio_transport_state(
+                    session: u64,
+                    fraction: *mut f64,
+                    civil: *mut f64,
+                ) -> i32;
+            }
+            let mut fraction = 0.;
+            let mut civil = f64::NAN;
+            let flags = unsafe {
+                photosuite_audio_transport_state(
+                    self.session.load(std::sync::atomic::Ordering::Relaxed),
+                    &mut fraction,
+                    &mut civil,
+                )
+            };
+            photosuite_application::diary::AudioTransportSnapshot {
+                active: flags & 1 != 0,
+                playing: flags & 2 != 0,
+                loading: flags & 4 != 0,
+                failed: flags & 8 != 0,
+                fraction: if fraction.is_finite() {
+                    fraction.clamp(0., 1.)
+                } else {
+                    0.
+                },
+                current_date: if civil.is_finite() {
+                    crate::domain::CaptureTime::from_civil_seconds(
+                        civil.floor() as i64,
+                        "Audiowiedergabe",
+                    )
+                    .ok()
+                } else {
+                    None
+                },
+            }
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (timeline, selected, photos);
-            Err("Audioplayer derzeit nur unter macOS verfügbar".into())
+            Default::default()
+        }
+    }
+    fn control(&self, command: photosuite_application::diary::AudioControl) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            use photosuite_application::diary::AudioControl;
+            unsafe extern "C" {
+                fn photosuite_audio_control(session: u64, command: i32, fraction: f64) -> i32;
+            }
+            let (command, fraction) = match command {
+                AudioControl::Toggle => (0, 0.),
+                AudioControl::Seek(fraction) => {
+                    if !fraction.is_finite() {
+                        return Err("Ungültige Audioposition".into());
+                    }
+                    (1, fraction.clamp(0., 1.))
+                }
+                AudioControl::ShowWindow => (2, 0.),
+                AudioControl::Stop => (3, 0.),
+            };
+            if unsafe {
+                photosuite_audio_control(
+                    self.session.load(std::sync::atomic::Ordering::Relaxed),
+                    command,
+                    fraction,
+                )
+            } == 0
+            {
+                Ok(())
+            } else {
+                Err("Audio-Sitzung nicht verfügbar".into())
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = command;
+            Err("Audiosteuerung nur unter macOS verfügbar".into())
         }
     }
     fn revise(
@@ -315,6 +380,45 @@ impl AudioPlayer for NativeAudioPlayer {
         #[cfg(not(target_os = "macos"))]
         {
             Default::default()
+        }
+    }
+}
+
+impl NativeAudioPlayer {
+    fn open_mode(
+        &self,
+        timeline: &DiaryTimeline,
+        selected: &Path,
+        photos: &[crate::domain::Media],
+        show_window: bool,
+    ) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            let session = projection::NativeLayout::new(
+                timeline,
+                &VerificationProgress::default(),
+            )?
+            .open(timeline.year(), selected, show_window)?;
+            self.session
+                .store(session, std::sync::atomic::Ordering::Relaxed);
+            let candidates = photos
+                .iter()
+                .filter(|p| p.is_photo())
+                .map(|p| p.path().to_owned())
+                .collect();
+            *self.context.lock().unwrap() = Some(
+                photosuite_application::photo_context::PhotoContext::with_priority(
+                    self.source.clone(),
+                    candidates,
+                    self.priority.clone(),
+                ),
+            );
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (timeline, selected, photos);
+            Err("Audioplayer derzeit nur unter macOS verfügbar".into())
         }
     }
 }

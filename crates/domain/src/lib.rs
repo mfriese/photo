@@ -145,3 +145,5 @@ pub mod audio_date;
 pub mod photo_context;
 
 pub mod diary_timeline;
+
+pub mod tags;

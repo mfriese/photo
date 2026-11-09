@@ -148,6 +148,24 @@ int main(int argc,char **argv) {
         [controller.transport openPath:PSAudioPath(argv[1]) fraction:0 offset:0];[controller shutdown];pump(0.1);
         assert(!controller.transport.player.currentItem && controller.transport.player.rate==0);
         assert(photosuite_audio_state(42)==0 && photosuite_audio_context_state(&session,&request,&civil)==0);
+        // Embedded playback and the separate window share one transport.
+        unsigned long long embedded=0;
+        assert(photosuite_audio_open_mode(paths,labels,weights,dates,durations,states,2,"2023",argv[2],&embedded,0)==0);
+        PSAudioController *compact=PSAudio;assert(!compact.window.visible);
+        loaded(compact);NSDate *started=[NSDate dateWithTimeIntervalSinceNow:5];
+        while(!compact.transport.hasStarted){pump(0.02);[compact tick:nil];assert(started.timeIntervalSinceNow>0);}
+        assert(photosuite_audio_control(embedded,0,0)==0);
+        AVPlayerItem *shared=compact.transport.player.currentItem;
+        double position=0,currentDate=0;
+        assert(photosuite_audio_transport_state(embedded,&position,&currentDate)&1);
+        assert(photosuite_audio_control(embedded,2,0)==0 && compact.window.visible);
+        assert(compact.transport.player.currentItem==shared);
+        [compact.window performClose:nil];pump(0.02);
+        assert(!compact.window.visible && compact.transport.player.currentItem==shared);
+        assert(photosuite_audio_transport_state(embedded,&position,&currentDate)&1);
+        assert(photosuite_audio_control(embedded,1,0.5)==0);loaded(compact);
+        assert(photosuite_audio_control(embedded,3,0)==0);
+        assert(!compact.transport.player.currentItem && photosuite_audio_state(embedded)==0);
         puts("Native audio: provisional weights/colors, real playback, in-place reorder, position preservation, seeks, corrected auto-advance, photo clicks and cancellation OK");
     }
     return 0;

@@ -75,7 +75,7 @@ static unsigned long long PSNextPhotoSession=0;
     for(PSContextPhotoSlot *slot in self.contextPhotos.slots)slot.image=nil;
     [self.timer invalidate];self.timer=nil;[self.transport shutdown];self.timeline.clips=@[];
 }
-- (void)windowWillClose:(NSNotification *)notification {[self shutdown];}
+- (void)windowWillClose:(NSNotification *)notification { /* Window visibility is independent of the shared transport. */ }
 - (void)dealloc {[self shutdown];}
 - (void)tick:(NSTimer *)timer {
     [self.transport tick];
@@ -177,11 +177,12 @@ static NSWindow *PSAudioCreateWindow(void) {
     window.minSize=NSMakeSize(440,392);window.maxSize=NSMakeSize(1600,392);window.releasedWhenClosed=NO;
     return window;
 }
-int photosuite_audio_open(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *year,const char *selected,unsigned long long *session){
+int photosuite_audio_open_mode(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *year,const char *selected,unsigned long long *session,int showWindow){
     if(![NSThread isMainThread])return 1;
     @autoreleasepool {
         NSArray *clips=PSAudioReadClips(paths,labels,weights,dates,durations,states,count);NSString *chosen=PSAudioPath(selected);
         if(!clips || [clips indexOfObjectPassingTest:^BOOL(PSAudioClipViewModel *clip,NSUInteger i,BOOL *stop){return [clip.path isEqualToString:chosen];}]==NSNotFound)return 2;
+        showWindow=showWindow || (PSAudio && PSAudio.window.visible);
         if(PSAudio){[PSAudio shutdown];[PSAudio close];}
         NSWindow *window=PSAudioCreateWindow();
         window.title=[NSString stringWithFormat:@"Diary %@ · Jahresverlauf",[NSString stringWithUTF8String:year]];
@@ -191,18 +192,34 @@ int photosuite_audio_open(const char **paths,const char **labels,const double *w
         NSView *view=window.contentView;
         controller.titleLabel=PSAudioLabel(NSMakeRect(20,328,700,24),20);controller.titleLabel.stringValue=@"Aufnahme wird geladen …";[view addSubview:controller.titleLabel];
         controller.detailLabel=PSAudioLabel(NSMakeRect(20,302,700,22),16);[view addSubview:controller.detailLabel];
-        controller.verificationLabel=PSAudioLabel(NSMakeRect(20,281,700,16),12);controller.verificationLabel.stringValue=@"Vorläufig · Dateinamen / Dateigrößen · Grau: ungeprüft";[view addSubview:controller.verificationLabel];
+        controller.verificationLabel=PSAudioLabel(NSMakeRect(20,281,700,16),12);controller.verificationLabel.stringValue=@"Vorläufig · Dateinamen · Grau: ungeprüft";[view addSubview:controller.verificationLabel];
         controller.timeline=[[PSAudioTimeline alloc] initWithFrame:NSMakeRect(12,235,716,58)];controller.timeline.clips=clips;controller.timeline.autoresizingMask=NSViewWidthSizable;[view addSubview:controller.timeline];
         controller.contextPhotos=[[PSContextPhotos alloc] initWithFrame:NSMakeRect(20,65,700,160)];controller.contextPhotos.autoresizingMask=NSViewWidthSizable;[view addSubview:controller.contextPhotos];
         [controller connectControls];
         NSArray *titles=@[@"-15 s",@"Wiedergabe",@"+15 s"];SEL selectors[]={@selector(back:),@selector(toggle:),@selector(forward:)};
         for(NSUInteger i=0;i<3;++i){NSButton *button=[NSButton buttonWithTitle:titles[i] target:controller action:selectors[i]];button.frame=NSMakeRect(20+i*95,24,90,30);[view addSubview:button];if(i==1){controller.playButton=button;button.enabled=NO;}}
         NSSlider *volume=[NSSlider sliderWithValue:0.8 minValue:0 maxValue:1 target:controller action:@selector(volume:)];volume.frame=NSMakeRect(615,29,105,20);volume.autoresizingMask=NSViewMinXMargin;volume.toolTip=@"Lautstärke";[view addSubview:volume];
-        [window center];[controller showWindow:nil];[window makeKeyAndOrderFront:nil];[window makeFirstResponder:controller.timeline];
+        [window center];if(showWindow){[controller showWindow:nil];[window makeKeyAndOrderFront:nil];[window makeFirstResponder:controller.timeline];}
         controller.timer=[NSTimer scheduledTimerWithTimeInterval:0.1 target:controller selector:@selector(tick:) userInfo:nil repeats:YES];
         [controller.transport openPath:chosen fraction:0 offset:0];
         return 0;
     }
+}
+int photosuite_audio_open(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *year,const char *selected,unsigned long long *session){return photosuite_audio_open_mode(paths,labels,weights,dates,durations,states,count,year,selected,session,1);}
+int photosuite_audio_transport_state(unsigned long long session,double *fraction,double *civil){
+    if(![NSThread isMainThread] || !PSAudio || PSAudio.cancelled || PSAudio.photoSession!=session)return 0;
+    [PSAudio tick:nil];NSUInteger index=[PSAudio currentIndex];
+    *fraction=PSAudio.timeline.total>0?MIN(1,MAX(0,PSAudio.timeline.position/PSAudio.timeline.total)):0;
+    *civil=NAN;if(index!=NSNotFound){double local=CMTimeGetSeconds(PSAudio.transport.player.currentTime);if(isfinite(local))*civil=PSAudio.timeline.clips[index].recordedAt+local;}
+    return 1|(PSAudio.transport.wantsPlay?2:0)|((PSAudio.transport.loading || PSAudio.transport.seeking)?4:0)|(PSAudio.transport.error.length?8:0);
+}
+int photosuite_audio_control(unsigned long long session,int command,double fraction){
+    if(![NSThread isMainThread] || !PSAudio || PSAudio.cancelled || PSAudio.photoSession!=session)return 1;
+    if(command==0){[PSAudio toggle:nil];}
+    else if(command==1){if(!isfinite(fraction))return 2;[PSAudio seek:MIN(1,MAX(0,fraction))*PSAudio.timeline.total];}
+    else if(command==2){[PSAudio showWindow:nil];[PSAudio.window makeKeyAndOrderFront:nil];[PSAudio.window makeFirstResponder:PSAudio.timeline];}
+    else if(command==3){[PSAudio shutdown];[PSAudio.window orderOut:nil];}
+    else return 2;return 0;
 }
 int photosuite_audio_state(unsigned long long session){
     if(![NSThread isMainThread] || !PSAudio || PSAudio.cancelled || PSAudio.photoSession!=session)return 0;

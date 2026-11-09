@@ -39,6 +39,9 @@ impl CaptureTime {
             &format!("{origin}: {value}"),
         )
     }
+    pub fn month(&self) -> &str {
+        &self.month
+    }
     pub fn year(&self) -> &str {
         &self.year
     }
@@ -93,6 +96,11 @@ impl CaptureTime {
         )
     }
     /// Civil clock seconds, deliberately without implicit timezone conversion.
+    pub fn from_civil_seconds(seconds: i64, origin: &str) -> Result<Self, String> {
+        let date =
+            chrono::DateTime::from_timestamp(seconds, 0).ok_or("Ungültiger ziviler Zeitpunkt")?;
+        Self::parse(&date.format("%Y:%m:%d %H:%M:%S").to_string(), origin)
+    }
     pub fn civil_seconds(&self) -> i64 {
         self.civil_seconds
     }

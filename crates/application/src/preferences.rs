@@ -23,6 +23,8 @@ pub struct Preferences {
     pub write_exif: bool,
     pub reopen_library: bool,
     pub last_library: Option<PathBuf>,
+    /// Runtime routing only; never serialized inside a library settings file.
+    pub library_scope: Option<PathBuf>,
     pub shortcuts: BTreeMap<String, Option<Shortcut>>,
 }
 impl Default for Preferences {
@@ -35,6 +37,7 @@ impl Default for Preferences {
             write_exif: false,
             reopen_library: true,
             last_library: None,
+            library_scope: None,
             shortcuts: BTreeMap::new(),
         }
     }
@@ -74,10 +77,23 @@ impl Preferences {
 pub trait PreferencesStore: Send + Sync + 'static {
     fn load(&self) -> Result<Preferences, String>;
     fn save(&self, preferences: &Preferences) -> Result<(), String>;
+    fn load_with_status(&self) -> Result<(Preferences, Option<String>), String> {
+        self.load().map(|p| (p, None))
+    }
+    fn load_for_startup(
+        &self,
+        _explicit: Option<&std::path::Path>,
+    ) -> Result<(Preferences, Option<String>), String> {
+        self.load_with_status()
+    }
+    fn load_library(&self, _root: &std::path::Path) -> Result<Option<Preferences>, String> {
+        Ok(None)
+    }
 }
 #[derive(Default)]
 struct Mailbox {
-    pending: Option<Preferences>,
+    // Latest snapshot per scope: switching libraries must not discard the previous save.
+    pending: BTreeMap<Option<PathBuf>, Preferences>,
     stopping: bool,
 }
 pub struct Persistence {
@@ -97,11 +113,11 @@ impl Persistence {
                 let preferences = {
                     let (lock, wake) = &*inbox;
                     let mut state = lock.lock().unwrap();
-                    while state.pending.is_none() && !state.stopping {
+                    while state.pending.is_empty() && !state.stopping {
                         state = wake.wait(state).unwrap();
                     }
-                    match state.pending.take() {
-                        Some(value) => value,
+                    match state.pending.pop_first() {
+                        Some((_, value)) => value,
                         None => break,
                     }
                 };
@@ -125,7 +141,7 @@ impl Persistence {
             self.flush_current();
         }
     }
-    /// One replaceable pending snapshot; unchanged startup snapshots include migration.
+    /// One replaceable pending snapshot per scope; unchanged startup snapshots include migration.
     pub fn flush_current(&mut self) {
         if self
             .worker
@@ -136,7 +152,10 @@ impl Persistence {
             return;
         }
         let (lock, wake) = &*self.mailbox;
-        lock.lock().unwrap().pending = Some(self.last.clone());
+        lock.lock()
+            .unwrap()
+            .pending
+            .insert(self.last.library_scope.clone(), self.last.clone());
         wake.notify_one();
     }
     pub fn poll_error(&mut self) -> Option<String> {
@@ -159,6 +178,59 @@ impl Drop for Persistence {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+    }
+}
+
+/// Single-flight, latest-request-wins library settings reads. No UI/file-format knowledge.
+type LibraryResult = Result<Option<Preferences>, String>;
+struct LibraryRead {
+    root: PathBuf,
+    receiver: mpsc::Receiver<LibraryResult>,
+}
+#[derive(Default)]
+pub struct LibrarySettings {
+    active: Option<LibraryRead>,
+    queued: Option<(Arc<dyn PreferencesStore>, PathBuf)>,
+}
+impl LibrarySettings {
+    pub fn request(&mut self, store: Arc<dyn PreferencesStore>, root: PathBuf) {
+        self.queued = Some((store, root));
+        self.launch();
+    }
+    fn launch(&mut self) {
+        if self.active.is_some() {
+            return;
+        }
+        let Some((store, root)) = self.queued.take() else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.active = Some(LibraryRead {
+            root: root.clone(),
+            receiver,
+        });
+        thread::spawn(move || {
+            let _ = sender.send(store.load_library(&root));
+        });
+    }
+    pub fn is_loading(&self) -> bool {
+        self.active.is_some()
+    }
+    pub fn poll(&mut self) -> Option<(PathBuf, Result<Option<Preferences>, String>)> {
+        let active = self.active.as_ref()?;
+        let result = match active.receiver.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => return None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Err("Bibliotheks-Einstellungen: Hintergrundauftrag unerwartet beendet".into())
+            }
+        };
+        let root = self.active.take().unwrap().root;
+        if self.queued.is_some() {
+            self.launch();
+            return None;
+        }
+        Some((root, result))
     }
 }
 
@@ -313,3 +385,134 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod scoped_tests {
+    use super::*;
+    use std::{
+        path::Path,
+        sync::atomic::{AtomicBool, Ordering},
+        time::{Duration, Instant},
+    };
+    #[test]
+    fn pending_saves_coalesce_per_library_without_losing_previous_scope_or_locator() {
+        struct Slow {
+            calls: Mutex<Vec<Preferences>>,
+            release: AtomicBool,
+        }
+        impl PreferencesStore for Slow {
+            fn load(&self) -> Result<Preferences, String> {
+                Ok(Default::default())
+            }
+            fn save(&self, p: &Preferences) -> Result<(), String> {
+                self.calls.lock().unwrap().push(p.clone());
+                while !self.release.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                Ok(())
+            }
+        }
+        let store = Arc::new(Slow {
+            calls: Mutex::new(Vec::new()),
+            release: AtomicBool::new(false),
+        });
+        let mut persistence = Persistence::new(store.clone(), Preferences::default());
+        let mut a = Preferences {
+            library_scope: Some("a".into()),
+            preview_size: 0,
+            ..Default::default()
+        };
+        persistence.update(a.clone());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while store.calls.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        a.preview_size = 1;
+        persistence.update(a.clone());
+        let b = Preferences {
+            library_scope: Some("b".into()),
+            preview_size: 3,
+            ..Default::default()
+        };
+        persistence.update(b.clone());
+        let location = Preferences {
+            last_library: Some("b".into()),
+            ..Default::default()
+        };
+        persistence.update(location.clone());
+        a.preview_size = 4;
+        persistence.update(a.clone());
+        store.release.store(true, Ordering::SeqCst);
+        drop(persistence);
+        let calls = store.calls.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        assert_eq!(
+            calls
+                .iter()
+                .rfind(|p| p.library_scope.as_deref() == Some(Path::new("a"))),
+            Some(&a)
+        );
+        assert!(calls.contains(&b));
+        assert!(calls.contains(&location));
+    }
+    #[test]
+    fn library_reads_keep_only_latest_request_and_discard_old_results() {
+        struct Slow {
+            calls: Mutex<Vec<PathBuf>>,
+            release: AtomicBool,
+        }
+        impl PreferencesStore for Slow {
+            fn load(&self) -> Result<Preferences, String> {
+                Ok(Default::default())
+            }
+            fn save(&self, _: &Preferences) -> Result<(), String> {
+                Ok(())
+            }
+            fn load_library(&self, root: &Path) -> Result<Option<Preferences>, String> {
+                self.calls.lock().unwrap().push(root.into());
+                if root == Path::new("a") {
+                    while !self.release.load(Ordering::SeqCst) {
+                        std::thread::yield_now();
+                    }
+                }
+                Ok(Some(Preferences {
+                    preview_size: 4,
+                    ..Default::default()
+                }))
+            }
+        }
+        let store = Arc::new(Slow {
+            calls: Mutex::new(Vec::new()),
+            release: AtomicBool::new(false),
+        });
+        let mut session = LibrarySettings::default();
+        session.request(store.clone(), "a".into());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while store.calls.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        session.request(store.clone(), "b".into());
+        session.request(store.clone(), "c".into());
+        assert!(session.poll().is_none());
+        store.release.store(true, Ordering::SeqCst);
+        let (root, result) = loop {
+            if let Some(result) = session.poll() {
+                break result;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        assert_eq!(root, PathBuf::from("c"));
+        assert_eq!(result.unwrap().unwrap().preview_size, 4);
+        assert!(!session.is_loading());
+        assert_eq!(
+            *store.calls.lock().unwrap(),
+            vec![PathBuf::from("a"), PathBuf::from("c")]
+        );
+    }
+}
+
+mod startup;
+pub use startup::{StartupOutcome, StartupPreferences};

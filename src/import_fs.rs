@@ -44,50 +44,11 @@ fn compare(a: &Path, b: &Path) -> Result<bool, String> {
         }
     }
 }
-/// Automatic tempfile drop is best-effort only. Always report a failed cleanup explicitly.
 fn cleanup_staging(
     staged: tempfile::NamedTempFile,
     result: Result<(), String>,
 ) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-    let (file, mut temporary_path) = staged.into_parts();
-    let path = temporary_path.to_path_buf();
-    // Do not let best-effort Drop retry removal of an unverified/replaced path.
-    temporary_path.disable_cleanup(true);
-    let identity = file.metadata();
-    drop(file); // Close before unlinking, including on removable filesystems.
-    let cleanup = (|| {
-        let current = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(error.to_string()),
-        };
-        let identity = identity.map_err(|e| e.to_string())?;
-        if !current.is_file()
-            || current.file_type().is_symlink()
-            || current.dev() != identity.dev()
-            || current.ino() != identity.ino()
-        {
-            return Err(
-                "Pfad wurde ersetzt oder kann nicht sicher zugeordnet werden; bleibt erhalten"
-                    .into(),
-            );
-        }
-        fs::remove_file(&path).map_err(|e| e.to_string())
-    })();
-    match cleanup {
-        Ok(()) => result,
-        Err(error) => {
-            let context = match result {
-                Ok(()) => "Zieldatei wurde vollständig geprüft. ".to_owned(),
-                Err(message) => format!("{message}. "),
-            };
-            Err(format!(
-                "{context}Temporäre Importdatei konnte nicht entfernt werden: {}: {error}",
-                path.display()
-            ))
-        }
-    }
+    crate::staging_fs::cleanup(staged, result, "Temporäre Importdatei")
 }
 /// Preserve no-overwrite semantics even when rename-no-replace and hardlinks are unavailable.
 /// The portable path is deliberately not an ordinary rename: that could replace an existing file.
@@ -328,7 +289,16 @@ impl ImportAdapter for FileImportAdapter {
         if let Err(error) = prepared {
             return cleanup_staging(temp, Err(error));
         }
-        finish_publication(temp.persist_noclobber(target), source, target, cancel)
+        let staging_path = temp.path().to_owned();
+        match temp.persist_noclobber(target) {
+            Ok(file) => crate::staging_fs::cleanup_alias(
+                file,
+                &staging_path,
+                Ok(()),
+                "Temporäre Importdatei",
+            ),
+            Err(error) => finish_publication(Err(error), source, target, cancel),
+        }
     }
 }
 

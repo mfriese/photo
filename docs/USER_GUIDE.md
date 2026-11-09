@@ -69,13 +69,13 @@ Für Videofunktionen werden direkt verlinkte AVFoundation-/AVKit-Systemframework
 
 ## Betrachten
 
-Ordner öffnen, Jahre aufklappen und ganze Jahre oder vorhandene Monate auswählen. Suche filtert Pfade/Dateinamen, Filter bietet Videos. Die Fotowand rendert nur sichtbare Zeilen. Fünf Vorschaugrößen unter **Ansicht** nutzen die gesamte Breite; die letzte Zeile behält dieselbe Kachelgröße. „Quadratische Vorschau“ schaltet zwischen zentriertem Beschnitt und vollständigem Bild im Seitenverhältnis um. Die Jahresnavigation lässt sich ausblenden.
+Mit **File → Open Library…** einen Ordner öffnen, Jahre aufklappen und ganze Jahre oder vorhandene Monate auswählen. **Edit → Find… (⌘F)** filtert Pfade/Dateinamen, **View → Videos Only** filtert Videos. Die Fotowand rendert nur sichtbare Zeilen. Fünf Vorschaugrößen unter **View → Thumbnail Size** nutzen die gesamte Breite; die letzte Zeile behält dieselbe Kachelgröße. „Quadratische Vorschau“ schaltet zwischen zentriertem Beschnitt und vollständigem Bild im Seitenverhältnis um. Die Jahresnavigation lässt sich ausblenden.
 
 Ein Klick öffnet die Großansicht. Pfeiltasten wechseln Medien; Escape schließt sie. Videos zeigen ein Vorschaubild aus dem ersten verfügbaren Frame mit beachteter Track-Ausrichtung und maximal 640 × 640 Pixeln; Wiedergabe kann im eigenen nativen Player oder im Standardprogramm erfolgen. Unterstützte Bildformate: JPEG, PNG, WebP, TIFF, GIF, BMP. Erkannte Videos: MP4, MOV, M4V, MKV, AVI, WebM; Erkennung garantiert keinen verfügbaren Decoder.
 
 ## Import Schritt für Schritt
 
-1. **Import …** öffnen, Quelle und Zielbibliothek wählen. Die Zielbibliothek muss existieren. Quelle und Ziel dürfen sich nicht überschneiden.
+1. **File → Import…** öffnen, Quelle und Zielbibliothek wählen. Die Zielbibliothek muss existieren. Quelle und Ziel dürfen sich nicht überschneiden.
 2. **Prüflauf** zeigt ohne Schreibzugriffe die geplanten Dateinamen und Kollisionsentscheidungen.
 3. **Import starten** prüft alles erneut und kopiert die Dateien. Im Ziel entstehen `Jahr/Monat/img_JJJJMMTT_HHMMSS.ext`, zum Beispiel `2008/09/img_20080916_035811.jpg`.
 
@@ -89,7 +89,7 @@ Nach dem Import wird die Zielbibliothek neu geladen. Der Import ist eine ausdrü
 
 ## Bildausrichtung und Befehle
 
-EXIF-Orientierung einschließlich Spiegelungen wird in beiden Ansichten automatisch berücksichtigt. Bearbeitungsbuttons und Tastenkürzel verwenden denselben Command-Dispatcher. Unter **Einstellungen → Befehle & Tastenkürzel** stehen Zuweisen und Entfernen zur Verfügung. Standard: Alt+L, Alt+R, Alt+Backspace. Kürzelkonflikte werden abgelehnt; während Texteingabe/Zuweisung oder laufendem Schreibjob werden keine Bearbeitungskürzel ausgeführt.
+EXIF-Orientierung einschließlich Spiegelungen wird in beiden Ansichten automatisch berücksichtigt. Bearbeitungsbuttons und Tastenkürzel verwenden denselben Command-Dispatcher. Unter **Edit → Keyboard Shortcuts…** stehen Zuweisen und Entfernen zur Verfügung. Standard: Alt+L, Alt+R, Alt+Backspace. Kürzelkonflikte werden abgelehnt; während Texteingabe/Zuweisung oder laufendem Schreibjob werden keine Bearbeitungskürzel ausgeführt.
 
 Standardmäßig gelten manuelle Drehungen nur für die Sitzung. **Einstellungen → Drehungen in JPEG speichern** schreibt neue manuelle Drehungen als EXIF-Orientierung ohne Pixelneukompression. Aktivieren allein oder bloßes Öffnen/Scannen ändert keine Dateien. ExifTool aktualisiert das Original ohne dauerhafte Backup-Datei (`-overwrite_original_in_place`), intern mit temporärer Arbeitsdatei. Vorhandene Backups werden nicht gelöscht. Andere Formate und symbolische Dateien werden abgelehnt. Bei Fehlern bleibt die Sitzungskorrektur erhalten; Erfolg invalidiert den Cache. „Zur EXIF-Ausrichtung“ verwirft Sitzungskorrekturen und macht gespeicherte Änderungen nicht rückgängig.
 
@@ -121,19 +121,33 @@ Integrationstests brauchen ExifTool, native Videotests auf macOS Zugriff auf Sys
 
 **Einstellungen …** oder **⌘,** öffnet den gegliederten Optionsdialog. Darstellung, Startverhalten, Bildänderungen und Bedienung verwenden einheitliche Gruppen und Abstände. Ansicht und Filter bleiben als Schnellzugriff verfügbar; Tastenkürzel und Importdialog verwenden dasselbe Abstands- und Gruppenschema.
 
-Einstellungen werden automatisch im Hintergrund als lesbare XML-Property-List gespeichert:
+Alle dauerhaft unterstützten Einstellungen außer dem Bibliothekspfad werden direkt im Bibliotheks-Hauptverzeichnis gespeichert:
 
-```text
-~/Library/Preferences/de.photosuite.PhotoSuite.settings.plist
+```yaml
+# PhotoSuite – Einstellungen dieser Bibliothek
+version: 1
+preview_size: 2
+square_previews: true
+show_library: true
+videos_only: false
+write_exif: false
+reopen_library: true
+shortcuts: {}
 ```
 
-Die Key-Value-Datei enthält `preview_size` (0–4), `square_previews`, `show_library`, `videos_only`, `write_exif`, `reopen_library`, `last_library` und `shortcuts`. Die Tastenkürzel liegen als verschachtelte Key-Value-Einträge vor. Die Datei verwendet das macOS-Plist-Format, wird direkt durch die Anwendung verwaltet und benötigt keinen externen Dienst. Quellbibliotheken enthalten keine Konfigurationsdateien.
+Die Datei heißt **`photosuite.yaml`**. Vorschaugröße (0–4), Darstellung, Videofilter, EXIF-Schreibmodus, Startoption und Tastenkürzel gehören damit zur jeweiligen Sammlung. Angepasste Tastenkürzel werden als verschachtelte Key-Value-Einträge gespeichert; die App schreibt eine gut lesbare YAML-Datei. Manuelle Änderungen bei geschlossener App vornehmen: Kommentare/Formatierung können beim nächsten Speichern vereinheitlicht werden. Unbekannte Schlüssel oder Versionen, ungültige Typen sowie Dateien über 64 KiB werden gemeldet und nicht überschrieben. Die Datei enthält keinen absoluten Bibliothekspfad.
 
-Die zuletzt geöffnete Bibliothek wird unmittelbar beim Öffnen gespeichert, unabhängig von Dauer oder Ergebnis des Scans, und beim nächsten Start automatisch geöffnet. Im Dialog lässt sich „Letzte Bibliothek wieder öffnen“ deaktivieren. Ein beim Start angegebener Bibliothekspfad hat Vorrang. Ist die Bibliothek nicht verfügbar, wird der Scanfehler angezeigt; die gemerkte Auswahl bleibt erhalten.
+Nur die zuletzt gewählte Bibliothek bleibt lokal:
 
-Auch der EXIF-Schreibmodus bleibt nach einem Neustart erhalten und ist weiterhin sichtbar gekennzeichnet. Manuelle Bilddrehungen ohne Speicherung bleiben dagegen reine Sitzungskorrekturen. Änderungen werden atomar über eine temporäre Preferences-Datei gespeichert; beim normalen Beenden werden ausstehende Änderungen abgearbeitet. Eine beschädigte oder unbekannte Dateiversion wird gemeldet und nicht automatisch überschrieben. In diesem Fall startet die Anwendung mit Standardwerten.
+```text
+~/Library/Preferences/de.photosuite.PhotoSuite.library.plist
+```
 
-Die Preferences-Schnittstelle und Hintergrundspeicherung liegen in der Anwendungsschicht; ausschließlich der Desktop-Adapter kennt Plist und das Benutzerverzeichnis.
+Vorhandene `de.photosuite.PhotoSuite.settings.plist` bzw. `de.photosuite.PhotoSuite.plist` bleiben unverändert als Migrationsquellen erhalten. Fehlt `photosuite.yaml`, dienen die bisherigen Werte als Ausgangspunkt. Nach erfolgreichem Laden werden Änderungen im Hintergrund über eine synchronisierte temporäre Datei und Rename gespeichert, auch auf exFAT. Beim normalen Beenden werden ausstehende Schreibaufträge abgearbeitet. Ein Bibliothekswechsel erhält den letzten Stand der vorherigen Bibliothek und lädt neue Werte im Hintergrund; veraltete Ergebnisse werden nicht übernommen.
+
+Die Startoption „Letzte Bibliothek wieder öffnen“ wird aus der YAML-Datei der zuletzt gemerkten Bibliothek gelesen. Ein beim Start angegebener Pfad hat Vorrang. Ist die Bibliothek nicht verfügbar, bleibt der lokal gespeicherte Pfad erhalten und ein Fehler wird angezeigt. Ohne geladene Bibliothek gelten neue Anzeigeänderungen nur für die Sitzung. Bei schreibgeschützter Bibliothek bleiben Änderungen ebenfalls vorläufig und ein Speicherfehler erscheint in Fußzeile und Optionsdialog. Die Anwendung legt kein nicht vorhandenes Bibliotheksverzeichnis an. Defekte Einstellungen werden erhalten; zum Reparieren die Datei bei geschlossener App korrigieren oder bewusst umbenennen.
+
+Diese Speicherung ändert nur Verwaltungsdaten, keine Fotos, Videos oder Audioaufnahmen. Manuelle ungespeicherte Bilddrehungen bleiben Sitzungskorrekturen. Schnittstellen, Routing und Hintergrundaufträge liegen in der Anwendungsschicht; YAML, Plist, Dateizugriffe und atomischer Austausch bleiben im äußeren Adapter. Änderungen in derselben noch wartenden Bibliothek werden zusammengefasst; unterschiedliche Bibliotheken behalten getrennte ausstehende Snapshots. Zeitgleiche Änderungen durch andere App-Instanzen/Editoren sind nicht über eine globale Sperre koordiniert.
 
 Die Suche ist als kompaktes Feld direkt in die obere Buttonzeile integriert. Auf schmalen Fenstern bricht die Zeile um. Der aktive EXIF-Schreibmodus wird kontrastreich mit weißem Text auf dunklem Hintergrund als „EXIF speichern: an“ gekennzeichnet.
 
@@ -195,7 +209,7 @@ Das Original liegt unter `assets/app-icon/photosuite.png`, inklusive Transparenz
 
 Die Großansicht verwendet eine einheitliche Werkzeugleiste oberhalb des Bildinhalts: Navigation, Positionsanzeige und externes Öffnen oben, Bild-/Videoaktionen in einer zweiten Zeile. Alle Buttons bleiben einzeilig und die Leiste behält ihre Höhe. Auch das Neuladen der Videoübersicht befindet sich oberhalb des Rasters; darunter gibt es keine Aktionsbuttons.
 
-Die aktive Bibliothek steht mit ihrem Pfad direkt unter den Werkzeugaktionen und im Fenstertitel. Lange Pfade lassen sich per Tooltip vollständig lesen. Die Fußzeile zeigt Modus, Status und gegebenenfalls Speicherfehler in einer einzigen Zeile; gekürzte Meldungen sind ebenfalls per Tooltip lesbar. „Bereit“ bedeutet, dass die Anwendung auf eine Aktion wartet; „Nur Lesen“ kennzeichnet das Betrachten ohne Änderungen an Originaldateien. Expliziter Import und aktiviertes EXIF-Speichern bleiben die beschriebenen Ausnahmen.
+Die aktive Bibliothek steht mit ihrem Pfad im Fenstertitel. Es gibt keinen zusätzlichen Kopfbereich. Die Fußzeile zeigt Modus, Status und gegebenenfalls Speicherfehler in einer einzigen Zeile; gekürzte Meldungen sind ebenfalls per Tooltip lesbar. „Bereit“ bedeutet, dass die Anwendung auf eine Aktion wartet; „Nur Lesen“ kennzeichnet das Betrachten ohne Änderungen an Originaldateien. Expliziter Import und aktiviertes EXIF-Speichern bleiben die beschriebenen Ausnahmen.
 
 In der Großansicht stehen Navigation und Bild-/Videoaktionen in zwei Zeilen mit konstanter Höhe. Kein horizontaler Scroller; schmale Fenster kürzen Beschriftungen mit vollständigem Tooltip. Fotos sind horizontal zentriert.
 
@@ -209,7 +223,7 @@ Eingebettete Aufnahmezeit vor Inhalts-/Containerdatum; ohne diese Daten zuerst d
 
 Das Importprotokoll ist standardmäßig kompakt: ein Ergebnis pro Datei, vollständige Pfade und Datumsquelle im Tooltip. „Alle Schritte anzeigen“ öffnet das detaillierte, mehrzeilige Protokoll. „Protokoll kopieren“ kopiert jeweils die gewählte Ansicht.
 
-Diary zeigt jetzt Kacheln statt einer Dateinamenliste. Die gewählte Vorschaugröße steuert 10/8/6/5/4 Spalten auf ausreichend breiten Fenstern. Unter dem Audiosymbol stehen Datum und Uhrzeit; vollständiger Dateiname und Datumsquelle erscheinen im Tooltip. Der Player zeigt das laufende Aufnahmedatum und die Aufnahmeuhrzeit, einschließlich des Fortschritts innerhalb der aktuellen Datei. Vorhandene Preferences werden in die separate Datei `de.photosuite.PhotoSuite.settings.plist` übernommen; das alte App-Domain bleibt erhalten. Importe in andere Ziele ändern die ausgewählte Fotobibliothek nicht mehr.
+Diary zeigt jetzt Kacheln statt einer Dateinamenliste. Die gewählte Vorschaugröße steuert 10/8/6/5/4 Spalten auf ausreichend breiten Fenstern. Unter dem Audiosymbol stehen Datum und Uhrzeit; vollständiger Dateiname und Datumsquelle erscheinen im Tooltip. Der Player zeigt das laufende Aufnahmedatum und die Aufnahmeuhrzeit, einschließlich des Fortschritts innerhalb der aktuellen Datei. Vorhandene Preferences dienen als Migrationsquelle für `photosuite.yaml` in der jeweiligen Bibliothek; alte Preferences-Dateien bleiben erhalten. Importe in andere Ziele ändern die ausgewählte Fotobibliothek nicht mehr.
 
 ### Fotos zum Gehörten
 
@@ -246,3 +260,44 @@ Jahres-/Monatsansichten verwenden zuerst die vorhandene Ordnerstruktur und Endun
 Der Audioplayer startet aus den bereits bekannten Namen, ohne für jede Aufnahme die Dateigröße abzufragen. Seine Startphase und die erste Clipprüfung haben Vorrang vor zusätzlichen Galerie-Scans und Rastervorschauen. Sobald die gewählte Aufnahme spielt und geprüft wurde, laufen diese Hintergrundaufträge weiter. Genauere Audiodaten und Breiten folgen anschließend; die Aufnahme läuft dabei an ihrer lokalen Position weiter.
 
 Auch die fünf zugehörigen Fotos werden zuerst nur anhand ihrer Dateinamen gefunden. Deren Dateinamen-Zeitstempel sind im Kontextindex maßgeblich; widersprechende EXIF-Daten benannter Fotos werden dafür nicht zusätzlich eingelesen. Nur die ausgewählten Vorschaubilder werden dekodiert. Fotos ohne gültiges Namensdatum werden separat über Metadaten ergänzt und bremsen keine spätere Clipauswahl. Ohne passende Dateinamen ist eine erste Metadatensuche weiterhin nötig. Als Grundlage dienen die beim Playerstart bereits geladenen Fotos der Sammlung; für später hinzugekommene Fotos den Player erneut öffnen.
+
+
+## Tags und Alben
+
+1. Bibliothek öffnen und links „Tags & Alben …“ wählen. Namen eingeben und „Tag anlegen“ anklicken.
+2. In Fotowand/Diary eine Datei rechts anklicken und „Tags bearbeiten …“ wählen; in der Großansicht alternativ „Tags …“. Häkchen setzen oder entfernen. Ein neu angelegter Tag wird in dieser Dateiansicht direkt der Datei zugewiesen.
+3. „Album“ bei einem Tag aktivieren: Die linke Navigation zeigt ihn als virtuelles Album. „Anzeigen“ filtert auch Tags, die nicht als Album markiert sind. Eine Datei darf mehreren Tags angehören.
+4. Zum Umbenennen oder Entfernen „Alle Tags verwalten“ wählen, einen Tagnamen auswählen und die passende Aktion benutzen. Tagentfernen entfernt ausschließlich die Zuordnungen und gegebenenfalls die Albumkennzeichnung.
+5. „Alle Erinnerungen“, Jahres-/Monatsauswahl oder „Filter aufheben“ beendet den Tagfilter. Suche und Videofilter gelten auch im Album. Audio erscheint als Audiokachel und öffnet beim Anklicken den normalen Jahresplayer; die Bildnavigation überspringt Audio.
+
+Alle Tags und Albumkennzeichnungen stehen in `photosuite-tags.yaml` direkt im Bibliotheksverzeichnis. Unter `tags` steht je Tag eine YAML-Liste relativer Dateipfade (zum Beispiel `2023/08/img_20230816_153000.jpg`). Unter `albums` stehen die als Album gekennzeichneten Tagnamen als Liste. Relative Pfade sind absichtlich eindeutiger als bloße Dateinamen; absolute Pfade und `..` sind unzulässig. Die Datei ist unabhängig von `photosuite.yaml` für Programmeinstellungen.
+
+Der vollständige Katalog bleibt im Speicher, bis die Bibliothek gewechselt oder die Datei ausdrücklich neu geladen wird. Filterung benötigt keine Bild-/Metadatenzugriffe. Änderungen werden sofort im Speicher wirksam und anschließend seriell im Hintergrund gespeichert; wartende Zwischenstände werden jeweils durch den neuesten vollständigen Stand ersetzt. Auf Speichervorgänge achten: Schreibschutz oder externe YAML-Änderungen führen zu einem sichtbaren Fehler, die lokale Änderung bleibt vorläufig. Ein Bibliothekswechsel wird bis zur Speicherung oder bewusstem Verwerfen verhindert. „Erneut speichern“ versucht es erneut; bei einem echten externen Konflikt zunächst die Datei/Änderungen prüfen, dann gegebenenfalls lokale Änderungen verwerfen und neu laden. Bei Beenden trotz Speicherfehler gehen nur ungespeicherte Sitzungsänderungen verloren. Bereits veröffentlichte Daten bleiben erhalten.
+
+Unbekannte/fehlerhafte Kataloge werden nicht durch leere ersetzt. Extern entfernte/umbenannte Medien bleiben in der Zuordnung stehen; sie werden nicht allein anhand eines gleichen Namens ersetzt. Noch nicht gescannte Albumjahre werden bevorzugt geladen. Die Sammlung wird für Alben nicht umgebaut; keine Foto-/Audio-/Video-Datei wird kopiert, verschoben, umbenannt oder gelöscht. Der erste Entwurf unterstützt einzelne Dateizuordnungen; keine Mehrfachauswahl, intelligente Alben oder freie Albumreihenfolge. YAML-Dateien über 32 MiB werden erhalten und als zu groß gemeldet. Manuelle Kommentare/Formatierung können beim Speichern vereinheitlicht werden.
+
+
+### Ressourcen und Programmstart
+Die Startkonfiguration wird im Hintergrund geladen; die Oberfläche bleibt währenddessen bedienbar. Anzeige-/Filtereinstellungen werden erst nach abgeschlossener Konfigurationsabfrage freigegeben, damit verspätete Werte keine Benutzereingaben verdrängen. Ein inzwischen manuell geöffneter Ordner wird nicht durch das alte Startresultat ersetzt.
+
+Sehr große Kollisionsgruppen werden vor dem Vergleichen mit einer Fehlermeldung abgewiesen, wenn mehr als 100.000 Paarvergleiche nötig wären. In diesem Fall wird keine Datei entfernt. Die Grenze schützt Laufzeit/Speicher; sie ersetzt keinen weniger genauen Vergleich. Native Wiedergabetests laufen reproduzierbar über `make test-native` mit mitgelieferten/stummen Testmedien; Video öffnet dafür kurz ein eigenes Testfenster.
+
+### Kompakte Audioleiste
+Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: Play/Pause, anklickbare/ziehbare Zeitachse und „Mehr“. Der Start bevorzugt eine Aufnahme des ausgewählten Monats. Graue Abschnitte werden im Hintergrund geprüft und anschließend proportional zur echten Dauer blau angezeigt. Während einer laufenden Vorbereitung kann keine weitere Jahresvorbereitung gestartet werden.
+
+„Mehr → Playerfenster öffnen“ zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.
+
+## Native Menüleiste
+PhotoSuite verwendet ausschließlich native muda-Menüs: **PhotoSuite**, **File**, **Edit**, **View**, **Window**, **Help**. Auf macOS stehen sie am oberen Bildschirmrand. Ein zusätzlicher Kopfbereich entfällt. Edit → Find… (⌘F) öffnet den Suchdialog; View → Thumbnail Size wählt die Vorschaugröße.
+
+- **File:** Open Library… (⌘O), Refresh Library (⌘R), Import… (⇧⌘I), Close Window.
+- **PhotoSuite:** About PhotoSuite, Settings… (⌘,), Services, Hide und Quit PhotoSuite (⌘Q).
+- **Edit:** Undo/Redo und Cut/Copy/Paste/Select All für fokussierte Texteingaben; Rotate Left/Right, Reset to EXIF Orientation und Play Video für die geöffnete Großansicht; Tags and Albums…, Keyboard Shortcuts… und Find… (⌘F).
+- **View:** Show Library Sidebar, Square Thumbnails, Videos Only und Thumbnail Size mit fünf Stufen. Häkchen folgen dem aktuellen Zustand.
+- **Window:** Minimize, Zoom, Enter Full Screen, Bring All to Front.
+- **Help:** PhotoSuite Help mit integrierter Kurzanleitung.
+
+Die Bildbefehle sind während Texteingabe, Dialogen und EXIF-Schreibaufträgen deaktiviert. Native Menü-Kürzel und Buttons führen dieselben Bildbefehle aus. Anwendungs- und Textkürzel sind dafür reserviert; Konflikte werden gemeldet. Bereits gespeicherte konfliktbehaftete Kürzel werden nicht still geändert; bei Ladefehler bleiben die gültigen Standardbindungen aktiv.
+
+### Suche ohne dauerhafte Suchzeile
+**Edit → Find… (⌘F)** öffnet ein separates Suchfenster. Eingaben filtern die Fotowand direkt. Schließen oder Escape erhält den Filter; „Filter zurücksetzen“ entfernt ihn. Ein aktiver Such-/Videofilter bleibt in der einzeiligen Fußzeile sichtbar. Der Bibliothekspfad steht nur im Fenstertitel, EXIF-Schreiben unter **PhotoSuite → Settings…**, die Vorschaugröße unter **View → Thumbnail Size**.
