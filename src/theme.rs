@@ -91,7 +91,7 @@ pub fn panel(fill: Color32, margin: i8) -> egui::Frame {
 }
 pub fn navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
     ui.add_sized(
-        [ui.available_width(), 26.],
+        [ui.available_width(), 20.],
         egui::Button::new(RichText::new(label).color(TEXT))
             .right_text("")
             .selected(selected)

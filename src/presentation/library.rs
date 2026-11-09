@@ -10,7 +10,11 @@ impl super::Suite {
             .default_width(180.).min_width(120.).max_width((ctx.content_rect().width() * 0.4).clamp(120., 260.))
             .frame(theme::panel(theme::SURFACE, 8))
             .show(ctx, |ui| {
-                ui.add_space(4.);
+                ui.spacing_mut().item_spacing.y = 1.;
+                ui.spacing_mut().interact_size.y = 20.;
+                ui.spacing_mut().button_padding.y = 1.;
+                ui.visuals_mut().collapsing_header_frame = true;
+                ui.add_space(2.);
                 ui.strong("Mediathek");
                 ui.add_space(2.);
                 if theme::navigation(ui, self.group.is_none(), "Alle Erinnerungen").clicked() {
@@ -29,7 +33,11 @@ impl super::Suite {
                         years.entry(year.into()).or_default().insert(group.into());
                     }
                 }
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("library_years")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
                     for (year, months) in years.into_iter().rev() {
                         let response = egui::CollapsingHeader::new(egui::RichText::new(&year).size(14.).strong())
                             .id_salt((&self.root, &year)).default_open(false)
@@ -56,7 +64,7 @@ impl super::Suite {
                             self.collection.prioritize(&year);
                             self.group = Some(year.clone());
                         }
-                        ui.add_space(4.);
+                        ui.add_space(2.);
                     }
                     if self.root.is_none() {
                         ui.label(egui::RichText::new("Deine Ordnerstruktur erscheint hier, sobald du eine Sammlung öffnest.").small().color(theme::MUTED));

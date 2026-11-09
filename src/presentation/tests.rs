@@ -674,3 +674,100 @@ fn indexed_years_are_clickable_before_any_media_arrives_even_while_animating() {
     assert!(suite.collection.is_loading());
     assert!(suite.items.is_empty());
 }
+
+#[test]
+fn sidebar_months_are_compact_and_clickable_across_full_column_width() {
+    for width in [360., 600., 1280.] {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        ctx.style_mut(|style| {
+            style.animation_time = 0.;
+            style.spacing.scroll = egui::style::ScrollStyle::solid();
+        });
+        let mut suite = test_suite();
+        suite.root = Some("/Fotos/Demo".into());
+        suite.items = (1..=12)
+            .map(|month| {
+                Media::from_path(
+                    format!("/Fotos/Demo/2026/{month:02}/a.jpg").into(),
+                    format!("2026/{month:02}"),
+                )
+                .unwrap()
+            })
+            .collect();
+        for year in 1990..2026 {
+            suite.items.push(
+                Media::from_path(
+                    format!("/Fotos/Demo/{year}/01/a.jpg").into(),
+                    format!("{year}/01"),
+                )
+                .unwrap(),
+            );
+        }
+        let mut draw = |events| {
+            let mut right = 0.;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 480.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    suite.library_sidebar(ctx);
+                    right = ctx.available_rect().left();
+                },
+            );
+            (output, right)
+        };
+        let text_rect = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.visual_bounding_rect())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {label} at {width}"))
+        };
+        let click = |pos| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        let (initial, _) = draw(vec![]);
+        let header = text_rect(&initial, "2026").center();
+        draw(click(header));
+        let (expanded, right) = draw(vec![]);
+        let january = text_rect(&expanded, "Januar");
+        let february = text_rect(&expanded, "Februar");
+        assert!(
+            february.center().y - january.center().y <= 22.,
+            "month rows too tall at {width}"
+        );
+        assert!(expanded.shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Rect(rect) if rect.rect.width()<=16. && rect.rect.height()>30. && rect.rect.right()>right-24. && rect.rect.right()<=right)),"scrollbar must sit at the right column edge at {width}");
+        let december = text_rect(&expanded, "Dezember");
+        draw(click(egui::pos2(right - 28., december.center().y)));
+        assert_eq!(
+            suite.group.as_deref(),
+            Some("2026/12"),
+            "full-width month hit target at {width}"
+        );
+    }
+}
