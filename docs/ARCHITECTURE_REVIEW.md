@@ -34,7 +34,7 @@ Die Nachprüfung hat konkrete Schwachstellen gefunden und behoben. Sie ist keine
 
 ## Validierung dieses Standes
 
-- **170 Rust-Tests** erfolgreich: 95 Desktop, 55 Anwendung, 20 Domäne.
+- **176 Rust-Tests** erfolgreich: 96 Desktop, 57 Anwendung, 23 Domäne.
 - Kern zusätzlich unabhängig von nativer UI gebaut und getestet.
 - `cargo fmt --all --check`, Clippy mit `-D warnings`, Workspace-Build und Cargo-basierte Architekturprüfung erfolgreich.
 - **10 Python-Tests** für Architekturpolicy und Paketierung erfolgreich.
@@ -55,3 +55,6 @@ Die Nachprüfung hat konkrete Schwachstellen gefunden und behoben. Sie ist keine
 
 ## Nachprüfung: native Menüs
 Die neue Menüführung bleibt eine Präsentationsaufgabe. `desktop_menu` trennt frameworkunabhängige Einträge/Aktionen vom injizierten muda-Adapter; `presentation/menu` delegiert fachliche Aktionen an bestehende Sitzungen und den Bild-Dispatcher. Keine GUI-Abhängigkeit im Anwendungskern. Native und egui-Befehlskürzel sind im Produktivbetrieb nicht gleichzeitig aktiv. Aktuelle Verfügbarkeit wird vor jedem Aktivierungsereignis erneut geprüft. Der Kanal ist auf 64 Ereignisse begrenzt, und Änderungen wecken die UI. Native Textmenüs bedienen den egui-Textfokus über dessen eigene Schnittstellen. macOS-AppKit-Menüs einschließlich realer Aktivierung und Shortcutprojektion wurden automatisiert geprüft. Windows und Linux bleiben ausdrücklich unvalidierte bzw. noch fehlende Host-Portierungen; keine Menü-Fallbacks.
+
+## Nachprüfung: flache Audioablage
+AudioScope/AudioKind und die Präfixklassifikation liegen in der Domäne. Die Anwendung verwendet dieselbe Mitgliedschaft für Anzeige, Namen-Cache, Datumskatalog und Wiedergabestart. Kommentare behalten ihre logische Namenszeit bei der Dauerprüfung. UI-Ansichtsschlüssel sind von physischen Schreibpfaden getrennt; nur der vorhandene Importpfad erzeugt neue Dateien unter Jahr/audio. Der Dateisystemadapter liest alte/neue Audioordner ohne synchrones Container-Probing. Die Regressionen prüfen getrennte/gemischte Bereiche, unbekannte Namen, Legacy-Kompatibilität, tatsächliche Playerprojektionen, Kommentarzeit, Navigation und unveränderte Dateien. Keine automatische Migration oder Aufnahmefunktion enthalten.

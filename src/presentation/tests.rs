@@ -412,7 +412,7 @@ fn library_years_start_collapsed_and_expand_on_click() {
     assert!(
         !initial
             .iter()
-            .any(|(text, _)| text == "September" || text == "Ganzes Jahr")
+            .any(|(text, _)| text == "September" || text == "Photos")
     );
     let header = initial
         .iter()
@@ -437,9 +437,52 @@ fn library_years_start_collapsed_and_expand_on_click() {
     ]);
     let expanded = draw(vec![]);
     assert!(expanded.iter().any(|(text, _)| text == "September"));
-    assert!(expanded.iter().any(|(text, _)| text == "Diary"));
-    assert!(expanded.iter().any(|(text, _)| text == "Ganzes Jahr"));
-    assert_eq!(suite.group.as_deref(), Some("2026"));
+    assert!(expanded.iter().any(|(text, _)| text == "Audio"));
+    assert!(!expanded.iter().any(|(text, _)| text == "Photos"));
+    assert!(!expanded.iter().any(|(text, _)| text == "Ganzes Jahr"));
+    let click = |pos| {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    };
+    let audio = expanded.iter().find(|(text, _)| text == "Audio").unwrap().1;
+    let month = expanded
+        .iter()
+        .find(|(text, _)| text == "September")
+        .unwrap()
+        .1;
+    assert!(audio.top() < month.top(), "Audio must precede months");
+    let audio = audio.center();
+    draw(click(audio));
+    let audio_entries = draw(vec![]);
+    assert!(
+        !audio_entries
+            .iter()
+            .any(|(text, _)| text == "Alle Aufnahmen")
+    );
+    for label in ["Tagebuch", "Fotokommentare"] {
+        assert!(audio_entries.iter().any(|(text, _)| text == label));
+    }
+    let comments = audio_entries
+        .iter()
+        .find(|(text, _)| text == "Fotokommentare")
+        .unwrap()
+        .1
+        .center();
+    draw(click(comments));
+    assert_eq!(suite.group.as_deref(), Some("2026/audio/comments"));
 }
 #[test]
 fn importing_elsewhere_keeps_the_open_photo_library_and_saved_path() {

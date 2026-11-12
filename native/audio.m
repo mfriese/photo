@@ -185,7 +185,7 @@ int photosuite_audio_open_mode(const char **paths,const char **labels,const doub
         showWindow=showWindow || (PSAudio && PSAudio.window.visible);
         if(PSAudio){[PSAudio shutdown];[PSAudio close];}
         NSWindow *window=PSAudioCreateWindow();
-        window.title=[NSString stringWithFormat:@"Diary %@ · Jahresverlauf",[NSString stringWithUTF8String:year]];
+        window.title=[NSString stringWithFormat:@"%@ · Jahresverlauf",[NSString stringWithUTF8String:year]];
         PSAudioController *controller=[[PSAudioController alloc] initWithWindow:window];PSAudio=controller;window.delegate=controller;
         controller.photoSession=++PSNextPhotoSession;*session=controller.photoSession;
         controller.transport=[PSAudioTransport new];controller.transport.player.volume=0.8;

@@ -57,6 +57,7 @@ impl DiaryClip {
 #[derive(Clone, Debug)]
 pub struct DiaryTimeline {
     year: String,
+    kind: crate::diary::AudioKind,
     clips: Vec<DiaryClip>,
 }
 impl DiaryTimeline {
@@ -71,7 +72,11 @@ impl DiaryTimeline {
         if clips.iter().any(|c| !paths.insert(c.path.clone())) {
             return Err("Doppelte Aufnahme im Jahresverlauf".into());
         }
-        let mut timeline = Self { year, clips };
+        let mut timeline = Self {
+            year,
+            clips,
+            kind: crate::diary::AudioKind::All,
+        };
         timeline.sort();
         Ok(timeline)
     }
@@ -85,6 +90,13 @@ impl DiaryTimeline {
             }
             .then(a.path.cmp(&b.path))
         });
+    }
+    pub fn with_kind(mut self, kind: crate::diary::AudioKind) -> Self {
+        self.kind = kind;
+        self
+    }
+    pub fn kind(&self) -> crate::diary::AudioKind {
+        self.kind
     }
     pub fn year(&self) -> &str {
         &self.year
@@ -126,7 +138,13 @@ impl DiaryTimeline {
             .iter_mut()
             .find(|c| c.path == recording.path())
             .ok_or("Aufnahme gehört nicht zum Jahresverlauf")?;
-        clip.captured = Some(recording.captured().clone());
+        clip.captured = Some(
+            clip.path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(crate::audio_date::comment_time)
+                .unwrap_or_else(|| recording.captured().clone()),
+        );
         clip.duration = Some(recording.duration());
         for clip in &mut self.clips {
             if !clip.is_verified() && clip.provisional_weight.is_some() {
@@ -257,5 +275,33 @@ mod tests {
                 .duration()
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod comment_tests {
+    use super::*;
+    #[test]
+    fn comment_keeps_photo_time_when_duration_and_recording_metadata_arrive() {
+        let comment = PathBuf::from("2023/audio/comment_20230101_120000.wav");
+        let diary = PathBuf::from("2023/audio/aud_20230102_120000.wav");
+        let mut timeline = DiaryTimeline::new(
+            "2023".into(),
+            vec![
+                DiaryClip::from_filename(diary),
+                DiaryClip::from_filename(comment.clone()),
+            ],
+        )
+        .unwrap();
+        let recorded = CaptureTime::parse("2026:11:10 18:00:00", "actual recording").unwrap();
+        timeline
+            .refine(Recording::new(comment.clone(), recorded, 15.).unwrap())
+            .unwrap();
+        assert_eq!(timeline.clips()[0].path(), comment);
+        assert_eq!(
+            timeline.clips()[0].captured().unwrap().stamp(),
+            "20230101_120000"
+        );
+        assert_eq!(timeline.clips()[0].duration(), Some(15.));
     }
 }

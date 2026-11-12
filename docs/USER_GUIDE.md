@@ -217,7 +217,7 @@ Die optionale Detailansicht des Importprotokolls stellt jeden Schritt als eigene
 
 ## Audio-Diary
 
-Audio wird im bestehenden Import mitkopiert: `Jahr/diary/aud_JJJJMMTT_HHMMSS.ext`. Beim Import bleiben Quellen unverändert; nur der separate bestätigte Aufräumschritt kann sie danach in den Papierkorb verschieben. Zum Anhören ein Jahr aufklappen, „Diary“ wählen und eine Datei anklicken. Der Jahresplayer enthält alle Aufnahmen dieses Diary-Ordners chronologisch auf einer einzigen Hörleiste. Diese startet ausschließlich mit Dateinamen und zunächst gleichen vorläufigen Gewichten; nach der Prüfung sind die Abschnitte proportional zur echten Dauer. Der Schieber navigiert auch über Dateigrenzen hinweg; es wird keine Sammeldatei exportiert und keine Playlist dargestellt.
+Audio wird im bestehenden Import mitkopiert: `Jahr/audio/aud_JJJJMMTT_HHMMSS.ext`. Beim Import bleiben Quellen unverändert; nur der separate bestätigte Aufräumschritt kann sie danach in den Papierkorb verschieben. Zum Anhören ein Jahr aufklappen, „Audio“ für alle Aufnahmen oder darunter „Tagebuch“ beziehungsweise „Fotokommentare“ wählen und eine Datei anklicken. Der Jahresplayer enthält alle Aufnahmen des gewählten Audiobereichs chronologisch auf einer einzigen Hörleiste. Diese startet ausschließlich mit Dateinamen und zunächst gleichen vorläufigen Gewichten; nach der Prüfung sind die Abschnitte proportional zur echten Dauer. Der Schieber navigiert auch über Dateigrenzen hinweg; es wird keine Sammeldatei exportiert und keine Playlist dargestellt.
 
 Eingebettete Aufnahmezeit vor Inhalts-/Containerdatum; ohne diese Daten zuerst den vollständigen Zeitstempel im Dateinamen (z. B. `2023-12-27_22-51-32`, mit `-`, `_` oder ohne Trenner; einschließlich aud-Importnamen), zuletzt das Dateisystem-Erstellungsdatum als gekennzeichneten Fallback verwenden. Datum und Quelle im Prüflauf kontrollieren. Bei Fotos/Videos bleiben die strikten bisherigen Regeln unverändert. Audio-Kollisionen werden bytegenau verglichen. Formatliste, Einschränkungen und genaue Priorität stehen in der aktuellen Repository-README.
 
@@ -301,3 +301,11 @@ Die Bildbefehle sind während Texteingabe, Dialogen und EXIF-Schreibaufträgen d
 
 ### Suche ohne dauerhafte Suchzeile
 **Edit → Find… (⌘F)** öffnet ein separates Suchfenster. Eingaben filtern die Fotowand direkt. Schließen oder Escape erhält den Filter; „Filter zurücksetzen“ entfernt ihn. Ein aktiver Such-/Videofilter bleibt in der einzeiligen Fußzeile sichtbar. Der Bibliothekspfad steht nur im Fenstertitel, EXIF-Schreiben unter **PhotoSuite → Settings…**, die Vorschaugröße unter **View → Thumbnail Size**.
+
+### Ein Ordner, drei Audioansichten
+Alle neuen Audioimporte werden als Tagebuch unter `Jahr/audio/aud_….ext` gespeichert. Fotokommentare mit `comment_….ext` können im selben Ordner liegen; die Aufnahmefunktion kommt später. Die Kategorien unter Audio sind Filter und erzeugen keine Unterordner. Audio mischt beide Arten chronologisch; Tagebuch und Fotokommentare spielen nur ihren Bereich. Der Suchfilter begrenzt die sichtbaren Kacheln, nicht die Hörleiste des gewählten Bereichs. Unbekannte Namen erscheinen nur in der gemeinsamen Audioansicht.
+
+Bestehende `Jahr/diary`-Ordner sowie bereits angelegte Audio-Kategorieordner werden mitgelesen und nicht verändert. Bei alten Namen ohne Präfix liefert deren bisheriger Kategorieordner die Zuordnung. Explizite Präfixe gehen vor. Alte Bestände werden nicht automatisch migriert oder mit neuen Importzielen dedupliziert. Bei `comment_` bleibt der gültige Zeitstempel im Namen als Fotozeit maßgeblich, während Dauer/Abspielbarkeit nachgeladen werden.
+
+### Jahr und Audio aufklappen
+Ein aufgeklapptes Jahr zeigt zuerst Audio und darunter direkt alle Monate auf derselben Ebene. Der Jahresklick wählt die Jahresfotowand. Audio öffnet die gemeinsame Jahres-Höransicht und klappt Tagebuch/Fotokommentare auf oder zu. Kontextfotos aus der Audiowiedergabe öffnen bei Bedarf das betreffende Jahr und markieren das Bild in der Fotowand. Keine zusätzliche Photos-Ebene.

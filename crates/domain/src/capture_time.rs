@@ -135,7 +135,7 @@ impl CaptureTime {
             format!("_{suffix:03}")
         };
         let (folder, prefix) = if media.is_audio() {
-            ("diary", "aud")
+            ("audio", "aud")
         } else {
             (self.month.as_str(), "img")
         };
@@ -148,16 +148,16 @@ impl CaptureTime {
 mod tests {
     use super::*;
     #[test]
-    fn audio_names_preserve_format_and_use_diary_instead_of_month() {
+    fn audio_names_preserve_format_and_use_flat_year_audio_instead_of_month() {
         let time = CaptureTime::parse("2008:09:16 03:58:11", "BWF").unwrap();
         let media = Media::from_path("a.WAV".into(), String::new()).unwrap();
         assert_eq!(
             time.target(Path::new("library"), &media, 0),
-            PathBuf::from("library/2008/diary/aud_20080916_035811.wav")
+            PathBuf::from("library/2008/audio/aud_20080916_035811.wav")
         );
         assert_eq!(
             time.target(Path::new("library"), &media, 2),
-            PathBuf::from("library/2008/diary/aud_20080916_035811_002.wav")
+            PathBuf::from("library/2008/audio/aud_20080916_035811_002.wav")
         );
     }
     #[test]

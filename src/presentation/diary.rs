@@ -31,11 +31,14 @@ pub(super) fn audio_preview(ui: &mut egui::Ui, size: f32) -> egui::Response {
 }
 impl super::Suite {
     pub(super) fn diary_wall(&mut self, ctx: &egui::Context, visible: &[usize]) {
-        let year = crate::domain::diary::diary_year(self.group.as_deref().unwrap_or(""))
+        let year = crate::domain::diary::audio_year(self.group.as_deref().unwrap_or(""))
             .unwrap_or("")
             .to_owned();
-        self.diary_catalog
-            .ensure(&self.items, &year, self.services.audio_source.clone());
+        self.diary_catalog.ensure(
+            &self.items,
+            self.group.as_deref().unwrap_or(""),
+            self.services.audio_source.clone(),
+        );
         if self.diary_catalog.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -54,7 +57,8 @@ impl super::Suite {
         });
         let mut chosen = None;
         egui::CentralPanel::default().frame(theme::panel(theme::CANVAS,12)).show(ctx,|ui| {
-            ui.heading(format!("Diary · {year}"));
+            let kind=crate::domain::diary::AudioScope::parse(self.group.as_deref().unwrap_or("")).map(|scope|scope.kind()).unwrap_or(crate::domain::diary::AudioKind::All);
+            ui.heading(format!("{} · {year}",crate::audio_labels::kind_label(kind)));
             self.compact_audio(ui);
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!ordered.is_empty()&&!self.diary.is_loading(),egui::Button::new("Jahresverlauf öffnen")).clicked(){chosen=ordered.first().copied();}
@@ -62,7 +66,7 @@ impl super::Suite {
                 ui.label(format!("{} Aufnahmen",ordered.len()));
             });
             if !self.diary.status().is_empty(){ui.add(egui::Label::new(self.diary.status()).wrap());}
-            if ordered.is_empty(){ui.label("Noch keine Aufnahmen. Audio über Import hinzufügen oder den Suchfilter leeren.");return;}
+            if ordered.is_empty(){ui.label("Noch keine Aufnahmen in diesem Bereich. Importierte Audiodateien erscheinen unter Tagebuch.");return;}
             ui.add_space(6.);
             ui.spacing_mut().item_spacing=egui::vec2(8.,4.);
             let width=(ui.available_width()-ui.spacing().scroll.allocated_width()).max(1.);
@@ -98,10 +102,11 @@ impl super::Suite {
             ctx.request_repaint();
         }
         if let Some(index) = chosen
-            && let Err(error) = self.diary.start(
+            && let Err(error) = self.diary.start_in_scope(
                 &self.items,
                 &self.items[index],
                 self.services.audio_source.clone(),
+                self.group.as_deref().unwrap_or(""),
             )
         {
             self.status = error;

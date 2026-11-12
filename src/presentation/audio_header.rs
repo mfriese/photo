@@ -152,7 +152,9 @@ fn controls(
                 .map(|d| format!("{} {}", d.date_label(), d.time_label()))
                 .unwrap_or_else(|| {
                     timeline
-                        .map(|t| format!("Diary {}", t.year()))
+                        .map(|t| {
+                            format!("{} {}", crate::audio_labels::kind_label(t.kind()), t.year())
+                        })
                         .unwrap_or_else(|| "Keine Aufnahmen".into())
                 })
         };
@@ -239,9 +241,12 @@ impl super::Suite {
         if actions.start
             && let Some(path) = self.audio_header.draft.selected()
             && let Some(selected) = self.items.iter().find(|m| m.path() == path)
-            && let Err(error) =
-                self.diary
-                    .start_embedded(&self.items, selected, self.services.audio_source.clone())
+            && let Err(error) = self.diary.start_embedded(
+                &self.items,
+                selected,
+                self.services.audio_source.clone(),
+                group,
+            )
         {
             self.status = error;
         }

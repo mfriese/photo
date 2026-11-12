@@ -3,7 +3,7 @@ use crate::theme;
 use eframe::egui;
 impl super::Suite {
     pub(super) fn photo_wall(&mut self, ctx: &egui::Context, visible: &[usize]) {
-        if crate::domain::diary::diary_year(self.group.as_deref().unwrap_or("")).is_some() {
+        if crate::domain::diary::audio_year(self.group.as_deref().unwrap_or("")).is_some() {
             self.diary_wall(ctx, visible);
             return;
         }

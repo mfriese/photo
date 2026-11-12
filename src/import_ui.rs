@@ -67,7 +67,7 @@ impl ImportPanel {
                             && let Some(path) = rfd::FileDialog::new().pick_folder() { self.target = Some(path); }
                         let text = self.target.as_ref().map(|p| p.display().to_string()).unwrap_or("Keine Bibliothek gewählt".into());
                         ui.add(egui::Label::new(&text).truncate()).on_hover_text(text);
-                        ui.small("Fotos/Video: Jahr/Monat/img_… · Audio: Jahr/diary/aud_…");
+                        ui.small("Fotos/Video: Jahr/Monat/img_… · Audio: Jahr/audio/aud_…");
                     });
                     ui.horizontal_wrapped(|ui| {
                         let ready = self.source.is_some() && self.target.is_some();
@@ -255,7 +255,7 @@ mod tests {
     fn compact_log_has_one_entry_per_file_and_retains_diagnostics_on_request() {
         let report = import::FileReport {
             source: "/Quelle/2023-12-27_22-51-32.wav".into(),
-            target: Some("/Bibliothek/2023/diary/aud_20231227_225132.wav".into()),
+            target: Some("/Bibliothek/2023/audio/aud_20231227_225132.wav".into()),
             captured: Some(
                 crate::domain::CaptureTime::parse(
                     "2023:12:27 22:51:32",
@@ -291,7 +291,7 @@ mod tests {
         let compact = export_log(&events, false, Some(std::path::Path::new("/Bibliothek")));
         assert_eq!(compact.lines().count(), 1);
         assert!(compact.contains("Geplant"));
-        assert!(compact.contains("2023/diary/aud_20231227_225132.wav"));
+        assert!(compact.contains("2023/audio/aud_20231227_225132.wav"));
         assert!(!compact.contains("/Bibliothek/"));
         assert!(!compact.contains("Metadaten lesen"));
         let detailed = export_log(&events, true, None);

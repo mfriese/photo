@@ -56,12 +56,21 @@ pub fn select_audio_date(
     )
 }
 /// Anchored YYYY[-_]MM[-_]DD[-_]hh[-_]mm[-_]ss, also without separators.
-/// Optional aud_ prefix and a separated numeric collision suffix are supported.
+/// Optional aud_ / comment_ prefix and a separated numeric collision suffix are supported.
 pub fn date_from_filename(stem: &str) -> Option<CaptureTime> {
     let imported = stem
         .get(..4)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("aud_"));
-    let value = if imported { stem.get(4..)? } else { stem };
+    let comment = stem
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("comment_"));
+    let value = if imported {
+        stem.get(4..)?
+    } else if comment {
+        stem.get(8..)?
+    } else {
+        stem
+    };
     let mut position = 0;
     let mut parts = Vec::with_capacity(6);
     for length in [4, 2, 2, 2, 2, 2] {
@@ -88,7 +97,9 @@ pub fn date_from_filename(stem: &str) -> Option<CaptureTime> {
         "{}:{}:{} {}:{}:{}",
         parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
     );
-    let origin = if imported {
+    let origin = if comment {
+        "FALLBACK Fotokommentar-Dateiname"
+    } else if imported {
         "FALLBACK Diary-Importdateiname"
     } else {
         "FALLBACK Audio-Dateiname"
@@ -98,6 +109,12 @@ pub fn date_from_filename(stem: &str) -> Option<CaptureTime> {
         &format!("{origin}: {stem} (keine vollständige eingebettete Aufnahmezeit)"),
     )
     .ok()
+}
+/// A comment's logical time belongs to the photograph, not to its later recording session.
+pub fn comment_time(stem: &str) -> Option<CaptureTime> {
+    stem.get(..8)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("comment_"))?;
+    date_from_filename(stem)
 }
 #[cfg(test)]
 mod tests {
@@ -115,6 +132,8 @@ mod tests {
             "aud_20231227_225132",
             "aud_20231227_225132_002",
             "AUD_20231227_225132",
+            "comment_20231227_225132",
+            "COMMENT_20231227_225132_002",
         ] {
             let date =
                 select_audio_date(&BTreeMap::new(), Some(name), Some("2026-11-07T08:00:00Z"))

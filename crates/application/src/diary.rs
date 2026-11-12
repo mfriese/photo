@@ -1,7 +1,7 @@
 //! Prepare one continuous year timeline in the background; native UI opens on the UI thread.
 use crate::domain::{
     CaptureTime, Media,
-    diary::{Recording, diary_year},
+    diary::{AudioKind, AudioScope, Recording},
     diary_timeline::{DiaryClip, DiaryTimeline},
 };
 use std::{
@@ -145,8 +145,9 @@ impl DiarySession {
         items: &[Media],
         selected: &Media,
         source: Arc<dyn AudioSource>,
+        group: &str,
     ) -> Result<(), String> {
-        self.start(items, selected, source)?;
+        self.start_in_scope(items, selected, source, group)?;
         self.pending.as_mut().unwrap().embedded = true;
         Ok(())
     }
@@ -172,23 +173,42 @@ impl DiarySession {
         selected: &Media,
         source: Arc<dyn AudioSource>,
     ) -> Result<(), String> {
+        let group = AudioScope::parse(selected.group())
+            .and_then(|scope| {
+                AudioScope::for_year(
+                    scope.year(),
+                    crate::domain::diary::audio_kind(selected).unwrap_or(AudioKind::All),
+                )
+            })
+            .map(AudioScope::group)
+            .ok_or("Aufnahme nicht in einem Audio-Jahresbereich")?;
+        self.start_in_scope(items, selected, source, &group)
+    }
+    pub fn start_in_scope(
+        &mut self,
+        items: &[Media],
+        selected: &Media,
+        source: Arc<dyn AudioSource>,
+        group: &str,
+    ) -> Result<(), String> {
         if self.pending.is_some() {
             return Err(
                 "Eine Audio-Vorbereitung läuft noch; bitte Abschluss oder Abbruch abwarten".into(),
             );
         }
-        let year = diary_year(selected.group())
-            .ok_or("Audio bitte aus einem Jahr/diary-Ordner öffnen")?
-            .to_owned();
+        let scope = playback_scope(group)
+            .ok_or("Audio bitte aus einer Jahres- oder Audioansicht öffnen")?;
+        let year = scope.year().to_owned();
         let paths: Vec<PathBuf> = items
             .iter()
-            .filter(|m| m.is_audio() && diary_year(m.group()) == Some(&year))
+            .filter(|m| m.is_audio() && scope.includes(m))
             .map(|m| m.path().into())
             .collect();
         let selected = selected.path().to_owned();
         if !paths.contains(&selected) {
             return Err("Aufnahme nicht im Jahresverlauf".into());
         }
+        let kind = scope.kind();
         let photos = items.iter().filter(|m| m.is_photo()).cloned().collect();
         self.timeline = None;
         self.warnings.clear();
@@ -219,7 +239,7 @@ impl DiarySession {
                     }
                     clips.push(DiaryClip::from_filename(path.clone()));
                 }
-                DiaryTimeline::new(year, clips)
+                DiaryTimeline::new(year, clips).map(|timeline| timeline.with_kind(kind))
             })();
             let Ok(timeline) = draft else {
                 let _ = sender.send(Event::Draft(Err(draft.unwrap_err())));
@@ -425,13 +445,14 @@ impl DiaryCatalog {
         self.key = None;
         self.dates.clear();
     }
-    pub fn ensure(&mut self, items: &[Media], year: &str, source: Arc<dyn AudioSource>) {
+    pub fn ensure(&mut self, items: &[Media], group: &str, source: Arc<dyn AudioSource>) {
+        let scope = playback_scope(group);
         let paths: Vec<_> = items
             .iter()
-            .filter(|m| m.is_audio() && diary_year(m.group()) == Some(year))
+            .filter(|m| scope.is_some_and(|scope| scope.includes(m)))
             .map(|m| m.path().to_owned())
             .collect();
-        let key = (year.to_owned(), paths.clone());
+        let key = (group.to_owned(), paths.clone());
         if self.key.as_ref() == Some(&key) {
             return;
         }
@@ -837,18 +858,60 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn player_and_draft_use_the_selected_audio_category_only() {
+        let items: Vec<_> = [
+            "aud_20230101_120000.wav",
+            "comment_20230102_120000.wav",
+            "unknown.wav",
+        ]
+        .into_iter()
+        .map(|name| {
+            Media::from_library_path(Path::new("2023/audio").join(name), "2023/audio".into())
+                .unwrap()
+        })
+        .collect();
+        for (group, index, count, kind) in [
+            ("2023/audio", 0, 3, AudioKind::All),
+            ("2023/audio/diary", 0, 1, AudioKind::Diary),
+            ("2023/audio/comments", 1, 1, AudioKind::Comments),
+        ] {
+            let player = Player::default();
+            player.started.store(true, Ordering::Relaxed);
+            let mut session = DiarySession::default();
+            session
+                .start_in_scope(&items, &items[index], Arc::new(Source), group)
+                .unwrap();
+            until(&mut session, &player, |s, _| !s.is_loading());
+            let timeline = session.timeline().unwrap();
+            assert_eq!(timeline.clips().len(), count);
+            assert_eq!(timeline.kind(), kind);
+            let opened = player.opened.lock().unwrap();
+            assert_eq!(opened.as_ref().unwrap().0.clips().len(), count);
+            let mut cache = GalleryAudio::default();
+            cache.ensure(&items, Path::new("/library"), group);
+            assert_eq!(cache.timeline().unwrap().clips().len(), count);
+            assert_eq!(cache.selected(), Some(items[index].path()));
+        }
+        let mut session = DiarySession::default();
+        assert!(
+            session
+                .start_in_scope(&items, &items[1], Arc::new(Source), "2023/audio/diary")
+                .is_err()
+        );
+    }
 }
 
 /// Names-only selection for the gallery header; all recordings of the year share one axis.
 pub fn gallery_audio<'a>(items: &'a [Media], group: &str) -> Option<&'a Media> {
-    let year = gallery_year(group)?;
+    let scope = playback_scope(group)?;
     let month = group
         .split(std::path::MAIN_SEPARATOR)
         .nth(1)
         .filter(|m| m.len() == 2 && m.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)));
     items
         .iter()
-        .filter(|media| media.is_audio() && diary_year(media.group()) == Some(year))
+        .filter(|media| media.is_audio() && scope.includes(media))
         .min_by_key(|media| {
             let date = media
                 .path()
@@ -864,6 +927,10 @@ pub fn gallery_audio<'a>(items: &'a [Media], group: &str) -> Option<&'a Media> {
                 media.path().to_owned(),
             )
         })
+}
+/// A year/month selects all audio; an audio child keeps its category restriction.
+pub fn playback_scope(group: &str) -> Option<AudioScope<'_>> {
+    AudioScope::parse(group).or_else(|| AudioScope::for_year(gallery_year(group)?, AudioKind::All))
 }
 pub fn gallery_year(group: &str) -> Option<&str> {
     let year = group.split(std::path::MAIN_SEPARATOR).next()?;
@@ -889,16 +956,18 @@ impl GalleryAudio {
         self.key = Some(key);
         self.timeline = None;
         self.selected = None;
-        let Some(year) = gallery_year(group) else {
+        let Some(scope) = playback_scope(group) else {
             return;
         };
         self.selected = gallery_audio(items, group).map(|m| m.path().to_owned());
         let clips = items
             .iter()
-            .filter(|m| m.is_audio() && diary_year(m.group()) == Some(year))
+            .filter(|m| m.is_audio() && scope.includes(m))
             .map(|m| DiaryClip::from_filename(m.path().to_owned()))
             .collect();
-        self.timeline = DiaryTimeline::new(year.into(), clips).ok();
+        self.timeline = DiaryTimeline::new(scope.year().into(), clips)
+            .map(|timeline| timeline.with_kind(scope.kind()))
+            .ok();
     }
     pub fn timeline(&self) -> Option<&DiaryTimeline> {
         self.timeline.as_ref()

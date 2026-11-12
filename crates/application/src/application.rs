@@ -2,7 +2,7 @@ use crate::domain::{Media, matches_group};
 use crate::ports::MediaRepository;
 pub fn visible(items: &[Media], query: &str, group: Option<&str>, videos_only: bool) -> Vec<usize> {
     let query = query.to_lowercase();
-    let diary = crate::domain::diary::diary_year(group.unwrap_or("")).is_some();
+    let diary = crate::domain::diary::audio_year(group.unwrap_or("")).is_some();
     items
         .iter()
         .enumerate()
@@ -10,8 +10,8 @@ pub fn visible(items: &[Media], query: &str, group: Option<&str>, videos_only: b
             (if diary { m.is_audio() } else { !m.is_audio() })
                 && (diary || !videos_only || m.is_video())
                 && (if diary {
-                    crate::domain::diary::diary_year(m.group())
-                        == crate::domain::diary::diary_year(group.unwrap_or(""))
+                    crate::domain::diary::AudioScope::parse(group.unwrap_or(""))
+                        .is_some_and(|scope| scope.includes(m))
                 } else {
                     matches_group(m.group(), group)
                 })
@@ -108,5 +108,42 @@ mod photo_location_tests {
                 .year
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod flat_audio_tests {
+    use super::*;
+    #[test]
+    fn same_folder_is_filtered_by_kind_and_legacy_diary_is_included() {
+        let items: Vec<_> = [
+            ("aud_20230101_120000.wav", "2023/audio"),
+            ("comment_20230101_120000.mp4", "2023/audio"),
+            ("unknown.wav", "2023/audio"),
+            ("old.wav", "2023/diary"),
+            ("img_20230101_120000.jpg", "2023/01"),
+        ]
+        .into_iter()
+        .map(|(file, group)| {
+            Media::from_library_path(std::path::Path::new(group).join(file), group.into()).unwrap()
+        })
+        .collect();
+        assert_eq!(
+            visible(&items, "", Some("2023/audio"), true),
+            vec![0, 1, 2, 3]
+        );
+        assert_eq!(
+            visible(&items, "", Some("2023/audio/diary"), true),
+            vec![0, 3]
+        );
+        assert_eq!(
+            visible(&items, "", Some("2023/audio/comments"), false),
+            vec![1]
+        );
+        assert_eq!(
+            visible(&items, "comment", Some("2023/audio"), false),
+            vec![1]
+        );
+        assert_eq!(visible(&items, "", Some("2023"), false), vec![4]);
     }
 }

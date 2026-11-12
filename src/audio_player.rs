@@ -394,11 +394,16 @@ impl NativeAudioPlayer {
     ) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         {
-            let session = projection::NativeLayout::new(
-                timeline,
-                &VerificationProgress::default(),
-            )?
-            .open(timeline.year(), selected, show_window)?;
+            let session =
+                projection::NativeLayout::new(timeline, &VerificationProgress::default())?.open(
+                    &format!(
+                        "{} · {}",
+                        crate::audio_labels::kind_label(timeline.kind()),
+                        timeline.year()
+                    ),
+                    selected,
+                    show_window,
+                )?;
             self.session
                 .store(session, std::sync::atomic::Ordering::Relaxed);
             let candidates = photos

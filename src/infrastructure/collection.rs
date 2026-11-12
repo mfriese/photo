@@ -121,7 +121,7 @@ impl FileSystemRepository {
                 {
                     media = Media::from_audio_asset(path.into(), media.group().to_owned()).unwrap();
                 }
-                if crate::domain::diary::diary_year(media.group()).is_some() && !media.is_audio() {
+                if crate::domain::diary::audio_year(media.group()).is_some() && !media.is_audio() {
                     errors += 1;
                     continue;
                 }
@@ -275,5 +275,74 @@ mod tests {
         assert_eq!(items[0].group(), "2024/03");
         assert!(items[1].is_video());
         assert_eq!(std::fs::read(month.join("a.JPG")).unwrap(), b"original");
+    }
+}
+
+#[cfg(test)]
+mod flat_audio_tests {
+    use super::*;
+    #[test]
+    fn flat_audio_containers_and_legacy_files_load_without_metadata_or_writes() {
+        struct NoReads;
+        impl photosuite_application::diary::AudioSource for NoReads {
+            fn probe(&self, _: &Path) -> Result<photosuite_application::diary::AudioProbe, String> {
+                panic!("browse must not inspect assets")
+            }
+            fn capture_time(&self, _: &Path) -> Result<crate::domain::CaptureTime, String> {
+                panic!("browse must not read metadata")
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let files = [
+            "2023/audio/aud_20230101_120000.mp4",
+            "2023/audio/comment_20230101_120000.mov",
+            "2023/audio/unknown.wav",
+            "2023/diary/old.wav",
+        ];
+        for path in files {
+            let path = root.path().join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"untouched source").unwrap();
+        }
+        let repo = FileSystemRepository {
+            audio: std::sync::Arc::new(NoReads),
+            priority: Default::default(),
+        };
+        let (items, errors) = repo.scan_partition(
+            root.path(),
+            "2023",
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert_eq!(errors, 0);
+        assert_eq!(items.len(), 4);
+        assert!(items.iter().all(|m| m.is_audio()));
+        assert_eq!(
+            photosuite_application::application::visible(
+                &items,
+                "",
+                Some("2023/audio/diary"),
+                false
+            )
+            .len(),
+            2
+        );
+        assert_eq!(
+            photosuite_application::application::visible(
+                &items,
+                "",
+                Some("2023/audio/comments"),
+                false
+            )
+            .len(),
+            1
+        );
+        for file in files {
+            assert_eq!(
+                std::fs::read(root.path().join(file)).unwrap(),
+                b"untouched source"
+            );
+        }
+        assert!(!root.path().join("2023/audio/diary").exists());
+        assert!(!root.path().join("2023/audio/comments").exists());
     }
 }

@@ -40,7 +40,7 @@ impl Media {
     /// Fast browsing classification: diary containers are provisional audio candidates.
     /// Playback/import must still validate their actual tracks through the audio port.
     pub fn from_library_path(path: PathBuf, group: String) -> Option<Self> {
-        let in_diary = diary::diary_year(&group).is_some();
+        let in_diary = diary::audio_year(&group).is_some();
         let mut media = Self::from_path(path, group)?;
         if in_diary && media.is_video() {
             media.kind = MediaKind::Audio;

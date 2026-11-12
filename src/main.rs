@@ -2,6 +2,7 @@ use photosuite_application::{application, import, ports};
 use photosuite_domain as domain;
 use photosuite_domain::commands;
 mod audio;
+mod audio_labels;
 mod audio_player;
 mod command_bindings;
 mod command_labels;
