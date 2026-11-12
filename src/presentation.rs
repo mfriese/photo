@@ -1,4 +1,5 @@
 mod audio_header;
+mod captions;
 mod chrome;
 mod diary;
 mod library;
@@ -12,6 +13,8 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc;
 pub struct Suite {
+    media_dates: photosuite_application::media_dates::MediaDates,
+    media_counts: photosuite_application::collection::MediaCounts,
     native_menu: Option<Box<dyn crate::desktop_menu::DesktopMenu>>,
     focus_search: bool,
     search_open: bool,
@@ -90,6 +93,8 @@ impl Suite {
         }
         self.root = Some(path);
         self.items.clear();
+        self.media_dates.clear();
+        self.media_counts = Default::default();
         self.highlighted_photo = None;
         self.scroll_to_photo = None;
         self.selected = None;
@@ -285,6 +290,10 @@ impl Suite {
 impl eframe::App for Suite {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll_startup(ctx);
+        self.media_dates.poll();
+        if self.media_dates.is_loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.organization.poll();
         if self.organization.loading() || self.organization.saving() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -339,11 +348,11 @@ impl eframe::App for Suite {
             match result {
                 Ok(collection) => {
                     self.items.extend(collection.items);
-                    self.status = format!(
-                        "{} Medien · {} nicht lesbare Einträge",
-                        self.items.len(),
-                        collection.unreadable
-                    );
+                    self.status = if collection.unreadable == 0 {
+                        "Bereit".into()
+                    } else {
+                        format!("{} nicht lesbare Einträge", collection.unreadable)
+                    };
                     if self.remember_after_scan
                         && (collection.unreadable == 0 || !self.items.is_empty())
                     {
@@ -367,10 +376,7 @@ impl eframe::App for Suite {
                     self.collection.prioritize(year);
                 }
             }
-            self.status = format!(
-                "{} Medien geladen · Weitere Jahre werden gelesen …",
-                self.items.len()
-            );
+            self.status = "Weitere Jahre werden gelesen …".into();
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
         if self.native_menu.is_none()
@@ -449,6 +455,11 @@ pub fn create(
         std::env::args_os().skip(1).collect(),
     );
     Suite {
+        media_dates: photosuite_application::media_dates::MediaDates::new(
+            services.media_dates.clone(),
+            services.work_priority.clone(),
+        ),
+        media_counts: Default::default(),
         native_menu: Some(menu),
         focus_search: false,
         search_open: false,

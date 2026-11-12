@@ -52,29 +52,17 @@ impl super::Suite {
                     });
                     return;
                 }
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(self.group.as_deref().unwrap_or("Alle Erinnerungen"))
-                            .size(20.)
-                            .strong(),
-                    )
-                    .truncate(),
-                );
-                ui.label(
-                    egui::RichText::new(format!("{} Fotos & Videos", visible.len()))
-                        .size(12.)
-                        .color(theme::MUTED),
-                );
-                self.compact_audio(ui);
-                ui.add_space(6.);
-                if let Some(tag) = self.tag_view.active.clone() {
-                    ui.horizontal(|ui| {
-                        ui.strong(format!("Tag: {tag}"));
-                        if ui.small_button("Filter aufheben").clicked() {
-                            self.tag_view.active = None;
+                let title = self.tag_view.active.clone().unwrap_or_else(|| {
+                    let group = self.group.as_deref().unwrap_or("Sammlung");
+                    match group.split_once(std::path::MAIN_SEPARATOR) {
+                        Some((year, month)) if month.len() == 2 => {
+                            format!("{} {year}", super::library::month_label(month))
                         }
-                    });
-                }
+                        _ => group.into(),
+                    }
+                });
+                self.page_heading(ui, &title);
+                ui.add_space(4.);
                 if visible.is_empty() && !self.collection.is_loading() {
                     ui.add_space(16.);
                     ui.label(
@@ -93,7 +81,7 @@ impl super::Suite {
                 let width = (ui.available_width() - ui.spacing().scroll.allocated_width()).max(1.);
                 let columns = ((width + gap) / (target + gap)).floor().max(1.) as usize;
                 let tile = ((width - gap * (columns - 1) as f32) / columns as f32).max(1.);
-                let row_height = tile + 24.;
+                let row_height = tile + 36.;
                 let mut scroll = egui::ScrollArea::vertical().id_salt((
                     "photo_wall",
                     &self.root,
@@ -122,6 +110,7 @@ impl super::Suite {
                                 for &index in visible.iter().skip(row * columns).take(columns) {
                                     let m = &self.items[index];
                                     ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = 2.;
                                         ui.set_width(tile);
                                         let response = if m.is_audio() {
                                             super::diary::audio_preview(ui, tile)
@@ -242,20 +231,12 @@ impl super::Suite {
                                                 self.selected = Some(index);
                                             }
                                         }
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(
-                                                    m.path()
-                                                        .file_name()
-                                                        .unwrap_or_default()
-                                                        .to_string_lossy(),
-                                                )
-                                                .size(12.)
-                                                .color(theme::MUTED),
-                                            )
-                                            .truncate(),
-                                        )
-                                        .on_hover_text(m.path().display().to_string());
+                                        super::captions::caption(
+                                            ui,
+                                            &mut self.media_dates,
+                                            m,
+                                            tile,
+                                        );
                                     });
                                 }
                             });

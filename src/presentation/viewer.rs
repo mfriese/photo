@@ -29,6 +29,8 @@ impl super::Suite {
                 .show(ctx, |ui| {
                     crate::options_ui::spacing(ui);
                     let m = &self.items[index];
+                    let (date, clock, date_detail) =
+                        super::captions::text(&mut self.media_dates, m);
                     ui.horizontal(|ui| {
                         if ui.button("Tags …").clicked() {
                             match self.organization.file(m.path()) {
@@ -38,14 +40,11 @@ impl super::Suite {
                         }
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(
-                                    m.path().file_name().unwrap_or_default().to_string_lossy(),
-                                )
-                                .strong(),
+                                egui::RichText::new(format!("{date} {clock}")).strong(),
                             )
                             .truncate(),
                         )
-                        .on_hover_text(m.path().display().to_string())
+                        .on_hover_text(date_detail)
                         .context_menu(|ui| {
                             if ui.button("Tags bearbeiten …").clicked() {
                                 match self.organization.file(m.path()) {

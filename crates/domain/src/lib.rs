@@ -147,3 +147,16 @@ pub mod photo_context;
 pub mod diary_timeline;
 
 pub mod tags;
+
+/// Filename fast path for gallery captions. Never performs I/O or invents a date.
+pub fn capture_from_filename(media: &Media) -> Option<CaptureTime> {
+    let stem = media.path().file_stem()?.to_str()?;
+    if media.is_audio() {
+        return audio_date::date_from_filename(stem);
+    }
+    CaptureTime::from_photo_filename(stem).or_else(|| {
+        audio_date::date_from_filename(stem).and_then(|date| {
+            CaptureTime::from_civil_seconds(date.civil_seconds(), "Mediendateiname").ok()
+        })
+    })
+}

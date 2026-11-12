@@ -2,7 +2,7 @@
 
 ## Ziel
 
-Eine kompakte Fotoanwendung: Bilder dominieren, Bedienung und Dateinamen bleiben gut lesbar. Keine platzraubenden Dekorationszeilen. Deutsche Beschriftungen bleiben verständlich. Keine Cloud, Tracking- oder Kontofunktionen durch die Gestaltung suggerieren. Der UI-Technologie-Stack bleibt Rust mit egui/eframe.
+Eine kompakte Fotoanwendung: Bilder dominieren, Bedienung und Aufnahmedaten bleiben gut lesbar. Keine platzraubenden Dekorationszeilen. Deutsche Beschriftungen bleiben verständlich. Keine Cloud, Tracking- oder Kontofunktionen durch die Gestaltung suggerieren. Der UI-Technologie-Stack bleibt Rust mit egui/eframe.
 
 ## Gemeinsame Gestaltung
 
@@ -29,12 +29,12 @@ Eine kompakte Fotoanwendung: Bilder dominieren, Bedienung und Dateinamen bleiben
 
 - **Kein zusätzlicher Kopfbereich:** keine Suchzeile, Zoomregler, EXIF-Kennzeichnung oder Bibliothekspfadzeile. Hauptaktionen und Anzeigeoptionen in der nativen Menüleiste; Suche als separater Find-Dialog. Bibliothekspfad nur im Fenstertitel. Filter-/Schreibstatus in der einzeiligen Fußzeile.
 - **Seitenleiste:** volle Spaltenbreite für Einträge und Scrollbereich, vertikaler Scrollbalken ganz rechts. Kompakte 20-Punkte-Zeilen mit 1 Punkt Abstand; volle verfügbare Klickfläche, gekürzte lange Namen mit Tooltip. Abgesetzte Fläche, Gesamtansicht, absteigende aufklappbare Jahre, standardmäßig eingeklappt. Manuelles Aufklappen innerhalb der Sitzung respektieren. Monate als deutsche Namen darstellen; originale Gruppenschlüssel beibehalten. Kein zweiter fachlicher Filter in der UI.
-- **Fotowand:** bildbetonte, gleich große Kacheln, fünf Größenstufen, 8 Punkte horizontaler Abstand und gleichmäßig gefüllte vollständige Zeilen. Letzte Zeile unverändert. Dateinamen mit mindestens 12 Punkten und gekürzt; Videoabzeichen auf dunkler Fläche. Hover-Kontur ohne Größenverschiebung. Beide Vorschauformen zentrieren.
+- **Fotowand:** bildbetonte, gleich große Kacheln, fünf Größenstufen, 8 Punkte horizontaler Abstand und gleichmäßig gefüllte vollständige Zeilen. Letzte Zeile unverändert. Aufnahmedatum DD.MM.YYYY und darunter HH:MM:SS mit mindestens 12 Punkten; Dateipfad nur im Tooltip; Videoabzeichen auf dunkler Fläche. Hover-Kontur ohne Größenverschiebung. Beide Vorschauformen zentrieren.
 - Allgemeine Bedienelemente 24 Punkte hoch, Navigationseinträge 26, Großansichtsbuttons 28. Größere Schrift nicht durch größere Ränder kompensieren.
 - **Großansicht:** Dateiname oben, anschließend genau zwei feste Kontrollzeilen: Navigation und externes Öffnen, darunter Bild-/Videoaktionen und Status. Kein horizontaler Scroller. Gleiche Höhe bei Foto/Video, EXIF an/aus und laufendem Speichern. Beschriftungen bei Platzmangel kürzen; vollständige Tooltips. Foto horizontal zentriert auf dunkler Bildfläche.
 - **Dialoge:** gemeinsame Optionsgruppen mit identischen Einrückungen. Lange Inhalte vertikal scrollbar, Pfade gekürzt mit Tooltip. EXIF-Schreibmodus ausdrücklich und kontrastreich beschriften.
 - **Import:** standardmäßig eine kompakte Zeile pro Datei mit Entscheidung, Namen und relativem Ziel. Vollständige Pfade, Datum und Datumsquelle im Tooltip; Fehler kontrastreich markieren. „Alle Schritte anzeigen“ bietet die vollständigen Arbeitsschritte mit erhaltenen Zeilenumbrüchen und umbrochenen Pfaden. Kopieren folgt der gewählten Ansicht.
-- **Fußzeile:** genau eine Zeile für Modus, Status und Fehler. Kürzen statt umbrechen; vollständige Meldung im Tooltip.
+- **Fußzeile:** genau eine Zeile; zuerst Medien gesamt, Photos, Audios, Videos, dann Modus, Filter, Status und Fehler. Kürzen statt umbrechen; vollständige Meldung im Tooltip.
 - Mindestfenster 360 × 400. Auf schmalen Fenstern bleiben Aktionen erreichbar. Kein abgeschnittener Text ohne Tooltip und kein horizontaler Scroller in der Großansicht.
 
 ## Pflege und Nachweis
@@ -61,15 +61,17 @@ Separater Button „Importquellen in den Papierkorb …“ nach einem tatsächli
 
 - Ladeindikatoren in Fotowand und Großansicht zentrieren; ihr Durchmesser beträgt ein Drittel der kürzeren Bild-/Kachelkante. Die volle Bildfläche bleibt für Layout und Klicks erhalten. Darstellung zentral im Theme, ohne Fachlogik.
 
-- **Tags/Alben:** „Tags & Alben …“ als kompakter Einstieg in der Bibliotheksleiste. Promovierte Tags vor den Jahren im gemeinsamen vollbreiten Scrollbereich, gleiche kontrastreiche Auswahlzustände. Tagdialog mit umbrechenden Aktionen, begrenztem Scrollbereich, eindeutigen Datei-/Albumzuweisungen und sichtbarem Speicher-/Fehlerstatus. Default-Fotowand nicht durch zusätzliche Tag-Badges vergrößern; nur bei aktivem Filter eine kompakte Filterzeile zeigen.
+- **Tags:** alle Tags unabhängig vom Album-Flag als umbrechende Wolke unter den Jahren im gemeinsamen vollbreiten Scrollbereich. Keine Mediathek-/Alle-Erinnerungen-/Verwaltungszeile links; Verwaltung im Edit-Menü. Tagdialog mit umbrechenden Aktionen, begrenztem Scrollbereich, eindeutigen Datei-/Albumzuweisungen und sichtbarem Speicher-/Fehlerstatus. Default-Fotowand nicht durch zusätzliche Tag-Badges vergrößern; aktiven Tag in der Wolke und als Seitenüberschrift kennzeichnen; erneuter Klick hebt den Filter auf.
 
 ### Kompakte Audioleiste
-Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: Play/Pause, anklickbare/ziehbare Zeitachse und „Mehr“. Der Start bevorzugt eine Aufnahme des ausgewählten Monats. Graue Abschnitte werden im Hintergrund geprüft und anschließend proportional zur echten Dauer blau angezeigt. Während einer laufenden Vorbereitung kann keine weitere Jahresvorbereitung gestartet werden.
+Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: nur Play/Pause und anklickbare/ziehbare Zeitachse in derselben 26-Punkte-Zeile wie Monats-/Jahresüberschrift. Kein Mehr-Menü und keine zusätzlichen Audio-/Datumslabels. Der Start bevorzugt eine Aufnahme des ausgewählten Monats. Graue Abschnitte werden im Hintergrund geprüft und anschließend proportional zur echten Dauer blau angezeigt. Während einer laufenden Vorbereitung kann keine weitere Jahresvorbereitung gestartet werden.
 
-„Mehr → Playerfenster öffnen“ zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.
+Window → Audio Player zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.
 
 ## Native Hauptmenüs
 Die Hauptaktionen liegen ausschließlich in nativen muda-Menüs: PhotoSuite, File, Edit, View, Window, Help. Keine zusätzliche egui-Menüleiste. Keine dauerhafte Kopfzeile im Fenster. Edit → Find… öffnet einen schmalen Suchdialog mit Textfeld und „Filter zurücksetzen“; der Filter bleibt beim Schließen erhalten. Vorschaugröße und EXIF-Einstellung über Menüs/Settings erreichen. Bibliothekspfad nur im Fenstertitel; Filter-/Schreibstatus in der Fußzeile. Keine doppelte App-Logo-/Buttonleiste. Native Häkchen spiegeln Einstellungen, nicht verfügbare Aktionen sind deaktiviert. Englische Standardbezeichnungen in der nativen Menüleiste; Galeriebeschriftungen bleiben deutsch. Screenshots bleiben auf ausdrücklichen Nutzerwunsch zurückgestellt.
 
 ## Audio-Navigation
 Unter jedem aufgeklappten Jahr zuerst der zunächst eingeklappte Eintrag „Audio“, darunter direkt die Monate auf derselben Ebene. Keine Photos-Zwischenebene. Der Jahresklick wählt die Jahresfotowand. Audio wählt die kombinierte Audioansicht; darunter ausschließlich „Tagebuch“ und „Fotokommentare“ als virtuelle Filter. Keine zusätzlichen Kategorieordner auf der Platte erzeugen. Kachelraster, Zoomstufen, proportionale Hörleiste und kompakte Layouts beibehalten; Bereichstitel in Audioansicht und separatem Player zeigen die aktive Kategorie.
+
+Galeriekacheln verwenden 12-Punkte-Beschriftungen in zwei 16-Punkte-Zeilen, mit 2 Punkten Abstand innerhalb der Kachel. Unbekannte Datumsangaben sichtbar benennen. Inline-Audio zeigt einen 28×22-Punkte-Play/Pause-Button und eine die Restbreite füllende Spur; Datum/Fortschritt bleiben im Tooltip. Keine Zeile unter der Seitenüberschrift für den Audioplayer reservieren.

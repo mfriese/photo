@@ -15,16 +15,6 @@ impl super::Suite {
                 ui.spacing_mut().interact_size.y = 20.;
                 ui.spacing_mut().button_padding.y = 1.;
                 ui.visuals_mut().collapsing_header_frame = true;
-                ui.add_space(2.);
-                ui.strong("Mediathek");
-                ui.add_space(2.);
-                if theme::navigation(ui, self.group.is_none() && self.tag_view.active.is_none(), "Alle Erinnerungen").clicked() {
-                    self.group = None;
-                    self.tag_view.active = None;
-                }
-
-                if theme::navigation(ui, self.tag_view.open, "Tags & Alben …").clicked() { self.tag_view.open=true;self.tag_view.file=None; }
-                ui.add_space(8.);
                 let mut years = self.collection.groups().clone();
                 // Tests and a manually supplied collection may have no loading session.
                 if years.is_empty() {
@@ -39,12 +29,6 @@ impl super::Suite {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    let albums:Vec<_>=self.organization.catalog().map(|catalog|catalog.albums().iter().cloned().collect()).unwrap_or_default();
-                    if !albums.is_empty(){
-                        theme::eyebrow(ui,"Alben");
-                        for album in albums {if theme::navigation(ui,self.tag_view.active.as_ref()==Some(&album),&album).clicked(){self.tag_view.active=Some(album);self.group=None;}}
-                        ui.add_space(6.);
-                    }
                     theme::eyebrow(ui,"Jahre");ui.add_space(2.);
                     for (year, months) in years.into_iter().rev() {
                         let response = egui::CollapsingHeader::new(egui::RichText::new(&year).size(14.).strong())
@@ -81,6 +65,18 @@ impl super::Suite {
                         }
                         ui.add_space(2.);
                     }
+                    let tags:Vec<_>=self.organization.catalog().map(|catalog|catalog.tags().keys().cloned().collect()).unwrap_or_default();
+                    if !tags.is_empty() {
+                        ui.add_space(8.);theme::eyebrow(ui,"Tags");ui.add_space(4.);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing=egui::vec2(4.,4.);
+                            for tag in tags {
+                                let selected=self.tag_view.active.as_ref()==Some(&tag);
+                                let response=ui.add(egui::Button::new(&tag).selected(selected).wrap_mode(egui::TextWrapMode::Truncate)).on_hover_text(&tag);
+                                if response.clicked(){self.tag_view.active=(!selected).then_some(tag);self.group=None;}
+                            }
+                        });
+                    }
                     if self.root.is_none() {
                         ui.label(egui::RichText::new("Deine Ordnerstruktur erscheint hier, sobald du eine Sammlung öffnest.").small().color(theme::MUTED));
                     }
@@ -95,7 +91,7 @@ impl super::Suite {
         }
     }
 }
-fn month_label(value: &str) -> &str {
+pub(super) fn month_label(value: &str) -> &str {
     match value {
         "01" | "1" => "Januar",
         "02" | "2" => "Februar",

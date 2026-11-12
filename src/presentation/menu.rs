@@ -115,6 +115,20 @@ impl Suite {
                 shortcut: shortcut(key, shift),
             });
         }
+        entries.push(Entry {
+            action: Action::AudioWindow,
+            enabled: self.services.audio_player.transport().active,
+            checked: None,
+            shortcut: None,
+        });
+        entries.push(Entry {
+            action: Action::StartViewAudio,
+            enabled: ready
+                && !self.diary.is_loading()
+                && self.audio_header.draft.selected().is_some(),
+            checked: None,
+            shortcut: None,
+        });
         for size in 0..5 {
             entries.push(Entry {
                 action: Action::PreviewSize(size),
@@ -198,6 +212,16 @@ impl Suite {
                 }
             }
             Action::Import => self.import_panel.open(self.root.clone()),
+            Action::AudioWindow => {
+                if let Err(error) = self
+                    .services
+                    .audio_player
+                    .control(photosuite_application::diary::AudioControl::ShowWindow)
+                {
+                    self.status = error;
+                }
+            }
+            Action::StartViewAudio => self.start_audio_for_view(),
             Action::Settings => self.options_open = true,
             Action::Shortcuts => self.bindings.visible = true,
             Action::Tags => {
@@ -207,6 +231,7 @@ impl Suite {
                         Err(error) => self.status = error,
                     }
                 } else {
+                    self.tag_view.file = None;
                     self.tag_view.open = true;
                 }
             }

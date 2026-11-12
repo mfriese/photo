@@ -145,6 +145,13 @@ impl MudaMenu {
             true,
         )?;
         add(&view, &mut items, Action::ToggleVideos, "Videos Only", true)?;
+        add(
+            &view,
+            &mut items,
+            Action::StartViewAudio,
+            "Play Audio for Current View",
+            false,
+        )?;
         let sizes = Submenu::new("Thumbnail Size", true);
         for (index, label) in ["Very Small", "Small", "Medium", "Large", "Very Large"]
             .into_iter()
@@ -164,6 +171,13 @@ impl MudaMenu {
                 &PredefinedMenuItem::bring_all_to_front(Some("Bring All to Front")),
             ])
             .map_err(|e| e.to_string())?;
+        add(
+            &window,
+            &mut items,
+            Action::AudioWindow,
+            "Audio Player",
+            false,
+        )?;
         menu.append(&window).map_err(|e| e.to_string())?;
         let help = Submenu::new("Help", true);
         add(&help, &mut items, Action::Help, "PhotoSuite Help", false)?;

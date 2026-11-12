@@ -337,6 +337,20 @@ mod tests {
                 .success()
         );
     }
+    #[test]
+    fn gallery_metadata_port_reads_real_exif_without_modifying_the_photo() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("holiday.jpg");
+        photo(&path, 60);
+        let before = fs::read(&path).unwrap();
+        let media = Media::from_path(path.clone(), "2008/09".into()).unwrap();
+        let date =
+            photosuite_application::media_dates::MediaDateSource::captured_at(&adapter(), &media)
+                .unwrap();
+        assert_eq!(date.date_label(), "16.09.2008");
+        assert_eq!(date.time_label(), "03:58:11");
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
     fn run(source: &Path, target: &Path, preview: bool) -> Vec<import::Event> {
         let job = import::start(Arc::new(adapter()), source.into(), target.into(), preview);
         let mut events = Vec::new();
@@ -756,5 +770,12 @@ mod portable_publication_tests {
         assert!(result.unwrap_err().contains("denied"));
         assert!(!target.exists());
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+}
+
+// The same read-only metadata implementation serves the narrower gallery-date port.
+impl photosuite_application::media_dates::MediaDateSource for FileImportAdapter {
+    fn captured_at(&self, media: &Media) -> Result<CaptureTime, String> {
+        photosuite_application::import::ImportAdapter::capture_time(self, media)
     }
 }

@@ -439,3 +439,59 @@ mod tests {
         }
     }
 }
+
+/// Incremental summary for an append-only loaded collection; reset when the library reloads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MediaCounts {
+    pub total: usize,
+    pub photos: usize,
+    pub audios: usize,
+    pub videos: usize,
+}
+impl MediaCounts {
+    pub fn observe(&mut self, items: &[Media]) {
+        if items.len() < self.total {
+            *self = Self::default();
+        }
+        for media in &items[self.total..] {
+            if media.is_photo() {
+                self.photos += 1;
+            } else if media.is_audio() {
+                self.audios += 1;
+            } else {
+                self.videos += 1;
+            }
+        }
+        self.total = items.len();
+    }
+}
+
+#[cfg(test)]
+mod count_tests {
+    use super::*;
+    #[test]
+    fn counts_increment_without_recounting_and_reset_on_reload() {
+        let mut counts = MediaCounts::default();
+        let mut items = vec![Media::from_path("a.jpg".into(), "2023/01".into()).unwrap()];
+        counts.observe(&items);
+        counts.observe(&items);
+        assert_eq!(counts.photos, 1);
+        items.push(
+            Media::from_library_path("comment_20230101_120000.mp4".into(), "2023/audio".into())
+                .unwrap(),
+        );
+        items.push(Media::from_path("a.mp4".into(), "2023/01".into()).unwrap());
+        counts.observe(&items);
+        assert_eq!(
+            counts,
+            MediaCounts {
+                total: 3,
+                photos: 1,
+                audios: 1,
+                videos: 1
+            }
+        );
+        counts.observe(&[]);
+        assert_eq!(counts, MediaCounts::default());
+    }
+}

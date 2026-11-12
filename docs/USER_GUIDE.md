@@ -283,9 +283,9 @@ Die Startkonfiguration wird im Hintergrund geladen; die Oberfläche bleibt währ
 Sehr große Kollisionsgruppen werden vor dem Vergleichen mit einer Fehlermeldung abgewiesen, wenn mehr als 100.000 Paarvergleiche nötig wären. In diesem Fall wird keine Datei entfernt. Die Grenze schützt Laufzeit/Speicher; sie ersetzt keinen weniger genauen Vergleich. Native Wiedergabetests laufen reproduzierbar über `make test-native` mit mitgelieferten/stummen Testmedien; Video öffnet dafür kurz ein eigenes Testfenster.
 
 ### Kompakte Audioleiste
-Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: Play/Pause, anklickbare/ziehbare Zeitachse und „Mehr“. Der Start bevorzugt eine Aufnahme des ausgewählten Monats. Graue Abschnitte werden im Hintergrund geprüft und anschließend proportional zur echten Dauer blau angezeigt. Während einer laufenden Vorbereitung kann keine weitere Jahresvorbereitung gestartet werden.
+Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: Play/Pause und anklickbare/ziehbare Zeitachse direkt neben der Seitenüberschrift. Der Start bevorzugt eine Aufnahme des ausgewählten Monats. Graue Abschnitte werden im Hintergrund geprüft und anschließend proportional zur echten Dauer blau angezeigt. Während einer laufenden Vorbereitung kann keine weitere Jahresvorbereitung gestartet werden.
 
-„Mehr → Playerfenster öffnen“ zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.
+**Window → Audio Player** zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.
 
 ## Native Menüleiste
 PhotoSuite verwendet ausschließlich native muda-Menüs: **PhotoSuite**, **File**, **Edit**, **View**, **Window**, **Help**. Auf macOS stehen sie am oberen Bildschirmrand. Ein zusätzlicher Kopfbereich entfällt. Edit → Find… (⌘F) öffnet den Suchdialog; View → Thumbnail Size wählt die Vorschaugröße.
@@ -309,3 +309,10 @@ Bestehende `Jahr/diary`-Ordner sowie bereits angelegte Audio-Kategorieordner wer
 
 ### Jahr und Audio aufklappen
 Ein aufgeklapptes Jahr zeigt zuerst Audio und darunter direkt alle Monate auf derselben Ebene. Der Jahresklick wählt die Jahresfotowand. Audio öffnet die gemeinsame Jahres-Höransicht und klappt Tagebuch/Fotokommentare auf oder zu. Kontextfotos aus der Audiowiedergabe öffnen bei Bedarf das betreffende Jahr und markieren das Bild in der Fotowand. Keine zusätzliche Photos-Ebene.
+
+### Tagwolke, Aufnahmedaten und Audioüberschrift
+Die linke Spalte beginnt mit den Jahren. Unter ihnen zeigt Tags alle Tags als Wolke; kurze Namen teilen eine Zeile, längere werden umgebrochen beziehungsweise bei Platzmangel mit Tooltip gekürzt. Anklicken wählt einen Tag, erneutes Anklicken entfernt den Filter. Verwalten und Konfigurieren über Edit → Tags and Albums…; bestehende Kontextaktionen an einzelnen Medien bleiben verfügbar.
+
+Unter Fotos stehen Datum und Uhrzeit statt des Dateinamens. Für korrekt benannte Dateien sofort, für andere nach kurzer Hintergrundprüfung. Ohne gültige Metadaten wird kein Datum geraten. Name, Pfad, Datumsquelle und Fehler finden sich im Tooltip. Neben der Datums-/Monats-/Jahresüberschrift steht nur noch Play/Pause und die Audioachse. Den separaten Player öffnet Window → Audio Player; einen anderen aktuellen Audiobereich startet View → Play Audio for Current View.
+
+In der einzeiligen Fußzeile stehen zuerst geladene Medien gesamt, Photos, Audios und Videos; rechts folgen Schreibmodus, Filter, aktuelle Meldung und Fehler. Große Zahlen können auf schmalen Fenstern abgekürzt sein; der Tooltip zeigt die genauen Werte. Während der Sammlungssuche können die Zahlen noch wachsen.

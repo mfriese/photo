@@ -15,6 +15,8 @@ pub enum Action {
     Settings,
     Shortcuts,
     Tags,
+    AudioWindow,
+    StartViewAudio,
     ToggleLibrary,
     ToggleSquare,
     ToggleVideos,

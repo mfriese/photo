@@ -24,13 +24,10 @@ fn controls(
 ) -> Actions {
     let mut actions = Actions::default();
     let width = ui.available_width();
-    let show_date = width >= 410.;
     ui.horizontal(|ui| {
-        ui.set_height(32.);
+        ui.set_height(26.);
         ui.spacing_mut().item_spacing.x = 6.;
-        let caption = if preparing {
-            "Lädt"
-        } else if state.active && state.playing {
+        let caption = if state.active && state.playing {
             "⏸"
         } else {
             "▶"
@@ -38,7 +35,7 @@ fn controls(
         if ui
             .add_enabled(
                 !preparing && !state.failed && (state.active || can_start),
-                egui::Button::new(caption).min_size(egui::vec2(52., 26.)),
+                egui::Button::new(caption).min_size(egui::vec2(28., 22.)),
             )
             .on_hover_text(if state.playing {
                 "Wiedergabe pausieren"
@@ -53,10 +50,10 @@ fn controls(
                 actions.start = true;
             }
         }
-        let bar_width = (width - 52. - 50. - 12. - if show_date { 152. } else { 0. }).max(1.);
+        let bar_width = (width - 28. - 6.).max(1.);
         let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(bar_width, 26.), egui::Sense::click_and_drag());
-        let track = rect.shrink2(egui::vec2(0., 5.));
+            ui.allocate_exact_size(egui::vec2(bar_width, 22.), egui::Sense::click_and_drag());
+        let track = rect.shrink2(egui::vec2(0., 4.));
         ui.painter().rect_filled(track, 2., theme::RAISED);
         let mut hover = None;
         if let Some(timeline) = timeline {
@@ -169,35 +166,6 @@ fn controls(
             progress.errors.len()
         );
         response.on_hover_text(help);
-        if show_date {
-            ui.add_sized(
-                [146., 26.],
-                egui::Label::new(egui::RichText::new(&date).size(12.)).truncate(),
-            )
-            .on_hover_text(&date);
-        }
-        ui.menu_button("Mehr", |ui| {
-            if ui
-                .add_enabled(state.active, egui::Button::new("Playerfenster öffnen"))
-                .clicked()
-            {
-                actions.control = Some(AudioControl::ShowWindow);
-                ui.close();
-            }
-            if ui
-                .add_enabled(
-                    can_start && !preparing,
-                    egui::Button::new("Audio der Ansicht starten"),
-                )
-                .on_hover_text(
-                    "Jahresleiste starten, möglichst ab der ersten Aufnahme des angezeigten Monats",
-                )
-                .clicked()
-            {
-                actions.start = true;
-                ui.close();
-            }
-        });
     });
     actions
 }
@@ -238,9 +206,22 @@ impl super::Suite {
                 self.diary.cancel();
             }
         }
-        if actions.start
-            && let Some(path) = self.audio_header.draft.selected()
-            && let Some(selected) = self.items.iter().find(|m| m.path() == path)
+        if actions.start {
+            self.start_audio_for_view();
+        }
+        if state.active || self.diary.is_loading() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+    pub(super) fn start_audio_for_view(&mut self) {
+        let Some(root) = &self.root else {
+            return;
+        };
+        let group = self.group.as_deref().unwrap_or("");
+        self.audio_header.draft.ensure(&self.items, root, group);
+        if let Some(path) = self.audio_header.draft.selected()
+            && let Some(selected) = self.items.iter().find(|media| media.path() == path)
             && let Err(error) = self.diary.start_embedded(
                 &self.items,
                 selected,
@@ -250,10 +231,23 @@ impl super::Suite {
         {
             self.status = error;
         }
-        if state.active || self.diary.is_loading() {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
-        }
+    }
+    pub(super) fn page_heading(&mut self, ui: &mut egui::Ui, title: &str) {
+        let width = ui.available_width();
+        ui.horizontal(|ui| {
+            ui.set_height(26.);
+            let label_width = (width * 0.32).clamp(44., 180.);
+            ui.add_sized(
+                [label_width, 26.],
+                egui::Label::new(egui::RichText::new(title).size(18.).strong()).truncate(),
+            )
+            .on_hover_text(title);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width().max(1.), 26.),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| self.compact_audio(ui),
+            );
+        });
     }
 }
 

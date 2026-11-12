@@ -71,7 +71,13 @@ fn main() -> eframe::Result {
         }
     };
     let video_preview = std::sync::Arc::new(video::NativeVideoSource);
+    let importer = std::sync::Arc::new(import_fs::FileImportAdapter {
+        audio: audio_source.clone(),
+        repository: repository.clone(),
+        tool: exiftool.clone(),
+    });
     let services = application::Services {
+        media_dates: importer.clone(),
         organization: std::sync::Arc::new(tag_store::YamlTags),
         work_priority: priority.clone(),
         audio_source: audio_source.clone(),
@@ -89,11 +95,7 @@ fn main() -> eframe::Result {
         import_cleanup: std::sync::Arc::new(import_cleanup_fs::SafeImportCleanup {
             trash: std::sync::Arc::new(import_cleanup_fs::NativeTrash),
         }),
-        importer: std::sync::Arc::new(import_fs::FileImportAdapter {
-            audio: audio_source,
-            repository: repository.clone(),
-            tool: exiftool.clone(),
-        }),
+        importer,
         orientation_writer: std::sync::Arc::new(infrastructure::ExifOrientationWriter {
             tool: exiftool,
         }),

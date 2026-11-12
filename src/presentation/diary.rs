@@ -58,8 +58,7 @@ impl super::Suite {
         let mut chosen = None;
         egui::CentralPanel::default().frame(theme::panel(theme::CANVAS,12)).show(ctx,|ui| {
             let kind=crate::domain::diary::AudioScope::parse(self.group.as_deref().unwrap_or("")).map(|scope|scope.kind()).unwrap_or(crate::domain::diary::AudioKind::All);
-            ui.heading(format!("{} · {year}",crate::audio_labels::kind_label(kind)));
-            self.compact_audio(ui);
+            self.page_heading(ui,&format!("{} · {year}",crate::audio_labels::kind_label(kind)));
             ui.horizontal_wrapped(|ui| {
                 if ui.add_enabled(!ordered.is_empty()&&!self.diary.is_loading(),egui::Button::new("Jahresverlauf öffnen")).clicked(){chosen=ordered.first().copied();}
                 if self.diary.is_loading()&&ui.button("Laden abbrechen").clicked(){self.diary.cancel();}

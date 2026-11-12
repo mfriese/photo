@@ -34,7 +34,7 @@ Die Nachprüfung hat konkrete Schwachstellen gefunden und behoben. Sie ist keine
 
 ## Validierung dieses Standes
 
-- **176 Rust-Tests** erfolgreich: 96 Desktop, 57 Anwendung, 23 Domäne.
+- **184 Rust-Tests** erfolgreich: 99 Desktop, 62 Anwendung, 23 Domäne.
 - Kern zusätzlich unabhängig von nativer UI gebaut und getestet.
 - `cargo fmt --all --check`, Clippy mit `-D warnings`, Workspace-Build und Cargo-basierte Architekturprüfung erfolgreich.
 - **10 Python-Tests** für Architekturpolicy und Paketierung erfolgreich.
@@ -58,3 +58,8 @@ Die neue Menüführung bleibt eine Präsentationsaufgabe. `desktop_menu` trennt 
 
 ## Nachprüfung: flache Audioablage
 AudioScope/AudioKind und die Präfixklassifikation liegen in der Domäne. Die Anwendung verwendet dieselbe Mitgliedschaft für Anzeige, Namen-Cache, Datumskatalog und Wiedergabestart. Kommentare behalten ihre logische Namenszeit bei der Dauerprüfung. UI-Ansichtsschlüssel sind von physischen Schreibpfaden getrennt; nur der vorhandene Importpfad erzeugt neue Dateien unter Jahr/audio. Der Dateisystemadapter liest alte/neue Audioordner ohne synchrones Container-Probing. Die Regressionen prüfen getrennte/gemischte Bereiche, unbekannte Namen, Legacy-Kompatibilität, tatsächliche Playerprojektionen, Kommentarzeit, Navigation und unveränderte Dateien. Keine automatische Migration oder Aufnahmefunktion enthalten.
+
+## Nachprüfung vom 12. November 2026: kompakte Galerie
+Die Tagwolke bleibt Projektion des vorhandenen Katalogs, ohne zusätzliche Speicher-/Filterregeln. Alle Tags sind unabhängig vom Album-Flag erreichbar; Konfiguration liegt im nativen Edit-Menü. Captions teilen die namensbasierte Domänenregel und die neue begrenzte MediaDates-Sitzung; der injizierte Leseport darf keine Import-Schreibaktionen ausführen. Ein aktiver Worker, 32 Anfragen/32 Ergebnisse, 8192 Cacheeinträge, Generation/Abbruch und Audio-Priorität begrenzen Ressourcen. Cachetreffer und Ladeindikator sind ohne vollständige Frame-Scans abrufbar. Voller Kanal plant einen späteren Versuch statt still hängenbleibender Ladebeschriftungen. Alte Bibliotheksergebnisse werden verworfen und Fehler negativ gecacht. Der echte EXIF-Adapter wurde gegen unveränderte Testdateien geprüft.
+
+Medienstatistiken sind eine inkrementelle append-only Projektion, keine erneute Bibliothekssuche pro Frame. Inline-Audio nutzt unverändert denselben Transport, nun neben der Überschrift ohne Mehr-Menü; zusätzliche Aktionen laufen über den bestehenden Menüport. UI-Regressionen prüfen Tagwolke, Datumsformatierung statt Dateiname, horizontale Audio-/Datumsanordnung und beständige Zähler links vor Statusmeldungen. Bekannte Grenze: momentan laufende System-Metadatenaufrufe können nach Abbruch noch auslaufen; es gibt keinen persistenten Datumsindex. Keine manuellen Screenshots oder Sichtprüfung behauptet.

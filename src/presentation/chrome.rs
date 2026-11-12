@@ -9,15 +9,15 @@ impl super::Suite {
             .unwrap_or_else(|| "PhotoSuite".into());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
     }
-    pub(super) fn status_bar(&self, ctx: &egui::Context) {
+    pub(super) fn status_bar(&mut self, ctx: &egui::Context) {
+        self.media_counts.observe(&self.items);
+        let counts = self.media_counts;
         egui::TopBottomPanel::bottom("status")
             .frame(theme::panel(theme::SURFACE, 8))
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.;
-                    let mode = if self.import_panel.running() {
-                        "Import / Duplikatprüfung aktiv"
-                    } else if self.write_exif {
+                    let mode = if self.write_exif {
                         "Schreibmodus: JPEG-EXIF"
                     } else {
                         "Originale: Nur Lesen"
@@ -31,19 +31,33 @@ impl super::Suite {
                             if videos { " · Nur Videos" } else { "" }
                         ),
                     };
-                    let text = if self.preferences_error.is_empty() {
-                        format!("{mode}{filters}  ·  {}", self.status)
-                    } else {
-                        format!(
-                            "{mode}{filters} · {} · {}",
-                            self.status, self.preferences_error
+                    let mut details = format!("{mode}{filters}");
+                    if self.import_panel.running() {
+                        details.push_str(" · Import / Duplikatprüfung aktiv");
+                    }
+                    if !self.status.is_empty() {
+                        details.push_str(&format!(" · {}", self.status));
+                    }
+                    for error in [&self.preferences_error, self.organization.error()] {
+                        if !error.is_empty() {
+                            details.push_str(&format!(" · {error}"));
+                        }
+                    }
+                    let totals = format!(
+                        "Medien {} · Photos {} · Audios {} · Videos {}",
+                        counts.total, counts.photos, counts.audios, counts.videos
+                    );
+                    let tooltip = format!("{totals}\n{details}");
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(count_label(counts, ui.available_width() < 600.))
+                                .size(12.)
+                                .color(theme::TEXT),
                         )
-                    };
-                    let text = if self.organization.error().is_empty() {
-                        text
-                    } else {
-                        format!("{text} · {}", self.organization.error())
-                    };
+                        .truncate(),
+                    )
+                    .on_hover_text(&tooltip);
+                    let text = details;
                     let mut label = egui::RichText::new(&text).size(12.).color(theme::MUTED);
                     if !self.preferences_error.is_empty() || !self.organization.error().is_empty() {
                         label = label.color(egui::Color32::LIGHT_RED);
@@ -53,4 +67,23 @@ impl super::Suite {
                 });
             });
     }
+}
+
+fn count_label(counts: photosuite_application::collection::MediaCounts, compact: bool) -> String {
+    let number = |n: usize| {
+        if compact && n >= 1_000_000 {
+            format!("{:.1}M", n as f64 / 1_000_000.)
+        } else if compact && n >= 10_000 {
+            format!("{:.1}k", n as f64 / 1000.)
+        } else {
+            n.to_string()
+        }
+    };
+    format!(
+        "Medien {} · Photos {} · Audios {} · Videos {}",
+        number(counts.total),
+        number(counts.photos),
+        number(counts.audios),
+        number(counts.videos)
+    )
 }

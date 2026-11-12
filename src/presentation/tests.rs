@@ -1,6 +1,11 @@
 use super::*;
 use std::sync::Arc;
 struct UnusedAdapters;
+impl photosuite_application::media_dates::MediaDateSource for UnusedAdapters {
+    fn captured_at(&self, _: &Media) -> Result<crate::domain::CaptureTime, String> {
+        Err("Keine Testmetadaten".into())
+    }
+}
 impl photosuite_application::diary::AudioSource for UnusedAdapters {
     fn probe(
         &self,
@@ -160,6 +165,11 @@ impl photosuite_application::organization::CatalogRepository for UnusedAdapters 
 fn test_suite() -> Suite {
     let adapters = Arc::new(UnusedAdapters);
     Suite {
+        media_dates: photosuite_application::media_dates::MediaDates::new(
+            adapters.clone(),
+            Default::default(),
+        ),
+        media_counts: Default::default(),
         native_menu: None,
         focus_search: false,
         search_open: false,
@@ -180,6 +190,7 @@ fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            media_dates: adapters.clone(),
             organization: adapters.clone(),
             work_priority: Default::default(),
             import_cleanup: adapters.clone(),
@@ -924,7 +935,7 @@ fn library_switch_restores_yaml_and_keeps_previous_edits_in_previous_library() {
 }
 
 #[test]
-fn tag_album_click_filters_gallery_and_preserves_original_year_navigation() {
+fn tag_cloud_includes_non_album_tags_and_preserves_year_navigation() {
     use photosuite_application::organization::Action;
     let mut suite = test_suite();
     suite.root = Some("/Fotos".into());
@@ -948,13 +959,15 @@ fn tag_album_click_filters_gallery_and_preserves_original_year_navigation() {
             file: Some(file),
         })
         .unwrap();
-    suite
-        .organization
-        .apply(Action::Album {
-            tag: "Urlaub".into(),
-            enabled: true,
-        })
-        .unwrap();
+    for name in ["A", "B", "C"] {
+        suite
+            .organization
+            .apply(Action::Create {
+                name: name.into(),
+                file: None,
+            })
+            .unwrap();
+    }
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
     ctx.style_mut(|style| style.animation_time = 0.);
@@ -967,6 +980,25 @@ fn tag_album_click_filters_gallery_and_preserves_original_year_navigation() {
         ..Default::default()
     };
     let output = ctx.run(input(vec![]), |ctx| suite.library_sidebar(ctx));
+    let texts: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => {
+                Some((text.galley.job.text.as_str(), text.visual_bounding_rect()))
+            }
+            _ => None,
+        })
+        .collect();
+    for removed in ["Mediathek", "Alle Erinnerungen", "Tags & Alben …", "Alben"] {
+        assert!(!texts.iter().any(|(text, _)| *text == removed));
+    }
+    let bounds = |label| texts.iter().find(|(text, _)| *text == label).unwrap().1;
+    assert!(bounds("Tags").top() > bounds("2023").bottom());
+    assert!(
+        (bounds("A").center().y - bounds("B").center().y).abs() < 2.,
+        "short tags should share a row"
+    );
     let target = output
         .shapes
         .iter()
@@ -1383,4 +1415,118 @@ fn closing_search_preserves_filter_and_releases_text_focus() {
     assert!(!suite.search_open);
     assert_eq!(suite.query, "Urlaub");
     assert!(!ctx.memory(|m| m.has_focus(egui::Id::new("library_search"))));
+}
+
+#[test]
+fn photo_captions_show_calendar_date_and_time_instead_of_filenames() {
+    for width in [360., 800.] {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut suite = test_suite();
+        suite.root = Some("/Fotos".into());
+        suite.group = Some("2023/12".into());
+        suite.items = vec![
+            Media::from_path(
+                "/Fotos/2023/12/img_20231227_225132.jpg".into(),
+                "2023/12".into(),
+            )
+            .unwrap(),
+        ];
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 500.),
+                )),
+                ..Default::default()
+            },
+            |ctx| suite.photo_wall(ctx, &[0]),
+        );
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.contains(&"27.12.2023"));
+        assert!(texts.contains(&"22:51:32"));
+        assert!(
+            !texts
+                .iter()
+                .any(|text| text.contains("img_20231227_225132.jpg"))
+        );
+        for absent in ["Mehr", "Audio", "Diary 2023"] {
+            assert!(!texts.contains(&absent));
+        }
+    }
+}
+#[test]
+fn photo_page_player_is_beside_the_month_and_footer_keeps_counts_first() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut suite = test_suite();
+    suite.status = "Bereit".into();
+    suite.videos_only = false;
+    suite.root = Some("/Fotos".into());
+    suite.group = Some("2023/12".into());
+    suite.items = vec![
+        Media::from_path(
+            "/Fotos/2023/12/img_20231227_225132.jpg".into(),
+            "2023/12".into(),
+        )
+        .unwrap(),
+        Media::from_path(
+            "/Fotos/2023/audio/aud_20231227_225132.wav".into(),
+            "2023/audio".into(),
+        )
+        .unwrap(),
+        Media::from_path(
+            "/Fotos/2023/12/img_20231227_230000.mp4".into(),
+            "2023/12".into(),
+        )
+        .unwrap(),
+    ];
+    for width in [360., 800.] {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 500.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                suite.status_bar(ctx);
+                suite.photo_wall(ctx, &[0, 2]);
+            },
+        );
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => {
+                    Some((text.galley.job.text.as_str(), text.visual_bounding_rect()))
+                }
+                _ => None,
+            })
+            .collect();
+        let rect = |name| {
+            texts
+                .iter()
+                .find(|(text, _)| *text == name)
+                .unwrap_or_else(|| panic!("missing {name} at {width}"))
+                .1
+        };
+        let title = rect("Dezember 2023");
+        let play = rect("▶");
+        assert!((title.center().y - play.center().y).abs() < 5.);
+        assert!(play.left() > title.left());
+        let counts = rect("Medien 3 · Photos 1 · Audios 1 · Videos 1");
+        let status = rect("Schreibmodus: JPEG-EXIF · Bereit");
+        assert!(counts.left() < status.left());
+        assert!((counts.center().y - status.center().y).abs() < 2.);
+        assert!(!texts.iter().any(|(text, _)| *text == "Mehr"));
+    }
 }
