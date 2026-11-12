@@ -7,6 +7,8 @@ pub const BORDER: Color32 = Color32::from_rgb(49, 57, 70);
 pub const TEXT: Color32 = Color32::from_rgb(242, 245, 250);
 pub const MUTED: Color32 = Color32::from_rgb(214, 222, 233);
 pub const ACCENT: Color32 = Color32::from_rgb(139, 181, 255);
+pub const BADGE_BACKGROUND: Color32 = Color32::from_black_alpha(220);
+pub const BADGE_PADDING: f32 = 3.;
 pub const SELECTED: Color32 = Color32::from_rgb(43, 67, 103);
 
 pub fn install(ctx: &egui::Context) {

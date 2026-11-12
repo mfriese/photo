@@ -82,7 +82,9 @@ impl MediaDates {
     }
     pub fn get(&mut self, media: &Media) -> Option<&Result<CaptureTime, String>> {
         if !self.entries.contains_key(media.path()) {
-            if let Some(date) = crate::domain::capture_from_filename(media) {
+            if media.has_audio_placement() && media.logical_time().is_none() {
+                self.insert(media.path().into(), Some(Err("Fotodatum unbekannt".into())));
+            } else if let Some(date) = crate::domain::capture_from_filename(media) {
                 self.insert(media.path().into(), Some(Ok(date)));
             } else {
                 if self.worker.is_none() {

@@ -21,4 +21,6 @@ test-video:
 	python3 scripts/check_native_video.py
 test-menu:
 	python3 scripts/check_native_menu.py
-test-native: test-audio test-video test-menu
+test-recorder:
+	python3 scripts/check_native_recorder.py
+test-native: test-audio test-video test-menu test-recorder

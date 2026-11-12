@@ -1,6 +1,6 @@
 use crate::Media;
 use std::path::{Path, PathBuf};
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureTime {
     stamp: String,
     civil_seconds: i64,
@@ -78,6 +78,15 @@ impl CaptureTime {
             "Foto-Importdateiname",
         )
         .ok()
+    }
+    pub fn exif_value(&self) -> String {
+        format!(
+            "{}:{}:{} {}",
+            self.year,
+            self.month,
+            &self.stamp[6..8],
+            self.time_label()
+        )
     }
     pub fn date_label(&self) -> String {
         format!(

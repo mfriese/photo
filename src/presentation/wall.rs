@@ -109,6 +109,12 @@ impl super::Suite {
                                 ui.set_min_height(row_height);
                                 for &index in visible.iter().skip(row * columns).take(columns) {
                                     let m = &self.items[index];
+                                    let tags = self.organization.tags_for(m.path());
+                                    let tooltip = if tags.is_empty() {
+                                        m.path().display().to_string()
+                                    } else {
+                                        format!("{}\nTags: {}", m.path().display(), tags.join(", "))
+                                    };
                                     ui.vertical(|ui| {
                                         ui.spacing_mut().item_spacing.y = 2.;
                                         ui.set_width(tile);
@@ -186,27 +192,21 @@ impl super::Suite {
                                                     egui::StrokeKind::Inside,
                                                 );
                                             }
+                                            let mut badges = Vec::with_capacity(tags.len() + 1);
                                             if m.is_video() {
-                                                let badge = egui::Rect::from_min_size(
-                                                    rect.left_bottom() + egui::vec2(8., -30.),
-                                                    egui::vec2(70., 23.),
-                                                );
-                                                ui.painter().rect_filled(
-                                                    badge,
-                                                    5.,
-                                                    egui::Color32::from_black_alpha(200),
-                                                );
-                                                ui.painter().text(
-                                                    rect.left_bottom() + egui::vec2(8., -8.),
-                                                    egui::Align2::LEFT_BOTTOM,
-                                                    "Video",
-                                                    egui::FontId::proportional(16.),
-                                                    egui::Color32::WHITE,
-                                                );
+                                                badges.push("Video");
                                             }
+                                            badges.extend(tags.iter().copied());
+                                            super::badges::paint_cloud(ui, paint_rect, &badges);
                                             response.on_hover_cursor(egui::CursorIcon::PointingHand)
                                         };
                                         response.context_menu(|ui| {
+                                            if m.is_photo()
+                                                && ui.button("Audiokommentar …").clicked()
+                                            {
+                                                self.record_photo = Some(index);
+                                                ui.close();
+                                            }
                                             if ui.button("Tags bearbeiten …").clicked() {
                                                 match self.organization.file(m.path()) {
                                                     Ok(file) => self.tag_view.edit(file),
@@ -215,10 +215,7 @@ impl super::Suite {
                                                 ui.close();
                                             }
                                         });
-                                        if response
-                                            .on_hover_text(m.path().display().to_string())
-                                            .clicked()
-                                        {
+                                        if response.on_hover_text(&tooltip).clicked() {
                                             if m.is_audio() {
                                                 if let Err(error) = self.diary.start(
                                                     &self.items,

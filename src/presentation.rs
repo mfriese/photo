@@ -1,6 +1,8 @@
 mod audio_header;
+mod badges;
 mod captions;
 mod chrome;
+mod comments;
 mod diary;
 mod library;
 mod menu;
@@ -13,6 +15,10 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc;
 pub struct Suite {
+    comments: photosuite_application::comments::CommentSession,
+    comment_view: comments::CommentView,
+    record_photo: Option<usize>,
+    known_media: std::collections::HashSet<PathBuf>,
     media_dates: photosuite_application::media_dates::MediaDates,
     media_counts: photosuite_application::collection::MediaCounts,
     native_menu: Option<Box<dyn crate::desktop_menu::DesktopMenu>>,
@@ -63,6 +69,12 @@ impl Suite {
                 .map(|cwd| cwd.join(&path))
                 .unwrap_or(path)
         };
+        if self.comments.has_unsaved() || self.comments.saving {
+            self.status = "Bitte die Audioaufnahme zuerst speichern oder verwerfen".into();
+            self.comments.open = true;
+            return;
+        }
+        self.comments.load(path.clone());
         if self.root.as_ref() != Some(&path) || self.organization.catalog().is_none() {
             if let Err(error) = self.organization.open(path.clone()) {
                 self.status = error;
@@ -93,6 +105,7 @@ impl Suite {
         }
         self.root = Some(path);
         self.items.clear();
+        self.known_media.clear();
         self.media_dates.clear();
         self.media_counts = Default::default();
         self.highlighted_photo = None;
@@ -290,6 +303,7 @@ impl Suite {
 impl eframe::App for Suite {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.poll_startup(ctx);
+        self.poll_comments(ctx);
         self.media_dates.poll();
         if self.media_dates.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -339,6 +353,7 @@ impl eframe::App for Suite {
                     && !self.editor.is_saving()
                     && !self.options_open
                     && !self.import_panel.visible
+                    && !self.comments.open
                     && !self.tag_view.open
                     && self.settings_ready(),
             )
@@ -347,7 +362,12 @@ impl eframe::App for Suite {
         if let Some(result) = self.collection.poll() {
             match result {
                 Ok(collection) => {
-                    self.items.extend(collection.items);
+                    for media in collection.items {
+                        let media = self.comments.project(media);
+                        if self.known_media.insert(media.path().to_owned()) {
+                            self.items.push(media);
+                        }
+                    }
                     self.status = if collection.unreadable == 0 {
                         "Bereit".into()
                     } else {
@@ -413,6 +433,7 @@ impl eframe::App for Suite {
             self.highlighted_photo = None;
             self.storyboard.clear();
         }
+        self.comment_dialog(ctx);
         self.bindings.show(ctx);
         self.settings(ctx);
         self.help(ctx);
@@ -455,6 +476,13 @@ pub fn create(
         std::env::args_os().skip(1).collect(),
     );
     Suite {
+        comments: photosuite_application::comments::CommentSession::new(
+            services.comments.clone(),
+            services.recorder.clone(),
+        ),
+        comment_view: Default::default(),
+        record_photo: None,
+        known_media: Default::default(),
         media_dates: photosuite_application::media_dates::MediaDates::new(
             services.media_dates.clone(),
             services.work_priority.clone(),

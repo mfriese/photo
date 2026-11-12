@@ -1,6 +1,7 @@
 fn main() {
     for source in [
         "native/audio.m",
+        "native/comment_recorder.m",
         "native/audio_transport.m",
         "native/audio_transport.h",
         "native/audio_timeline_view.m",
@@ -24,6 +25,12 @@ fn main() {
         Ok("x86_64") => "x86_64",
         _ => panic!("unsupported macOS architecture"),
     };
+    let info = out.join("recording-info.plist");
+    std::fs::write(&info,r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>de.photosuite.PhotoSuite</string><key>CFBundleName</key><string>PhotoSuite</string><key>NSMicrophoneUsageDescription</key><string>PhotoSuite nimmt auf deinen Wunsch Audiokommentare zu Fotos auf.</string></dict></plist>"#).unwrap();
+    println!(
+        "cargo:rustc-link-arg-bin=photosuite=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+        info.display()
+    );
     let mut objects = Vec::new();
     for source in [
         "video",
@@ -31,6 +38,7 @@ fn main() {
         "filesystem",
         "audio",
         "audio_transport",
+        "comment_recorder",
         "audio_timeline_view",
         "context_photos",
         "context_photo_view",

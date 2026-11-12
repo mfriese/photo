@@ -40,3 +40,15 @@ int photosuite_audio_open_mode(const char **paths,const char **labels,const doub
 int photosuite_audio_transport_state(unsigned long long session,double *fraction,double *civil);
 // Commands: 0 toggle, 1 seek normalized [0,1], 2 show existing window, 3 stop.
 int photosuite_audio_control(unsigned long long session,int command,double fraction);
+
+// Recorder is opaque/retained. Commands are serialized internally; no UI-thread I/O.
+// Destroy schedules cancellation; only its own temporary recording directory is removed.
+void *photosuite_comment_recorder_create(void);
+void photosuite_comment_recorder_destroy(void *recorder);
+// UTF-8 JSON outputs are malloc-owned; release with photosuite_free. devices runs on a worker.
+char *photosuite_comment_devices(void);
+// Returns 1 while a previous capture is still finishing, otherwise queues start.
+int photosuite_comment_start(void *recorder,const char *device);
+// 0 pause, 1 resume, 2 finish, 3 preview play/pause, 4 discard/cancel.
+void photosuite_comment_command(void *recorder,int command);
+char *photosuite_comment_snapshot(void *recorder);

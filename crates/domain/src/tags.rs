@@ -84,6 +84,13 @@ impl TagCatalog {
     pub fn albums(&self) -> &BTreeSet<String> {
         &self.albums
     }
+    pub fn tags_for(&self, file: &LibraryFile) -> Vec<&str> {
+        self.tags
+            .iter()
+            .filter(|(_, files)| files.contains(file))
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
     pub fn contains(&self, tag: &str, file: &str) -> bool {
         self.tags.get(tag).is_some_and(|files| files.contains(file))
     }

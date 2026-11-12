@@ -2893,6 +2893,7 @@ dependencies = [
  "plist",
  "raw-window-handle",
  "rfd",
+ "serde",
  "serde-saphyr",
  "serde_json",
  "tempfile",

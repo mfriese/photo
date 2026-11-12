@@ -2,6 +2,7 @@
 mod capture_time;
 pub use capture_time::CaptureTime;
 pub mod commands;
+pub mod comments;
 pub mod diary;
 use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +16,7 @@ pub struct Media {
     path: PathBuf,
     group: String,
     kind: MediaKind,
+    audio_placement: Option<(String, Option<CaptureTime>)>,
 }
 impl Media {
     pub fn from_path(path: PathBuf, group: String) -> Option<Self> {
@@ -35,7 +37,12 @@ impl Media {
         } else {
             return None;
         };
-        Some(Self { path, group, kind })
+        Some(Self {
+            path,
+            group,
+            kind,
+            audio_placement: None,
+        })
     }
     /// Fast browsing classification: diary containers are provisional audio candidates.
     /// Playback/import must still validate their actual tracks through the audio port.
@@ -59,6 +66,7 @@ impl Media {
             path,
             group,
             kind: MediaKind::Audio,
+            audio_placement: None,
         })
     }
     pub fn is_audio(&self) -> bool {
@@ -71,7 +79,33 @@ impl Media {
         &self.path
     }
     pub fn group(&self) -> &str {
-        &self.group
+        self.audio_placement
+            .as_ref()
+            .map(|(group, _)| group.as_str())
+            .unwrap_or(&self.group)
+    }
+    pub fn place_comment(mut self, comment: Option<&comments::Comment>) -> Self {
+        self.audio_placement = None;
+        if self.is_audio()
+            && let Some(comment) = comment
+        {
+            self.audio_placement = Some((
+                std::path::Path::new(comment.logical_year())
+                    .join("audio")
+                    .to_string_lossy()
+                    .into_owned(),
+                comment.photo_time().cloned(),
+            ));
+        }
+        self
+    }
+    pub fn has_audio_placement(&self) -> bool {
+        self.audio_placement.is_some()
+    }
+    pub fn logical_time(&self) -> Option<&CaptureTime> {
+        self.audio_placement
+            .as_ref()
+            .and_then(|(_, time)| time.as_ref())
     }
     pub fn is_video(&self) -> bool {
         self.kind == MediaKind::Video
@@ -150,6 +184,9 @@ pub mod tags;
 
 /// Filename fast path for gallery captions. Never performs I/O or invents a date.
 pub fn capture_from_filename(media: &Media) -> Option<CaptureTime> {
+    if media.has_audio_placement() {
+        return media.logical_time().cloned();
+    }
     let stem = media.path().file_stem()?.to_str()?;
     if media.is_audio() {
         return audio_date::date_from_filename(stem);

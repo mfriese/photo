@@ -116,6 +116,14 @@ impl OrganizationSession {
     pub fn dirty(&self) -> bool {
         self.revision != self.acknowledged
     }
+    pub fn tags_for(&self, path: &Path) -> Vec<&str> {
+        let Ok(file) = self.file(path) else {
+            return Vec::new();
+        };
+        self.catalog()
+            .map(|catalog| catalog.tags_for(&file))
+            .unwrap_or_default()
+    }
     pub fn file(&self, path: &Path) -> Result<LibraryFile, String> {
         let relative = path
             .strip_prefix(self.root.as_deref().ok_or("Keine Bibliothek geöffnet")?)

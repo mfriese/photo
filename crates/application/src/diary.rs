@@ -204,6 +204,11 @@ impl DiarySession {
             .filter(|m| m.is_audio() && scope.includes(m))
             .map(|m| m.path().into())
             .collect();
+        let placements: std::collections::HashMap<_, _> = items
+            .iter()
+            .filter(|m| m.has_audio_placement())
+            .map(|m| (m.path().to_owned(), m.logical_time().cloned()))
+            .collect();
         let selected = selected.path().to_owned();
         if !paths.contains(&selected) {
             return Err("Aufnahme nicht im Jahresverlauf".into());
@@ -237,7 +242,11 @@ impl DiarySession {
                     if stop.load(Ordering::Relaxed) {
                         return Err("Abgebrochen".into());
                     }
-                    clips.push(DiaryClip::from_filename(path.clone()));
+                    let mut clip = DiaryClip::from_filename(path.clone());
+                    if let Some(time) = placements.get(path) {
+                        clip = clip.with_logical_time(time.clone());
+                    }
+                    clips.push(clip);
                 }
                 DiaryTimeline::new(year, clips).map(|timeline| timeline.with_kind(kind))
             })();
@@ -462,8 +471,18 @@ impl DiaryCatalog {
         }
         self.key = Some(key);
         self.dates.clear();
+        let placements: std::collections::HashMap<_, _> = items
+            .iter()
+            .filter(|m| m.has_audio_placement())
+            .map(|m| (m.path(), m.logical_time()))
+            .collect();
         let mut missing = Vec::new();
         for path in paths {
+            if let Some(time) = placements.get(path.as_path()) {
+                self.dates
+                    .insert(path, time.cloned().ok_or("Fotodatum unbekannt".into()));
+                continue;
+            }
             if let Some(date) = path
                 .file_stem()
                 .and_then(|s| s.to_str())
@@ -913,11 +932,7 @@ pub fn gallery_audio<'a>(items: &'a [Media], group: &str) -> Option<&'a Media> {
         .iter()
         .filter(|media| media.is_audio() && scope.includes(media))
         .min_by_key(|media| {
-            let date = media
-                .path()
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .and_then(crate::domain::audio_date::date_from_filename);
+            let date = crate::domain::capture_from_filename(media);
             let matching =
                 month.is_none_or(|month| date.as_ref().is_some_and(|d| d.month() == month));
             (
@@ -963,7 +978,7 @@ impl GalleryAudio {
         let clips = items
             .iter()
             .filter(|m| m.is_audio() && scope.includes(m))
-            .map(|m| DiaryClip::from_filename(m.path().to_owned()))
+            .map(DiaryClip::from_media)
             .collect();
         self.timeline = DiaryTimeline::new(scope.year().into(), clips)
             .map(|timeline| timeline.with_kind(scope.kind()))

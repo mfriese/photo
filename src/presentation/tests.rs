@@ -165,6 +165,13 @@ impl photosuite_application::organization::CatalogRepository for UnusedAdapters 
 fn test_suite() -> Suite {
     let adapters = Arc::new(UnusedAdapters);
     Suite {
+        comments: photosuite_application::comments::CommentSession::new(
+            adapters.clone(),
+            adapters.clone(),
+        ),
+        comment_view: Default::default(),
+        record_photo: None,
+        known_media: Default::default(),
         media_dates: photosuite_application::media_dates::MediaDates::new(
             adapters.clone(),
             Default::default(),
@@ -190,6 +197,8 @@ fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            comments: adapters.clone(),
+            recorder: adapters.clone(),
             media_dates: adapters.clone(),
             organization: adapters.clone(),
             work_priority: Default::default(),
@@ -1528,5 +1537,114 @@ fn photo_page_player_is_beside_the_month_and_footer_keeps_counts_first() {
         assert!(counts.left() < status.left());
         assert!((counts.center().y - status.center().y).abs() < 2.);
         assert!(!texts.iter().any(|(text, _)| *text == "Mehr"));
+    }
+}
+
+impl photosuite_application::comments::CommentRecorder for UnusedAdapters {
+    fn devices(&self) -> Result<Vec<photosuite_application::comments::InputDevice>, String> {
+        Ok(Vec::new())
+    }
+    fn start(&self, _: &str) -> Result<(), String> {
+        Err("No microphone in tests".into())
+    }
+    fn command(&self, _: photosuite_application::comments::CaptureCommand) -> Result<(), String> {
+        Ok(())
+    }
+    fn snapshot(&self) -> photosuite_application::comments::CaptureSnapshot {
+        Default::default()
+    }
+}
+impl photosuite_application::comments::CommentRepository for UnusedAdapters {
+    fn load(
+        &self,
+        _: &std::path::Path,
+    ) -> Result<photosuite_application::comments::StoredComments, String> {
+        Ok(photosuite_application::comments::StoredComments {
+            catalog: Default::default(),
+            revision: None,
+        })
+    }
+    fn publish(
+        &self,
+        _: &photosuite_application::comments::PhotoTarget,
+        _: &photosuite_application::comments::CapturedTake,
+    ) -> Result<crate::domain::comments::Comment, String> {
+        Err("unused".into())
+    }
+    fn save(
+        &self,
+        _: &std::path::Path,
+        _: &crate::domain::comments::CommentCatalog,
+        _: Option<&[u8]>,
+    ) -> Result<Vec<u8>, String> {
+        Ok(Vec::new())
+    }
+}
+
+#[test]
+fn photo_recording_dialog_fits_narrow_and_wide_windows_without_microphone_access() {
+    for width in [360., 800.] {
+        let mut suite = test_suite();
+        suite.root = Some("/library".into());
+        suite.items = vec![
+            Media::from_path(
+                "/library/2008/09/img_20080916_035811.jpg".into(),
+                "2008/09".into(),
+            )
+            .unwrap(),
+        ];
+        suite.comments.load("/library".into());
+        for _ in 0..1000 {
+            suite.comments.poll();
+            if !suite.comments.busy() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        suite
+            .comments
+            .open_photo(photosuite_application::comments::PhotoTarget {
+                root: "/library".into(),
+                file: crate::domain::tags::LibraryFile::new(
+                    "2008/09/img_20080916_035811.jpg".into(),
+                )
+                .unwrap(),
+                time: Some(
+                    crate::domain::CaptureTime::parse("2008:09:16 03:58:11", "Name").unwrap(),
+                ),
+            })
+            .unwrap();
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut found = false;
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| suite.comment_dialog(ctx),
+            );
+            for shape in output.shapes {
+                if let egui::Shape::Text(text) = shape.shape {
+                    crate::theme::assert_text_glyphs(&ctx, &text);
+                    if text.galley.job.text == "Aufnehmen" {
+                        found = true;
+                    }
+                    let rect = text.visual_bounding_rect();
+                    assert!(
+                        rect.left() >= -1. && rect.right() <= width + 1.,
+                        "recording text outside window: {} {rect:?}",
+                        text.galley.job.text
+                    );
+                }
+            }
+        }
+        assert!(found);
+        assert!(!suite.comments.has_unsaved());
+        assert!(!suite.comments.snapshot.playing);
     }
 }

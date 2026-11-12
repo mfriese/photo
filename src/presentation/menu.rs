@@ -15,7 +15,8 @@ fn shortcut(key: &str, shift: bool) -> Option<Shortcut> {
 }
 impl Suite {
     fn menu_entries(&self, ctx: &egui::Context) -> Vec<Entry> {
-        let blocked = self.options_open
+        let blocked = self.comments.open
+            || self.options_open
             || self.import_panel.visible
             || self.tag_view.open
             || self.bindings.visible
@@ -47,7 +48,7 @@ impl Suite {
             },
             Entry {
                 action: Action::Settings,
-                enabled: true,
+                enabled: !blocked,
                 checked: None,
                 shortcut: shortcut("Comma", false),
             },

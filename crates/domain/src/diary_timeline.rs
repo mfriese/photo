@@ -14,6 +14,7 @@ pub struct DiaryClip {
     provisional_weight: Option<f64>,
     captured: Option<CaptureTime>,
     duration: Option<f64>,
+    logical_locked: bool,
 }
 impl DiaryClip {
     /// Equal provisional slots until actual durations are available; no I/O required.
@@ -33,7 +34,21 @@ impl DiaryClip {
             provisional_weight: None,
             captured,
             duration: None,
+            logical_locked: false,
         }
+    }
+    pub fn from_media(media: &crate::Media) -> Self {
+        let mut clip = Self::from_filename(media.path().into());
+        if media.has_audio_placement() {
+            clip.captured = media.logical_time().cloned();
+            clip.logical_locked = true;
+        }
+        clip
+    }
+    pub fn with_logical_time(mut self, time: Option<CaptureTime>) -> Self {
+        self.captured = time;
+        self.logical_locked = true;
+        self
     }
     pub fn path(&self) -> &Path {
         &self.path
@@ -138,13 +153,15 @@ impl DiaryTimeline {
             .iter_mut()
             .find(|c| c.path == recording.path())
             .ok_or("Aufnahme gehört nicht zum Jahresverlauf")?;
-        clip.captured = Some(
-            clip.path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .and_then(crate::audio_date::comment_time)
-                .unwrap_or_else(|| recording.captured().clone()),
-        );
+        if !clip.logical_locked {
+            clip.captured = Some(
+                clip.path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(crate::audio_date::comment_time)
+                    .unwrap_or_else(|| recording.captured().clone()),
+            );
+        }
         clip.duration = Some(recording.duration());
         for clip in &mut self.clips {
             if !clip.is_verified() && clip.provisional_weight.is_some() {

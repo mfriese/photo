@@ -6,6 +6,8 @@ mod audio_labels;
 mod audio_player;
 mod command_bindings;
 mod command_labels;
+mod comment_recorder;
+mod comments_fs;
 mod context_photos;
 mod desktop_menu;
 mod duplicates_fs;
@@ -77,6 +79,12 @@ fn main() -> eframe::Result {
         tool: exiftool.clone(),
     });
     let services = application::Services {
+        comments: std::sync::Arc::new(comments_fs::YamlComments {
+            audio: audio_source.clone(),
+            copier: importer.clone(),
+            dates: importer.clone(),
+        }),
+        recorder: std::sync::Arc::new(comment_recorder::NativeCommentRecorder::new()),
         media_dates: importer.clone(),
         organization: std::sync::Arc::new(tag_store::YamlTags),
         work_priority: priority.clone(),

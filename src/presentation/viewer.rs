@@ -8,7 +8,8 @@ impl super::Suite {
         pending: &mut Vec<crate::commands::Command>,
     ) {
         if let Some(index) = self.selected {
-            if !self.options_open
+            if !self.comments.open
+                && !self.options_open
                 && !self.tag_view.open
                 && !self.bindings.visible
                 && ctx.input(|i| i.key_pressed(egui::Key::Escape))
@@ -32,6 +33,9 @@ impl super::Suite {
                     let (date, clock, date_detail) =
                         super::captions::text(&mut self.media_dates, m);
                     ui.horizontal(|ui| {
+                        if m.is_photo() && ui.button("Aufnahme …").clicked() {
+                            self.record_photo = Some(index);
+                        }
                         if ui.button("Tags …").clicked() {
                             match self.organization.file(m.path()) {
                                 Ok(file) => self.tag_view.edit(file),
@@ -88,7 +92,7 @@ impl super::Suite {
                         );
                     }
                 });
-            if !self.tag_view.open {
+            if !self.comments.open && !self.tag_view.open {
                 next |= ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
                 previous |= ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
             }

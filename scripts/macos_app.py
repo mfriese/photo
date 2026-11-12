@@ -146,6 +146,7 @@ def build():
             "CFBundleDevelopmentRegion": "de",
             "NSHighResolutionCapable": True,
             "NSPrincipalClass": "NSApplication",
+            "NSMicrophoneUsageDescription": "PhotoSuite nimmt auf deinen Wunsch Audiokommentare zu Fotos auf.",
         }
         with (contents / "Info.plist").open("wb") as file:
             plistlib.dump(info, file)
