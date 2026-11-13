@@ -42,7 +42,7 @@ impl super::Suite {
                             saving: self.editor.is_saving(),
                             write_exif: self.write_exif,
                         },
-                        |ui| self.compact_photo_audio(ui, m.path()),
+                        |ui| self.compact_photo_audio(ui, m.path(), m.is_photo()),
                     );
                     if actions.record {
                         self.record_photo = Some(index);
@@ -55,8 +55,8 @@ impl super::Suite {
                     }
                     previous = actions.previous;
                     next = actions.next;
-                    if actions.external
-                        && let Err(error) = self.services.opener.open(m.path())
+                    if actions.reveal
+                        && let Err(error) = self.services.opener.reveal(m.path())
                     {
                         self.status = error;
                     }
@@ -102,7 +102,7 @@ impl super::Suite {
 struct ViewerActions {
     previous: bool,
     next: bool,
-    external: bool,
+    reveal: bool,
     reload: bool,
     record: bool,
     tags: bool,
@@ -118,7 +118,7 @@ struct ViewerState {
 fn viewer_controls(
     ui: &mut egui::Ui,
     state: ViewerState,
-    audio: impl FnOnce(&mut egui::Ui),
+    audio: impl FnOnce(&mut egui::Ui) -> bool,
 ) -> ViewerActions {
     let ViewerState {
         video,
@@ -129,14 +129,9 @@ fn viewer_controls(
     } = state;
     use crate::commands::Command;
     let mut actions = ViewerActions::default();
-    egui::Frame::group(ui.style())
-        .fill(crate::theme::CANVAS)
-        .stroke(egui::Stroke::new(1_f32, crate::theme::BORDER))
-        .corner_radius(6)
-        .inner_margin(6.)
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.spacing_mut().item_spacing.x = 6.;
+    ui.spacing_mut().item_spacing.x = 6.;
+    ui.horizontal(|ui| {
+        control_group(ui, 114., egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.horizontal(|ui| {
                 actions.previous = button(
                     ui,
@@ -152,14 +147,6 @@ fn viewer_controls(
                     "Nächstes Medium · Pfeiltaste rechts",
                 )
                 .clicked();
-                actions.external =
-                    button(ui, Icon::External, true, "Im Standardprogramm öffnen").clicked();
-                actions.tags = button(ui, Icon::Tag, true, "Tags bearbeiten").clicked();
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width().max(1.), 34.),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    audio,
-                );
             });
             ui.horizontal(|ui| {
                 if video {
@@ -173,7 +160,6 @@ fn viewer_controls(
                         "Sechs Videovorschaubilder erneut laden",
                     )
                     .clicked();
-                    ui.allocate_exact_size(egui::vec2(34., 34.), egui::Sense::hover());
                 } else {
                     for (command, icon, help) in [
                         (
@@ -204,16 +190,42 @@ fn viewer_controls(
                         }
                     }
                 }
-                actions.record = button(
-                    ui,
-                    Icon::Record,
-                    !video,
-                    "Audiokommentar zu diesem Foto aufnehmen",
-                )
-                .clicked();
             });
         });
+        control_group(ui, 34., egui::Layout::top_down(egui::Align::Min), |ui| {
+            actions.tags = button(ui, Icon::Tag, true, "Tags bearbeiten").clicked();
+            actions.reveal = button(ui, Icon::Reveal, true, "Im Finder anzeigen").clicked();
+        });
+        let width = (ui.available_width() - 14.).max(1.);
+        actions.record = control_group(
+            ui,
+            width,
+            egui::Layout::left_to_right(egui::Align::Center),
+            audio,
+        );
+    });
     actions
+}
+/// Three equally high presentation groups with shared theme surfaces and borders.
+fn control_group<R>(
+    ui: &mut egui::Ui,
+    width: f32,
+    layout: egui::Layout,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    egui::Frame::new()
+        .fill(crate::theme::SURFACE)
+        .stroke(egui::Stroke::new(1_f32, crate::theme::BORDER))
+        .corner_radius(6)
+        .inner_margin(6.)
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(width, 72.), layout, |ui| {
+                ui.set_min_size(egui::vec2(width, 72.));
+                body(ui)
+            })
+            .inner
+        })
+        .inner
 }
 
 fn centered_preview(ui: &mut egui::Ui, image: egui::Image<'_>) -> egui::Response {
@@ -261,6 +273,180 @@ impl super::Suite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[derive(Default)]
+    struct RevealSpy(std::sync::Mutex<Vec<std::path::PathBuf>>);
+    impl crate::ports::MediaOpener for RevealSpy {
+        fn open(&self, _: &std::path::Path) -> Result<(), String> {
+            panic!("Finder action must not open media")
+        }
+        fn reveal(&self, path: &std::path::Path) -> Result<(), String> {
+            self.0.lock().unwrap().push(path.into());
+            Ok(())
+        }
+    }
+    #[test]
+    fn viewer_title_and_real_comment_controls_fit_without_status_labels() {
+        for width in [360., 600., 1280.] {
+            let mut suite = super::super::layout_tests::test_suite();
+            suite.root = Some("/Fotos".into());
+            suite.items = vec![
+                crate::domain::Media::from_path(
+                    "/Fotos/2008/09/img_20080916_035811.jpg".into(),
+                    "2008/09".into(),
+                )
+                .unwrap(),
+            ];
+            suite.selected = Some(0);
+            let revealed = std::sync::Arc::new(RevealSpy::default());
+            suite.services.opener = revealed.clone();
+            let mut reveal_point = None;
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            ctx.style_mut(|s| s.animation_time = 0.);
+            for frame in 0..3 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 700.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| suite.media_viewer(ctx, &[0], &mut Vec::new()),
+                );
+                if frame == 0 {
+                    continue;
+                }
+                let record = output
+                    .shapes
+                    .iter()
+                    .find_map(|s| match &s.shape {
+                        egui::Shape::Circle(circle) if circle.fill == crate::theme::RECORD_RED => {
+                            Some(circle.center)
+                        }
+                        _ => None,
+                    })
+                    .expect("record symbol");
+                let row: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.size() == egui::vec2(34., 34.)
+                                && (rect.rect.center().y - record.y).abs() < 0.5 =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    row.len(),
+                    3,
+                    "Play, Record and year button share a centered row"
+                );
+                assert!(
+                    row.iter()
+                        .any(|rect| (rect.center().x - (record.x - 40.)).abs() < 0.5),
+                    "Play directly precedes Record"
+                );
+                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(rect) if (rect.rect.height()-26.).abs()<0.1 && rect.fill==crate::theme::DISABLED_BG && (rect.rect.center().y-record.y).abs()<0.5)),"track vertically centered");
+                let mut groups: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.fill == crate::theme::SURFACE
+                                && rect.stroke.color == crate::theme::BORDER
+                                && rect.rect.height() > 70.
+                                && rect.rect.height() < 100. =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                groups.sort_by(|a, b| a.left().total_cmp(&b.left()));
+                assert_eq!(groups.len(), 3, "three visible control groups");
+                for group in &groups {
+                    assert!((group.center().y - record.y).abs() < 0.5);
+                }
+                let file_buttons: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.size() == egui::vec2(34., 34.)
+                                && groups[1].contains(rect.rect.center()) =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(file_buttons.len(), 2);
+                reveal_point = file_buttons
+                    .iter()
+                    .max_by(|a, b| a.center().y.total_cmp(&b.center().y))
+                    .map(|rect| rect.center());
+                assert!((file_buttons[0].center().x - file_buttons[1].center().x).abs() < 0.5);
+                assert!((file_buttons[0].center().y - file_buttons[1].center().y).abs() > 34.);
+
+                let mut buttons = 0;
+                for shape in output.shapes {
+                    match shape.shape {
+                        egui::Shape::Rect(rect) if rect.rect.size() == egui::vec2(34., 34.) => {
+                            buttons += 1;
+                            assert!(
+                                rect.rect.right() <= width + 1.,
+                                "button overflow at {width}: {:?}",
+                                rect.rect
+                            );
+                        }
+                        egui::Shape::Text(text) => {
+                            let label = &text.galley.job.text;
+                            assert!(!label.contains("EXIF: an") && !label.contains("1 / 1"));
+                        }
+                        _ => {}
+                    }
+                }
+                assert!(
+                    buttons >= 10,
+                    "all eight actions and two audio buttons must be visible: {buttons}"
+                );
+            }
+            let point = reveal_point.unwrap();
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 700.),
+                    )),
+                    events: vec![
+                        egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::PointerButton {
+                            pos: point,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ctx| suite.media_viewer(ctx, &[0], &mut Vec::new()),
+            );
+            assert_eq!(
+                *revealed.0.lock().unwrap(),
+                vec![suite.items[0].path().to_owned()]
+            );
+        }
+    }
     #[test]
     fn portrait_and_landscape_previews_are_horizontally_centered() {
         for dimensions in [[40, 100], [100, 40]] {
@@ -323,7 +509,7 @@ mod tests {
                                         saving,
                                         write_exif,
                                     },
-                                    |_| {},
+                                    |_| false,
                                 );
                                 assert!(
                                     !actions.previous && !actions.next && actions.command.is_none()

@@ -16,7 +16,7 @@ PhotoSuite öffnet vorhandene Fotoordner als übersichtliche Galerie. Keine Clou
 | **Native Menüs** | PhotoSuite, File, Edit, View, Window und Help über muda; Aktionen und Tastenkürzel zentral verbunden. |
 | **Fotowand** | Virtualisiertes Raster mit fünf Größenstufen, gleichmäßig gefüllten Zeilen und quadratischem Beschnitt oder vollständigem Seitenverhältnis. |
 | **In der Sammlung navigieren** | Alles-Ansicht, aufklappbare Jahre, Monatsauswahl, Dateinamens-/Pfadsuche und Videofilter. |
-| **Großansicht** | Zentrierte Fotos, Pfeiltastennavigation und zwei feste Kontrollzeilen oberhalb des Bildes. |
+| **Großansicht** | Zentrierte Fotos, Datum/Uhrzeit im Titel, drei klar getrennte Aktionsgruppen einschließlich Tags/Finder und eine zentrierte Hörleiste mit Play/Aufnahme nur für Kommentare zum aktuellen Foto; direkter Zugang zum Jahresverlauf. |
 | **Videos ansehen** | Native Vorschauen, sechs zeitlich verteilte Standbilder und Wiedergabe über AVFoundation/AVKit. Kein externes FFmpeg erforderlich. |
 | **Audio-Diary** | Pro Jahr ein zoomabhängiges Kachelraster mit Datum/Uhrzeit und eine durchgehende Hörleiste mit proportionalen Dateiabschnitten, globalem Schieber und nativer Audiowiedergabe. Keine Playlist-Ansicht. |
 | **Ausrichtung korrigieren** | EXIF inklusive Spiegelungen; manuelles Drehen zunächst nur für die Sitzung. Optional JPEG-EXIF ohne Neukompression speichern. |
@@ -288,20 +288,20 @@ Links neben Aufnahme steht jetzt Play. Pausieren, dann in der Kurve klicken oder
 
 Aufnahme und Pause blenden keine kurzzeitigen Vorbereitungstexte mehr ein; Fehlermeldungen bleiben sichtbar.
 
-### Robuste Kommentarablage
+### Foto-Kommentarablage
 ```text
-2026/audio/
-  d/aud_20261113_103000.wav
-  c/com_20261113_143000.m4a
-  y/com_20261113_143000.yaml
+2008/09/img_20080916_035811.jpg
+2008/audio/y/09/img_20080916_035811.jpg.yaml
+2026/audio/c/com_20261113_143000.m4a
+2027/audio/c/com_20270102_100000.m4a
 ```
-Diary-Dateinamen behalten ihr bisheriges Format. Jede neue Kommentaraufnahme erhält eine eigene lesbare YAML mit GUID, bibliotheksrelativem Audio-/Fotopfad und tatsächlichem Aufnahmestart inklusive Zeitzone. Das Fotodatum wird aus dem Bildnamen oder dessen Metadaten bestimmt. Die Gesamtdatei `photosuite-comments.yaml` bleibt ein schneller Index und lässt sich rekonstruieren.
+Ein Foto-YAML (Version 2) enthält alle zugehörigen Kommentare als GUID → Audiopfad. Aufnahmedatum und Uhrzeit stehen ausschließlich im Audiodateinamen. Kommentare bleiben in der Baumauswahl und Jahreswiedergabe im tatsächlichen Aufnahmejahr; es gibt kein Umsortieren zum Fotojahr.
 
-Unter **PhotoSuite → Settings… → Audiokommentare → Kommentarindex vollständig neu aufbauen** werden die Einzeldateien im Hintergrund geprüft. Fortschritt, Abbruch und Ergebnis sind sichtbar. Vorhandene Einzel-YAMLs haben Vorrang; nur fehlende dürfen aus einem noch lesbaren Gesamtindex ergänzt werden. Fehler verhindern einen teilweisen Austausch des Index. Ein defekter Gesamtindex wird vor der Wiederherstellung separat erhalten. Bestehende Medien werden nicht automatisch verschoben oder gelöscht. Bei einem Absturz zwischen Audio- und YAML-Veröffentlichung kann eine unzugeordnete Audiodatei verbleiben; nach erfolgreicher Einzel-YAML ist die Zuordnung unabhängig vom Gesamtindex wiederherstellbar.
+`photosuite-comments.yaml` ist der ableitbare Startindex (Version 3, nach Fotos gruppiert). Speichern aktualisiert erst das Foto-YAML revisionsgeprüft, dann den Index. **File → Refresh** und der Neuaufbau unter Settings lesen ausschließlich die neuen Foto-YAMLs. Keine Kompatibilität/Migration für die bisherigen audio-benannten YAMLs oder alten Zuordnungen. Veraltete Index-Versionen werden automatisch als Cache verworfen und aus den neuen Quellen rekonstruiert; ohne neue Quellen bleibt der neue Index leer. Rohe alte Indexbytes werden vor Austausch gesichert. Defekte neue Quellen oder Abbruch lassen den bestehenden Index erhalten. Medien bleiben unverändert.
 
-Die Hörleiste folgt der Auswahl im Jahresbaum. Jahr, Monat und **Audio** zeigen Tagebuch und Kommentare gemeinsam in zeitlicher Reihenfolge. Nur **Tagebuch** bzw. **Kommentare** filtern die Leiste. Kommentare stehen bei Datum/Uhrzeit des zugehörigen Fotos, auch wenn sie Jahre später aufgenommen wurden. Laufendes Audio bleibt bei Navigation erhalten; Play in einem anderen Audiobereich startet die neue Auswahl.
+Die Hörleiste folgt der Auswahl im Jahresbaum. Jahr, Monat und **Audio** zeigen Tagebuch und Kommentare gemeinsam in zeitlicher Reihenfolge. Nur **Tagebuch** bzw. **Kommentare** filtern die Leiste. Kommentare stehen bei ihrem eigenen Aufnahmedatum und ihrer Aufnahmezeit. Laufendes Audio bleibt bei Navigation erhalten; Play in einem anderen Audiobereich startet die neue Auswahl.
 
-Rechts an jeder Hörleiste öffnet ein Fenster-Symbol den passenden Player. **Jahr/Audio** spielt das gesamte Jahr, **Monat** ausschließlich den gewählten Monat; **Tagebuch/Kommentare** begrenzt auf die gewählte Kategorie. Kommentare zählen zum Monat des Fotos. Ein bereits passender laufender Player wird ohne Neustart und Positionsverlust eingeblendet.
+Rechts an jeder Hörleiste öffnet ein Fenster-Symbol den passenden Player. **Jahr/Audio** spielt das gesamte Jahr, **Monat** ausschließlich den gewählten Monat; **Tagebuch/Kommentare** begrenzt auf die gewählte Kategorie. Kommentare zählen zu ihrem tatsächlichen Aufnahmemonat. Ein bereits passender laufender Player wird ohne Neustart und Positionsverlust eingeblendet.
 
 Der Bereichsplayer hat zentrierte Symbolbuttons für 15 Sekunden zurück, Play/Pause, Kommentar aufnehmen und 15 Sekunden vorwärts. Aufnahme öffnet den Dialog für das mittlere hervorgehobene Foto; die Wiedergabe pausiert dabei. Das Mikrofon startet erst nach Aufnehmen im Dialog.
 
@@ -309,4 +309,4 @@ Die Symbolbuttons im Bereichsplayer bleiben vollständig im sichtbaren Fensterbe
 
 Die Wiedergabesteuerung im Jahresverlauf nutzt kompakte quadratische Buttons wie der Aufnahmedialog: helle Symbole und einen roten Aufnahmekreis.
 
-Aufnahme- und Wiedergabebuttons teilen zentrale Theme-Farben einschließlich Rahmen und Interaktionszuständen. Audioleisten ohne Aufnahmen sind deutlich ausgegraut. **File → Refresh** prüft zusätzlich den Kommentarindex anhand der Einzel-YAMLs und gleicht anschließend den `comment`-Tag ab; der vollständige Neuaufbau unter Settings tut dasselbe. Originalmedien bleiben unberührt.
+Aufnahme- und Wiedergabebuttons teilen zentrale Theme-Farben einschließlich Rahmen und Interaktionszuständen. Audioleisten ohne Aufnahmen sind deutlich ausgegraut. **File → Refresh** prüft zusätzlich den Kommentarindex anhand der Foto-YAMLs und gleicht anschließend den `comment`-Tag ab; der vollständige Neuaufbau unter Settings tut dasselbe. Originalmedien bleiben unberührt.

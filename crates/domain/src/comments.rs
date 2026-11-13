@@ -22,6 +22,15 @@ impl RecordedAt {
             time,
         })
     }
+    pub fn from_audio_name(path: &Path) -> Result<Self, String> {
+        let time = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(crate::audio_date::date_from_filename)
+            .ok_or("Kommentar-Dateiname benötigt Aufnahmedatum und Uhrzeit")?;
+        let iso = time.exif_value().replacen(':', "-", 2).replace(' ', "T");
+        Ok(Self { iso, time })
+    }
     pub fn iso(&self) -> &str {
         &self.iso
     }
@@ -46,16 +55,9 @@ pub struct Comment {
     audio: LibraryFile,
     photo: LibraryFile,
     recorded_at: RecordedAt,
-    photo_time: Option<CaptureTime>,
 }
 impl Comment {
-    pub fn new(
-        id: String,
-        audio: LibraryFile,
-        photo: LibraryFile,
-        recorded_at: RecordedAt,
-        photo_time: Option<CaptureTime>,
-    ) -> Result<Self, String> {
+    pub fn new(id: String, audio: LibraryFile, photo: LibraryFile) -> Result<Self, String> {
         if id.len() != 36
             || !id.bytes().enumerate().all(|(i, b)| {
                 if [8, 13, 18, 23].contains(&i) {
@@ -84,41 +86,42 @@ impl Comment {
         {
             return Err("Kommentar benötigt eine com_- oder ältere comment_-Audiodatei".into());
         }
-        // Persisted photo time is a snapshot: normalize provenance so reload/retry
-        // compares the same reference value rather than transient metadata labels.
-        let photo_time = photo_time
-            .map(|time| CaptureTime::parse(&time.exif_value(), "Fotozuordnung"))
-            .transpose()?;
+        Self::metadata_path(&photo)?;
+        let recorded_at = RecordedAt::from_audio_name(Path::new(audio.as_str()))?;
         Ok(Self {
             id: id.to_ascii_lowercase(),
             audio,
             photo,
             recorded_at,
-            photo_time,
         })
     }
-    /// Dedicated metadata directory of the physical audio year. Legacy media stay in place.
-    pub fn sidecar(&self) -> LibraryFile {
-        let path = Path::new(self.audio.as_str());
-        let year = self
-            .audio
-            .as_str()
-            .split(std::path::MAIN_SEPARATOR)
+    /// Mirror the image path under its year's audio/y folder, keeping its extension.
+    pub fn metadata_path(photo: &LibraryFile) -> Result<LibraryFile, String> {
+        if !Media::from_path(photo.as_str().into(), String::new()).is_some_and(|m| m.is_photo()) {
+            return Err("Foto-Metadaten benötigen einen Bildverweis".into());
+        }
+        let path = Path::new(photo.as_str());
+        let mut parts = path.components();
+        let year = parts
             .next()
+            .and_then(|c| c.as_os_str().to_str())
             .filter(|year| {
                 crate::diary::AudioScope::for_year(year, crate::diary::AudioKind::All).is_some()
             })
-            .unwrap_or_else(|| self.recorded_at.time().year());
-        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        LibraryFile::new(
-            Path::new(year)
-                .join("audio")
-                .join("y")
-                .join(format!("{stem}.yaml"))
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("validated relative audio path and year")
+            .ok_or("Foto muss in einem gültigen Bibliotheksjahr liegen")?;
+        let mut target = Path::new(year)
+            .join("audio")
+            .join("y")
+            .join(parts.as_path());
+        let name = target
+            .file_name()
+            .ok_or("Foto ohne Dateiname")?
+            .to_string_lossy();
+        target.set_file_name(format!("{name}.yaml"));
+        LibraryFile::new(target.to_string_lossy().into_owned())
+    }
+    pub fn sidecar(&self) -> LibraryFile {
+        Self::metadata_path(&self.photo).expect("validated photo reference")
     }
     pub fn id(&self) -> &str {
         &self.id
@@ -132,24 +135,15 @@ impl Comment {
     pub fn recorded_at(&self) -> &RecordedAt {
         &self.recorded_at
     }
-    pub fn photo_time(&self) -> Option<&CaptureTime> {
-        self.photo_time.as_ref()
-    }
-    pub fn logical_year(&self) -> &str {
-        self.photo_time
-            .as_ref()
-            .map(CaptureTime::year)
-            .or_else(|| {
-                self.photo
-                    .as_str()
-                    .split(std::path::MAIN_SEPARATOR)
-                    .next()
-                    .filter(|year| {
-                        crate::diary::AudioScope::for_year(year, crate::diary::AudioKind::All)
-                            .is_some()
-                    })
+    pub fn photo_year(&self) -> &str {
+        self.photo
+            .as_str()
+            .split(std::path::MAIN_SEPARATOR)
+            .next()
+            .filter(|year| {
+                crate::diary::AudioScope::for_year(year, crate::diary::AudioKind::All).is_some()
             })
-            .unwrap_or_else(|| self.recorded_at.time.year())
+            .unwrap_or(self.recorded_at.time().year())
     }
 }
 #[derive(Clone, Default, Debug)]
@@ -161,6 +155,25 @@ pub struct CommentCatalog {
 impl CommentCatalog {
     pub fn entries(&self) -> &BTreeMap<String, Comment> {
         &self.entries
+    }
+    /// Replace only this photo's derived index entries with its authoritative record.
+    pub fn replace_photo(
+        &mut self,
+        photo: &LibraryFile,
+        comments: impl IntoIterator<Item = Comment>,
+    ) -> Result<(), String> {
+        let mut next = Self::default();
+        for c in self.entries.values().filter(|c| c.photo() != photo) {
+            next.insert(c.clone())?;
+        }
+        for c in comments {
+            if c.photo() != photo {
+                return Err("Foto-Datensatz enthält eine fremde Zuordnung".into());
+            }
+            next.insert(c)?;
+        }
+        *self = next;
+        Ok(())
     }
     pub fn insert(&mut self, comment: Comment) -> Result<(), String> {
         if let Some(existing) = self.entries.get(comment.id()) {
@@ -202,30 +215,28 @@ mod tests {
             "12345678-1234-1234-1234-123456789abc".into(),
             LibraryFile::new("2026/audio/comment_20261112_153000.m4a".into()).unwrap(),
             LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
-            RecordedAt::parse("2026-11-12T15:30:00+01:00").unwrap(),
-            Some(CaptureTime::parse("2008:09:16 03:58:11", "Foto").unwrap()),
         )
         .unwrap()
     }
     #[test]
-    fn recording_date_and_photo_placement_are_distinct_and_survive_refinement() {
+    fn recording_date_and_physical_tree_location_survive_refinement() {
         let c = comment();
-        assert_eq!(c.recorded_at().iso(), "2026-11-12T15:30:00+01:00");
-        assert_eq!(c.logical_year(), "2008");
+        assert_eq!(c.recorded_at().iso(), "2026-11-12T15:30:00");
+        assert_eq!(c.photo_year(), "2008");
         assert_eq!(
             c.recorded_at().target(Path::new("/library"), 1),
             PathBuf::from("/library/2026/audio/c/com_20261112_153000_001.m4a")
         );
         let m = Media::from_audio_asset(PathBuf::from(c.audio().as_str()), "2026/audio".into())
             .unwrap()
-            .place_comment(Some(&c));
-        assert_eq!(m.group(), "2008/audio");
+            .with_comment_recording(Some(&c));
+        assert_eq!(m.group(), "2026/audio");
         assert_eq!(
             crate::capture_from_filename(&m).unwrap().stamp(),
-            "20080916_035811"
+            "20261112_153000"
         );
         let mut timeline = crate::diary_timeline::DiaryTimeline::new(
-            "2008".into(),
+            "2026".into(),
             vec![crate::diary_timeline::DiaryClip::from_media(&m)],
         )
         .unwrap();
@@ -237,16 +248,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             timeline.clips()[0].captured().unwrap().stamp(),
-            "20080916_035811"
+            "20261112_153000"
         );
         assert_eq!(timeline.clips()[0].duration(), Some(4.));
         assert!(
-            crate::diary::AudioScope::parse("2008/audio/comments")
+            crate::diary::AudioScope::parse("2026/audio/comments")
                 .unwrap()
                 .includes(&m)
         );
         assert!(
-            !crate::diary::AudioScope::parse("2026/audio")
+            !crate::diary::AudioScope::parse("2008/audio")
                 .unwrap()
                 .includes(&m)
         );
@@ -272,38 +283,16 @@ mod tests {
         assert!(RecordedAt::parse("2026-02-30T15:30:00Z").is_err());
         assert!(LibraryFile::new("../outside.jpg".into()).is_err());
         let c = comment();
+        assert!(Comment::new("bad".into(), c.audio.clone(), c.photo.clone()).is_err());
         assert!(
-            Comment::new(
-                "bad".into(),
-                c.audio.clone(),
-                c.photo.clone(),
-                c.recorded_at.clone(),
-                None
-            )
-            .is_err()
-        );
-        assert!(
-            Comment::new(
-                c.id,
-                c.audio,
-                LibraryFile::new("movie.mov".into()).unwrap(),
-                c.recorded_at,
-                None
-            )
-            .is_err()
+            Comment::new(c.id, c.audio, LibraryFile::new("movie.mov".into()).unwrap()).is_err()
         );
     }
     #[test]
     fn uuid_casing_does_not_create_distinct_comment_identities() {
         let c = comment();
-        let upper = Comment::new(
-            c.id().to_uppercase(),
-            c.audio().clone(),
-            c.photo().clone(),
-            c.recorded_at().clone(),
-            c.photo_time().cloned(),
-        )
-        .unwrap();
+        let upper =
+            Comment::new(c.id().to_uppercase(), c.audio().clone(), c.photo().clone()).unwrap();
         assert_eq!(upper, c);
         let mut catalog = CommentCatalog::default();
         catalog.insert(c).unwrap();

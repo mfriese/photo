@@ -207,6 +207,9 @@ mod tests {
         }
     }
     impl crate::ports::MediaOpener for NoIo {
+        fn reveal(&self, _: &std::path::Path) -> Result<(), String> {
+            panic!("test must not reveal files")
+        }
         fn open(&self, _: &std::path::Path) -> Result<(), String> {
             panic!("layout must not open")
         }

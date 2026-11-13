@@ -57,12 +57,7 @@ impl Suite {
                     .ok_or("Foto nicht mehr verfügbar")?;
                 let root = self.root.clone().ok_or("Keine Bibliothek geöffnet")?;
                 let file = self.organization.file(media.path())?;
-                let time = self
-                    .media_dates
-                    .get(media)
-                    .and_then(|date| date.as_ref().ok())
-                    .cloned();
-                self.comments.open_photo(PhotoTarget { root, file, time })
+                self.comments.open_photo(PhotoTarget { root, file })
             })();
             if let Err(error) = result {
                 self.status = error;
@@ -149,10 +144,20 @@ impl Suite {
                     128.,
                 ));
                 let busy = self.comments.is_saving() || self.comments.is_save_pending();
+                let photo_date = crate::domain::Media::from_path(
+                    target.root.join(target.file.as_str()),
+                    String::new(),
+                )
+                .and_then(|media| {
+                    self.media_dates
+                        .get(&media)
+                        .and_then(|date| date.as_ref().ok())
+                        .cloned()
+                });
                 match photo_footer(
                     ui,
                     image,
-                    target.time.as_ref(),
+                    photo_date.as_ref(),
                     !busy,
                     self.comments.has_unsaved() && !busy,
                 ) {

@@ -1,6 +1,6 @@
 //! Recording and reference persistence orchestration. No GUI, native or filesystem dependencies.
 use crate::domain::{
-    CaptureTime, Media,
+    Media,
     comments::{Comment, CommentCatalog},
     tags::LibraryFile,
 };
@@ -68,14 +68,13 @@ pub trait CommentRecorder: Send + Sync + 'static {
 pub struct PhotoTarget {
     pub root: PathBuf,
     pub file: LibraryFile,
-    pub time: Option<CaptureTime>,
 }
 pub struct StoredComments {
     pub catalog: CommentCatalog,
     pub revision: Option<Vec<u8>>,
 }
-pub struct RecoveryBase {
-    pub stored: StoredComments,
+pub struct RebuildBase {
+    pub revision: Option<Vec<u8>>,
     pub warning: String,
 }
 #[derive(Clone, Debug, Default)]
@@ -85,24 +84,28 @@ pub struct RebuildProgress {
 }
 pub trait CommentRepository: Send + Sync + 'static {
     fn load(&self, root: &Path) -> Result<StoredComments, String>;
-    fn write_sidecar(&self, root: &Path, comment: &Comment) -> Result<(), String>;
+    fn write_photo_record(&self, root: &Path, comment: &Comment) -> Result<(), String>;
     fn commit(
         &self,
         root: &Path,
         comment: &Comment,
         catalog: &CommentCatalog,
         expected: Option<&[u8]>,
-    ) -> Result<Vec<u8>, String> {
-        self.write_sidecar(root, comment)?;
-        self.save(root, catalog, expected)
+    ) -> Result<StoredComments, String> {
+        self.write_photo_record(root, comment)?;
+        let revision = self.save(root, catalog, expected)?;
+        Ok(StoredComments {
+            catalog: catalog.clone(),
+            revision: Some(revision),
+        })
     }
-    fn recovery_base(&self, root: &Path) -> Result<RecoveryBase, String> {
-        Ok(RecoveryBase {
-            stored: self.load(root)?,
+    fn rebuild_base(&self, root: &Path) -> Result<RebuildBase, String> {
+        Ok(RebuildBase {
+            revision: self.load(root)?.revision,
             warning: String::new(),
         })
     }
-    fn scan_sidecars(
+    fn scan_photo_records(
         &self,
         _root: &Path,
         _cancel: &std::sync::atomic::AtomicBool,
@@ -129,7 +132,7 @@ pub trait CommentRepository: Send + Sync + 'static {
 /// are application/domain decisions, never a filesystem adapter's workflow.
 pub trait CommentMediaStore: Send + Sync + 'static {
     fn validate(&self, target: &PhotoTarget, take: &CapturedTake) -> Result<(), String>;
-    fn photo_time(&self, target: &PhotoTarget) -> Result<CaptureTime, String>;
+
     fn exists(&self, path: &Path) -> Result<bool, String>;
     /// Exclusive, byte-verified publication; must never overwrite an existing file.
     fn copy_verified(&self, source: &Path, target: &Path) -> Result<(), String>;
@@ -363,22 +366,8 @@ impl CommentSession {
         };
         std::thread::spawn(move || {
             let result = (|| {
-                let base = repository.recovery_base(&root)?;
-                // Only missing individual records may be recovered from the readable cache.
-                for (index, comment) in base.stored.catalog.entries().values().enumerate() {
-                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                        return Err("Neuaufbau abgebrochen; Gesamtdatei unverändert".into());
-                    }
-                    repository.write_sidecar(&root, comment)?;
-                    let _ = progress.try_send(RebuildProgress {
-                        checked: index + 1,
-                        phase: format!(
-                            "{} fehlende Kommentar-YAMLs aus dem Index ergänzt",
-                            index + 1
-                        ),
-                    });
-                }
-                let entries = repository.scan_sidecars(&root, &cancel, &|update| {
+                let base = repository.rebuild_base(&root)?;
+                let entries = repository.scan_photo_records(&root, &cancel, &|update| {
                     let _ = progress.try_send(update);
                 })?;
                 let mut catalog = CommentCatalog::default();
@@ -389,7 +378,7 @@ impl CommentSession {
                     return Err("Neuaufbau abgebrochen; Gesamtdatei unverändert".into());
                 }
                 let revision =
-                    repository.replace_index(&root, &catalog, base.stored.revision.as_deref())?;
+                    repository.replace_index(&root, &catalog, base.revision.as_deref())?;
                 let message = format!(
                     "Kommentarindex neu aufgebaut: {} Zuordnungen. {}",
                     catalog.entries().len(),
@@ -434,7 +423,7 @@ impl CommentSession {
             .and_then(|p| p.to_str())
             .and_then(|p| LibraryFile::new(p.into()).ok())
             .and_then(|p| self.catalog.by_audio(&p));
-        media.place_comment(comment)
+        media.with_comment_recording(comment)
     }
     pub fn audio_for_photo(&self, path: &Path) -> PhotoAudio {
         let Some(root) = &self.root else {
@@ -451,17 +440,11 @@ impl CommentSession {
         let comments = self.catalog.for_photo(&file);
         let year = comments
             .first()
-            .map(|c| c.logical_year())
-            .or_else(|| file.as_str().split('/').next())
+            .map(|c| c.recorded_at().time().year())
+            .or_else(|| file.as_str().split(std::path::MAIN_SEPARATOR).next())
             .unwrap_or("")
             .to_owned();
-        let Some(scope) = crate::domain::diary::AudioScope::for_year(
-            &year,
-            crate::domain::diary::AudioKind::Comments,
-        ) else {
-            return PhotoAudio::default();
-        };
-        let group = scope.group();
+        let group = format!("photo/{}", file.as_str());
         let items = comments
             .into_iter()
             .filter_map(|comment| {
@@ -470,7 +453,8 @@ impl CommentSession {
                     .parent()?
                     .to_string_lossy()
                     .into_owned();
-                Media::from_audio_asset(path, group).map(|m| m.place_comment(Some(comment)))
+                Media::from_audio_asset(path, group)
+                    .map(|m| m.with_comment_recording(Some(comment)))
             })
             .collect();
         PhotoAudio { items, group, year }
@@ -488,7 +472,8 @@ impl CommentSession {
                     .parent()?
                     .to_string_lossy()
                     .into_owned();
-                Media::from_audio_asset(path, group).map(|media| media.place_comment(Some(comment)))
+                Media::from_audio_asset(path, group)
+                    .map(|media| media.with_comment_recording(Some(comment)))
             })
             .collect()
     }
@@ -692,16 +677,7 @@ impl CommentSession {
                             revision = current.revision;
                         }
                         catalog.insert(comment.clone())?;
-                        let revision = repository.commit(
-                            &target.root,
-                            &comment,
-                            &catalog,
-                            revision.as_deref(),
-                        )?;
-                        Ok(StoredComments {
-                            catalog,
-                            revision: Some(revision),
-                        })
+                        repository.commit(&target.root, &comment, &catalog, revision.as_deref())
                     })();
                     Outcome::Saved {
                         published: Some(Box::new(comment)),
@@ -945,7 +921,7 @@ mod tests {
         }
     }
     impl CommentRepository for Fake {
-        fn scan_sidecars(
+        fn scan_photo_records(
             &self,
             _: &Path,
             _: &std::sync::atomic::AtomicBool,
@@ -970,7 +946,7 @@ mod tests {
             *self.catalog.lock().unwrap() = catalog.clone();
             Ok(vec![1])
         }
-        fn write_sidecar(&self, _: &Path, _: &Comment) -> Result<(), String> {
+        fn write_photo_record(&self, _: &Path, _: &Comment) -> Result<(), String> {
             Ok(())
         }
         fn load(&self, _: &Path) -> Result<StoredComments, String> {
@@ -996,9 +972,7 @@ mod tests {
         fn validate(&self, _: &PhotoTarget, _: &CapturedTake) -> Result<(), String> {
             Ok(())
         }
-        fn photo_time(&self, _: &PhotoTarget) -> Result<CaptureTime, String> {
-            Err("unknown".into())
-        }
+
         fn exists(&self, _: &Path) -> Result<bool, String> {
             Ok(false)
         }
@@ -1016,6 +990,56 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         panic!("worker did not finish");
+    }
+    #[test]
+    fn photo_audio_projects_only_linked_comments_without_probing() {
+        let fake = Arc::new(Fake::default());
+        let photo = LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap();
+        let other = LibraryFile::new("2008/09/img_20080917_035811.jpg".into()).unwrap();
+        for n in 1..=3 {
+            let comment = Comment::new(
+                format!("12345678-1234-1234-1234-{n:012}"),
+                LibraryFile::new(format!(
+                    "{}/audio/c/com_{}1113_120000_{n:03}.m4a",
+                    2024 + n,
+                    2024 + n
+                ))
+                .unwrap(),
+                if n < 3 { photo.clone() } else { other.clone() },
+            )
+            .unwrap();
+            fake.catalog.lock().unwrap().insert(comment).unwrap();
+        }
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
+        session.load("/library".into());
+        wait(&mut session);
+        let commands_before = fake.commands.load(Ordering::SeqCst);
+        let audio = session.audio_for_photo(&Path::new("/library").join(photo.as_str()));
+        assert_eq!(audio.year, "2025");
+        assert_eq!(audio.group, format!("photo/{}", photo.as_str()));
+        assert_eq!(audio.items.len(), 2);
+        assert!(
+            audio
+                .items
+                .iter()
+                .all(|m| m.group().ends_with("/audio/c") && m.has_recording_time())
+        );
+        let mut draft = crate::diary::GalleryAudio::default();
+        draft.ensure(&audio.items, Path::new("/library"), &audio.group);
+        assert_eq!(draft.timeline().unwrap().clips().len(), 2);
+        let next = session.audio_for_photo(&Path::new("/library").join(other.as_str()));
+        assert_eq!(next.items.len(), 1);
+        assert!(!audio.items.iter().any(|a| a.path() == next.items[0].path()));
+        let empty = session.audio_for_photo(Path::new("/library/2008/09/no-comments.jpg"));
+        assert!(empty.items.is_empty());
+        assert_eq!(empty.year, "2008");
+        assert!(
+            session
+                .audio_for_photo(Path::new("/other/2008/a.jpg"))
+                .items
+                .is_empty()
+        );
+        assert_eq!(fake.commands.load(Ordering::SeqCst), commands_before);
     }
     #[test]
     fn refresh_waits_for_load_then_rebuilds_once_and_never_publishes_an_empty_loading_catalog() {
@@ -1046,7 +1070,6 @@ mod tests {
             .open_photo(PhotoTarget {
                 root: "/library".into(),
                 file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
-                time: None,
             })
             .unwrap();
         wait(&mut session);
@@ -1075,7 +1098,7 @@ mod tests {
         assert!(!session.has_unsaved());
         assert_eq!(fake.copies.load(Ordering::SeqCst), 1);
         assert_eq!(session.catalog.entries().len(), 1);
-        assert_eq!(session.comment_media()[0].group(), "2008/audio");
+        assert_eq!(session.comment_media()[0].group(), "2026/audio/c");
     }
     #[test]
     fn root_changes_discard_stale_load_results() {
@@ -1102,8 +1125,7 @@ mod tests {
             session
                 .open_photo(PhotoTarget {
                     root: "/library".into(),
-                    file: LibraryFile::new("2008/audio/a.wav".into()).unwrap(),
-                    time: None
+                    file: LibraryFile::new("2008/audio/a.wav".into()).unwrap()
                 })
                 .is_err()
         );
@@ -1112,7 +1134,6 @@ mod tests {
             .open_photo(PhotoTarget {
                 root: "/library".into(),
                 file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
-                time: None,
             })
             .unwrap();
         session.start(fake.as_ref()).unwrap();
@@ -1131,10 +1152,7 @@ mod tests {
             self.0.lock().unwrap().push("validate".into());
             Ok(())
         }
-        fn photo_time(&self, _: &PhotoTarget) -> Result<CaptureTime, String> {
-            self.0.lock().unwrap().push("date".into());
-            Err("unknown photo date".into())
-        }
+
         fn exists(&self, path: &Path) -> Result<bool, String> {
             self.0
                 .lock()
@@ -1157,7 +1175,6 @@ mod tests {
         let target = PhotoTarget {
             root: "/library".into(),
             file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
-            time: None,
         };
         let mut take = CapturedTake {
             id: "invalid".into(),
@@ -1172,13 +1189,13 @@ mod tests {
             comment.audio().as_str(),
             "2026/audio/c/com_20261112_153000_002.m4a"
         );
-        assert!(comment.photo_time().is_none());
-        assert_eq!(comment.logical_year(), "2008");
+
+        assert_eq!(comment.photo_year(), "2008");
         let trace = store.0.lock().unwrap();
         assert_eq!(trace[0], "validate");
-        assert_eq!(trace[1], "date");
-        assert_eq!(trace.len(), 7);
-        assert!(trace[6].starts_with("copy:"));
+        assert_eq!(trace[1], "com_20261112_153000.m4a");
+        assert_eq!(trace.len(), 5);
+        assert!(trace[4].starts_with("copy:"));
     }
     struct BlockingStore {
         entered: mpsc::SyncSender<()>,
@@ -1189,9 +1206,7 @@ mod tests {
         fn validate(&self, _: &PhotoTarget, _: &CapturedTake) -> Result<(), String> {
             Ok(())
         }
-        fn photo_time(&self, _: &PhotoTarget) -> Result<CaptureTime, String> {
-            Err("unknown".into())
-        }
+
         fn exists(&self, _: &Path) -> Result<bool, String> {
             Ok(false)
         }
@@ -1223,7 +1238,6 @@ mod tests {
             .open_photo(PhotoTarget {
                 root: "/library".into(),
                 file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
-                time: None,
             })
             .unwrap();
         wait(&mut session);
@@ -1271,7 +1285,6 @@ mod tests {
             .open_photo(PhotoTarget {
                 root: "/library".into(),
                 file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
-                time: None,
             })
             .unwrap();
         wait(&mut session);
@@ -1315,7 +1328,6 @@ mod tests {
             .open_photo(PhotoTarget {
                 root: "/library".into(),
                 file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
-                time: None,
             })
             .unwrap();
         wait(&mut session);
@@ -1355,7 +1367,6 @@ mod tests {
             .open_photo(PhotoTarget {
                 root: "/library".into(),
                 file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
-                time: None,
             })
             .unwrap();
         wait(&mut session);

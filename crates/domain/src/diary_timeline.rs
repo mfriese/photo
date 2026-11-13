@@ -14,7 +14,7 @@ pub struct DiaryClip {
     provisional_weight: Option<f64>,
     captured: Option<CaptureTime>,
     duration: Option<f64>,
-    logical_locked: bool,
+    recording_locked: bool,
 }
 impl DiaryClip {
     /// Equal provisional slots until actual durations are available; no I/O required.
@@ -34,20 +34,20 @@ impl DiaryClip {
             provisional_weight: None,
             captured,
             duration: None,
-            logical_locked: false,
+            recording_locked: false,
         }
     }
     pub fn from_media(media: &crate::Media) -> Self {
         let mut clip = Self::from_filename(media.path().into());
-        if media.has_audio_placement() {
-            clip.captured = media.logical_time().cloned();
-            clip.logical_locked = true;
+        if media.has_recording_time() {
+            clip.captured = media.recording_time().cloned();
+            clip.recording_locked = true;
         }
         clip
     }
-    pub fn with_logical_time(mut self, time: Option<CaptureTime>) -> Self {
+    pub fn with_recording_time(mut self, time: Option<CaptureTime>) -> Self {
         self.captured = time;
-        self.logical_locked = true;
+        self.recording_locked = true;
         self
     }
     pub fn path(&self) -> &Path {
@@ -74,6 +74,7 @@ pub struct DiaryTimeline {
     year: String,
     kind: crate::diary::AudioKind,
     month: Option<String>,
+    photo: Option<String>,
     clips: Vec<DiaryClip>,
 }
 impl DiaryTimeline {
@@ -91,6 +92,7 @@ impl DiaryTimeline {
         let mut timeline = Self {
             year,
             month: None,
+            photo: None,
             clips,
             kind: crate::diary::AudioKind::All,
         };
@@ -120,6 +122,18 @@ impl DiaryTimeline {
         }
         self.month = month;
         Ok(self)
+    }
+    pub fn with_photo(mut self, photo: Option<String>) -> Result<Self, String> {
+        if let Some(photo) = &photo {
+            crate::comments::Comment::metadata_path(&crate::tags::LibraryFile::new(
+                photo.clone(),
+            )?)?;
+        }
+        self.photo = photo;
+        Ok(self)
+    }
+    pub fn photo_reference(&self) -> Option<&str> {
+        self.photo.as_deref()
     }
     pub fn month(&self) -> Option<&str> {
         self.month.as_deref()
@@ -167,7 +181,7 @@ impl DiaryTimeline {
             .iter_mut()
             .find(|c| c.path == recording.path())
             .ok_or("Aufnahme gehört nicht zum Jahresverlauf")?;
-        if !clip.logical_locked {
+        if !clip.recording_locked {
             clip.captured = Some(
                 clip.path
                     .file_stem()
@@ -313,26 +327,34 @@ mod tests {
 mod comment_tests {
     use super::*;
     #[test]
-    fn comment_keeps_photo_time_when_duration_and_recording_metadata_arrive() {
-        let comment = PathBuf::from("2023/audio/comment_20230101_120000.wav");
-        let diary = PathBuf::from("2023/audio/aud_20230102_120000.wav");
-        let mut timeline = DiaryTimeline::new(
-            "2023".into(),
-            vec![
-                DiaryClip::from_filename(diary),
-                DiaryClip::from_filename(comment.clone()),
-            ],
+    fn comment_keeps_actual_recording_time_and_duration_refines_without_photo_remapping() {
+        let comment = crate::comments::Comment::new(
+            "12345678-1234-1234-1234-123456789abc".into(),
+            crate::tags::LibraryFile::new("2026/audio/c/com_20261113_120000.m4a".into()).unwrap(),
+            crate::tags::LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
         )
         .unwrap();
-        let recorded = CaptureTime::parse("2026:11:10 18:00:00", "actual recording").unwrap();
+        let media =
+            crate::Media::from_audio_asset(comment.audio().as_str().into(), "2026/audio/c".into())
+                .unwrap()
+                .with_comment_recording(Some(&comment));
+        let mut timeline =
+            DiaryTimeline::new("2026".into(), vec![DiaryClip::from_media(&media)]).unwrap();
         timeline
-            .refine(Recording::new(comment.clone(), recorded, 15.).unwrap())
+            .refine(
+                Recording::new(
+                    media.path().into(),
+                    CaptureTime::parse("2027:01:01 00:00:00", "metadata").unwrap(),
+                    15.,
+                )
+                .unwrap(),
+            )
             .unwrap();
-        assert_eq!(timeline.clips()[0].path(), comment);
         assert_eq!(
             timeline.clips()[0].captured().unwrap().stamp(),
-            "20230101_120000"
+            "20261113_120000"
         );
         assert_eq!(timeline.clips()[0].duration(), Some(15.));
+        assert_eq!(media.group(), "2026/audio/c");
     }
 }

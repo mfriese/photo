@@ -416,15 +416,7 @@ impl NativeAudioPlayer {
         {
             let session =
                 projection::NativeLayout::new(timeline, &VerificationProgress::default())?.open(
-                    &format!(
-                        "{} · {}{}",
-                        crate::audio_labels::kind_label(timeline.kind()),
-                        timeline.year(),
-                        timeline
-                            .month()
-                            .map(|month| format!("/{month}"))
-                            .unwrap_or_default()
-                    ),
+                    &crate::audio_labels::timeline_label(timeline),
                     selected,
                     show_window,
                 )?;

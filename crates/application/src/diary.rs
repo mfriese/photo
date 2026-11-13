@@ -159,6 +159,7 @@ impl DiarySession {
             timeline.year() == scope.year()
                 && timeline.kind() == scope.kind()
                 && timeline.month() == scope.month()
+                && timeline.photo_reference() == scope.photo_reference()
         })
     }
     pub fn preparing_for_view(&self, group: &str) -> bool {
@@ -170,6 +171,7 @@ impl DiarySession {
                 requested.year() == scope.year()
                     && requested.kind() == scope.kind()
                     && requested.month() == scope.month()
+                    && requested.photo_reference() == scope.photo_reference()
             });
         }
         self.pending.is_some()
@@ -182,6 +184,7 @@ impl DiarySession {
                     requested.year() == scope.year()
                         && requested.kind() == scope.kind()
                         && requested.month() == scope.month()
+                        && requested.photo_reference() == scope.photo_reference()
                 })
     }
     /// Latest explicit Play wins while the previous bounded worker is cancelling.
@@ -304,8 +307,8 @@ impl DiarySession {
             .collect();
         let placements: std::collections::HashMap<_, _> = items
             .iter()
-            .filter(|m| m.has_audio_placement())
-            .map(|m| (m.path().to_owned(), m.logical_time().cloned()))
+            .filter(|m| m.has_recording_time())
+            .map(|m| (m.path().to_owned(), m.recording_time().cloned()))
             .collect();
         let selected = selected.path().to_owned();
         if !paths.contains(&selected) {
@@ -314,6 +317,7 @@ impl DiarySession {
         self.requested_group = Some(scope.group());
         let kind = scope.kind();
         let month = scope.month().map(str::to_owned);
+        let photo_reference = scope.photo_reference().map(str::to_owned);
         let photos = items.iter().filter(|m| m.is_photo()).cloned().collect();
         self.timeline = None;
         self.warnings.clear();
@@ -344,12 +348,16 @@ impl DiarySession {
                     }
                     let mut clip = DiaryClip::from_filename(path.clone());
                     if let Some(time) = placements.get(path) {
-                        clip = clip.with_logical_time(time.clone());
+                        clip = clip.with_recording_time(time.clone());
                     }
                     clips.push(clip);
                 }
-                DiaryTimeline::new(year, clips)
-                    .and_then(|timeline| timeline.with_kind(kind).with_month(month))
+                DiaryTimeline::new(year, clips).and_then(|timeline| {
+                    timeline
+                        .with_kind(kind)
+                        .with_month(month)?
+                        .with_photo(photo_reference)
+                })
             })();
             let Ok(timeline) = draft else {
                 let _ = sender.send(Event::Draft(Err(draft.unwrap_err())));
@@ -594,14 +602,14 @@ impl DiaryCatalog {
         self.dates.clear();
         let placements: std::collections::HashMap<_, _> = items
             .iter()
-            .filter(|m| m.has_audio_placement())
-            .map(|m| (m.path(), m.logical_time()))
+            .filter(|m| m.has_recording_time())
+            .map(|m| (m.path(), m.recording_time()))
             .collect();
         let mut missing = Vec::new();
         for path in paths {
             if let Some(time) = placements.get(path.as_path()) {
                 self.dates
-                    .insert(path, time.cloned().ok_or("Fotodatum unbekannt".into()));
+                    .insert(path, time.cloned().ok_or("Aufnahmedatum unbekannt".into()));
                 continue;
             }
             if let Some(date) = path
@@ -1068,17 +1076,59 @@ mod tests {
                 .ok_or("invalid test name".into())
         }
     }
-    fn mixed_phototime_items() -> Vec<Media> {
-        use crate::domain::{
-            comments::{Comment, RecordedAt},
-            tags::LibraryFile,
-        };
+    #[test]
+    fn photo_comment_playback_keeps_multiple_recording_years_outside_tree_scopes() {
+        let items: Vec<_> = [2025, 2026]
+            .into_iter()
+            .map(|year| {
+                let c = crate::domain::comments::Comment::new(
+                    format!("12345678-1234-1234-1234-{year:012}"),
+                    crate::domain::tags::LibraryFile::new(format!(
+                        "{year}/audio/c/com_{year}1113_120000.m4a"
+                    ))
+                    .unwrap(),
+                    crate::domain::tags::LibraryFile::new("2008/09/img_20080916_035811.jpg".into())
+                        .unwrap(),
+                )
+                .unwrap();
+                Media::from_audio_asset(
+                    Path::new("/library").join(c.audio().as_str()),
+                    format!("{year}/audio/c"),
+                )
+                .unwrap()
+                .with_comment_recording(Some(&c))
+            })
+            .collect();
+        let group = "photo/2008/09/img_20080916_035811.jpg";
+        let mut draft = GalleryAudio::default();
+        draft.ensure(&items, Path::new("/library"), group);
+        assert_eq!(draft.timeline().unwrap().clips().len(), 2);
+        let player = Player::default();
+        player.started.store(true, Ordering::Relaxed);
+        let mut session = DiarySession::default();
+        session
+            .request_embedded(&items, &items[0], Arc::new(NamedSource), group)
+            .unwrap();
+        until(&mut session, &player, |s, _| !s.is_loading());
+        let timeline = session.timeline_for_view(group).unwrap();
+        assert_eq!(
+            timeline
+                .clips()
+                .iter()
+                .map(|c| c.captured().unwrap().year())
+                .collect::<Vec<_>>(),
+            vec!["2025", "2026"]
+        );
+        assert!(draft.accepts_active(timeline));
+        assert!(session.timeline_for_view("2008/audio/comments").is_none());
+        assert!(session.timeline_for_view("2025/audio/comments").is_none());
+    }
+    fn mixed_recording_time_items() -> Vec<Media> {
+        use crate::domain::{comments::Comment, tags::LibraryFile};
         let comment = Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
-            LibraryFile::new("2026/audio/c/com_20261113_140000.m4a".into()).unwrap(),
-            LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
-            RecordedAt::parse("2026-11-13T14:00:00+01:00").unwrap(),
-            Some(CaptureTime::parse("2008:09:16 03:58:11", "photo").unwrap()),
+            LibraryFile::new("2008/audio/c/com_20080916_035811.m4a".into()).unwrap(),
+            LibraryFile::new("1999/09/img_19990916_035811.jpg".into()).unwrap(),
         )
         .unwrap();
         vec![
@@ -1089,10 +1139,10 @@ mod tests {
             .unwrap(),
             Media::from_audio_asset(
                 Path::new("/library").join(comment.audio().as_str()),
-                "2026/audio/c".into(),
+                "2008/audio/c".into(),
             )
             .unwrap()
-            .place_comment(Some(&comment)),
+            .with_comment_recording(Some(&comment)),
             Media::from_library_path(
                 "/library/2008/audio/d/aud_20080916_035800.wav".into(),
                 "2008/audio/d".into(),
@@ -1101,8 +1151,8 @@ mod tests {
         ]
     }
     #[test]
-    fn tree_views_mix_by_photo_time_and_only_category_children_filter() {
-        let items = mixed_phototime_items();
+    fn tree_views_mix_by_recording_time_and_only_category_children_filter() {
+        let items = mixed_recording_time_items();
         let player = Player::default();
         player.started.store(true, Ordering::Relaxed);
         for (group, count, kind) in [
@@ -1168,7 +1218,7 @@ mod tests {
     }
     #[test]
     fn latest_explicit_play_for_a_new_tree_scope_replaces_pending_preparation() {
-        let items = mixed_phototime_items();
+        let items = mixed_recording_time_items();
         let player = Player::default();
         let mut session = DiarySession::default();
         session
@@ -1202,8 +1252,8 @@ mod tests {
         assert!(session.timeline_for_view("2008/audio/diary").is_none());
     }
     #[test]
-    fn month_window_contains_only_its_month_using_photo_dates_for_comments() {
-        let mut items = mixed_phototime_items();
+    fn month_window_contains_only_its_month_using_recording_dates_for_comments() {
+        let mut items = mixed_recording_time_items();
         items.push(
             Media::from_library_path(
                 "/library/2008/audio/d/aud_20081001_120000.wav".into(),
@@ -1306,8 +1356,8 @@ impl GalleryAudio {
                 self.members.insert(
                     media.path().to_owned(),
                     (
-                        media.has_audio_placement(),
-                        media.logical_time().map(|date| date.stamp().to_owned()),
+                        media.has_recording_time(),
+                        media.recording_time().map(|date| date.stamp().to_owned()),
                     ),
                 );
                 DiaryClip::from_media(media)
@@ -1317,7 +1367,8 @@ impl GalleryAudio {
             .and_then(|timeline| {
                 timeline
                     .with_kind(scope.kind())
-                    .with_month(scope.month().map(str::to_owned))
+                    .with_month(scope.month().map(str::to_owned))?
+                    .with_photo(scope.photo_reference().map(str::to_owned))
             })
             .ok();
     }
@@ -1331,6 +1382,7 @@ impl GalleryAudio {
             draft.year() == active.year()
                 && draft.kind() == active.kind()
                 && draft.month() == active.month()
+                && draft.photo_reference() == active.photo_reference()
         }) && self.members.len() == active.clips().len()
             && active.clips().iter().all(|clip| {
                 self.members.get(clip.path()).is_some_and(|(locked, date)| {

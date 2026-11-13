@@ -14,6 +14,7 @@ pub(super) struct AudioHeader {
 struct Actions {
     start: bool,
     window: bool,
+    record: bool,
     control: Option<AudioControl>,
 }
 fn controls(
@@ -36,6 +37,7 @@ fn controls(
             can_start,
             can_window: state.active || can_start,
             size: egui::vec2(28., 22.),
+            record: None,
         },
     )
 }
@@ -44,6 +46,7 @@ struct ControlStyle {
     can_start: bool,
     can_window: bool,
     size: egui::Vec2,
+    record: Option<bool>,
 }
 fn controls_sized(
     ui: &mut egui::Ui,
@@ -58,189 +61,207 @@ fn controls_sized(
         can_start,
         can_window,
         size: button_size,
+        record,
     } = style;
     let mut actions = Actions::default();
     let width = ui.available_width();
-    ui.horizontal(|ui| {
-        ui.set_height(button_size.y.max(26.));
-        ui.spacing_mut().item_spacing.x = 6.;
-        let caption = if state.active && state.playing {
-            "⏸"
-        } else {
-            "▶"
-        };
-        if theme::transport_button(
-            ui,
-            !preparing && !state.failed && (state.active || can_start),
-            button_size,
-            caption,
-        )
-        .on_hover_text(if state.playing {
-            "Wiedergabe pausieren"
-        } else {
-            "Wiedergabe starten"
-        })
-        .clicked()
-        {
-            if state.active && !preparing && timeline.is_some() {
-                actions.control = Some(AudioControl::Toggle);
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, button_size.y.max(26.)),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 6.;
+            let caption = if state.active && state.playing {
+                "⏸"
             } else {
-                actions.start = true;
-            }
-        }
-        let bar_width = (width - button_size.x * 2. - 12.).max(1.);
-        let (rect, response) = ui.allocate_exact_size(
-            egui::vec2(bar_width, button_size.y),
-            egui::Sense::click_and_drag(),
-        );
-        let track = rect.shrink2(egui::vec2(0., 4.));
-        ui.painter().rect_filled(
-            track,
-            2.,
-            if state.active || can_start {
-                theme::RAISED
+                "▶"
+            };
+            if theme::transport_button(
+                ui,
+                !preparing && !state.failed && (state.active || can_start),
+                button_size,
+                caption,
+            )
+            .on_hover_text(if state.playing {
+                "Wiedergabe pausieren"
             } else {
-                theme::DISABLED_BG
-            },
-        );
-        let mut hover = None;
-        if let Some(timeline) = timeline.filter(|_| state.active || can_start) {
-            let total: f64 = timeline.clips().iter().map(|c| c.weight()).sum();
-            let mut offset = 0.;
-            for (index, clip) in timeline.clips().iter().enumerate() {
-                let left = track.left() + track.width() * (offset / total) as f32;
-                offset += clip.weight();
-                let right = track.left() + track.width() * (offset / total) as f32;
-                let color = if progress.errors.contains_key(clip.path()) {
-                    theme::AUDIO_ERROR
-                } else if !clip.is_verified() {
-                    theme::AUDIO_PENDING
-                } else if index % 2 == 1 {
-                    theme::AUDIO_ODD
-                } else {
-                    theme::AUDIO_EVEN
-                };
-                ui.painter().rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(left, track.top()),
-                        egui::pos2(right, track.bottom()),
-                    ),
-                    0.,
-                    color,
-                );
-                if right - left > 3. {
-                    ui.painter().line_segment(
-                        [
-                            egui::pos2(left, track.top()),
-                            egui::pos2(left, track.bottom()),
-                        ],
-                        egui::Stroke::new(1_f32, theme::TEXT),
-                    );
-                }
-                if response
-                    .hover_pos()
-                    .is_some_and(|p| p.x >= left && p.x <= right)
-                {
-                    hover = Some(format!(
-                        "{} · {}\n{}",
-                        clip.captured()
-                            .map(|d| format!("{} {}", d.date_label(), d.time_label()))
-                            .unwrap_or_else(|| "Datum wird geprüft".into()),
-                        if clip.is_verified() {
-                            "geprüft"
-                        } else if progress.errors.contains_key(clip.path()) {
-                            "Prüfung fehlgeschlagen"
-                        } else {
-                            "vorläufig"
-                        },
-                        clip.path().display()
-                    ));
-                }
-            }
-        }
-        if state.active && !preparing && timeline.is_some() {
-            if response.dragged()
-                && let Some(pos) = response.interact_pointer_pos()
+                "Wiedergabe starten"
+            })
+            .clicked()
             {
-                *drag = Some(((pos.x - track.left()) / track.width()).clamp(0., 1.) as f64);
-            }
-            if response.clicked() || response.drag_stopped() {
-                let fraction = response
-                    .interact_pointer_pos()
-                    .map(|p| ((p.x - track.left()) / track.width()).clamp(0., 1.) as f64)
-                    .or(*drag);
-                if let Some(fraction) = fraction {
-                    actions.control = Some(AudioControl::Seek(fraction));
+                if state.active && !preparing && timeline.is_some() {
+                    actions.control = Some(AudioControl::Toggle);
+                } else {
+                    actions.start = true;
                 }
+            }
+            if let Some(enabled) = record {
+                actions.record = super::icons::button(
+                    ui,
+                    super::icons::Icon::Record,
+                    enabled,
+                    "Audiokommentar zu diesem Foto aufnehmen",
+                )
+                .clicked();
+            }
+            let button_count = if record.is_some() { 3. } else { 2. };
+            let bar_width = (width - button_size.x * button_count - 6. * button_count).max(1.);
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(bar_width, button_size.y),
+                egui::Sense::click_and_drag(),
+            );
+            let track = rect.shrink2(egui::vec2(0., 4.));
+            ui.painter().rect_filled(
+                track,
+                2.,
+                if state.active || can_start {
+                    theme::RAISED
+                } else {
+                    theme::DISABLED_BG
+                },
+            );
+            let mut hover = None;
+            if let Some(timeline) = timeline.filter(|_| state.active || can_start) {
+                let total: f64 = timeline.clips().iter().map(|c| c.weight()).sum();
+                let mut offset = 0.;
+                for (index, clip) in timeline.clips().iter().enumerate() {
+                    let left = track.left() + track.width() * (offset / total) as f32;
+                    offset += clip.weight();
+                    let right = track.left() + track.width() * (offset / total) as f32;
+                    let color = if progress.errors.contains_key(clip.path()) {
+                        theme::AUDIO_ERROR
+                    } else if !clip.is_verified() {
+                        theme::AUDIO_PENDING
+                    } else if index % 2 == 1 {
+                        theme::AUDIO_ODD
+                    } else {
+                        theme::AUDIO_EVEN
+                    };
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_max(
+                            egui::pos2(left, track.top()),
+                            egui::pos2(right, track.bottom()),
+                        ),
+                        0.,
+                        color,
+                    );
+                    if right - left > 3. {
+                        ui.painter().line_segment(
+                            [
+                                egui::pos2(left, track.top()),
+                                egui::pos2(left, track.bottom()),
+                            ],
+                            egui::Stroke::new(1_f32, theme::TEXT),
+                        );
+                    }
+                    if response
+                        .hover_pos()
+                        .is_some_and(|p| p.x >= left && p.x <= right)
+                    {
+                        hover = Some(format!(
+                            "{} · {}\n{}",
+                            clip.captured()
+                                .map(|d| format!("{} {}", d.date_label(), d.time_label()))
+                                .unwrap_or_else(|| "Datum wird geprüft".into()),
+                            if clip.is_verified() {
+                                "geprüft"
+                            } else if progress.errors.contains_key(clip.path()) {
+                                "Prüfung fehlgeschlagen"
+                            } else {
+                                "vorläufig"
+                            },
+                            clip.path().display()
+                        ));
+                    }
+                }
+            }
+            if state.active && !preparing && timeline.is_some() {
+                if response.dragged()
+                    && let Some(pos) = response.interact_pointer_pos()
+                {
+                    *drag = Some(((pos.x - track.left()) / track.width()).clamp(0., 1.) as f64);
+                }
+                if response.clicked() || response.drag_stopped() {
+                    let fraction = response
+                        .interact_pointer_pos()
+                        .map(|p| ((p.x - track.left()) / track.width()).clamp(0., 1.) as f64)
+                        .or(*drag);
+                    if let Some(fraction) = fraction {
+                        actions.control = Some(AudioControl::Seek(fraction));
+                    }
+                    *drag = None;
+                }
+                let fraction = drag.unwrap_or(state.fraction).clamp(0., 1.);
+                let x = track.left() + track.width() * fraction as f32;
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(x, rect.top() + 2.),
+                        egui::pos2(x, rect.bottom() - 2.),
+                    ],
+                    egui::Stroke::new(2_f32, theme::TEXT),
+                );
+                ui.painter()
+                    .circle_filled(egui::pos2(x, rect.top() + 3.), 3., theme::TEXT);
+            } else {
                 *drag = None;
             }
-            let fraction = drag.unwrap_or(state.fraction).clamp(0., 1.);
-            let x = track.left() + track.width() * fraction as f32;
+            let date = if state.failed {
+                "Audiofehler · Playerfenster öffnen".into()
+            } else {
+                state
+                    .current_date
+                    .as_ref()
+                    .map(|d| format!("{} {}", d.date_label(), d.time_label()))
+                    .unwrap_or_else(|| {
+                        timeline
+                            .map(|t| {
+                                format!(
+                                    "{} {}",
+                                    crate::audio_labels::kind_label(t.kind()),
+                                    t.year()
+                                )
+                            })
+                            .unwrap_or_else(|| "Keine Aufnahmen".into())
+                    })
+            };
+            let help = format!(
+                "{date}\n{}\nGeprüft: {} / {} · {} Fehler",
+                hover.unwrap_or_else(|| {
+                    "Jahresleiste · Abschnittsbreiten proportional zur Dauer, grau noch vorläufig"
+                        .into()
+                }),
+                progress.checked,
+                progress.total,
+                progress.errors.len()
+            );
+            response.on_hover_text(help);
+            let enabled = !preparing && can_window;
+            let open = theme::transport_button(ui, enabled, button_size, "");
+            let icon = egui::Rect::from_center_size(open.rect.center(), egui::vec2(13., 11.));
+            ui.painter().rect_stroke(
+                icon,
+                1.,
+                egui::Stroke::new(1_f32, theme::transport_symbol(enabled, false)),
+                egui::StrokeKind::Inside,
+            );
             ui.painter().line_segment(
                 [
-                    egui::pos2(x, rect.top() + 2.),
-                    egui::pos2(x, rect.bottom() - 2.),
+                    egui::pos2(icon.left(), icon.top() + 3.),
+                    egui::pos2(icon.right(), icon.top() + 3.),
                 ],
-                egui::Stroke::new(2_f32, theme::TEXT),
+                egui::Stroke::new(1_f32, theme::transport_symbol(enabled, false)),
             );
-            ui.painter()
-                .circle_filled(egui::pos2(x, rect.top() + 3.), 3., theme::TEXT);
-        } else {
-            *drag = None;
-        }
-        let date = if state.failed {
-            "Audiofehler · Playerfenster öffnen".into()
-        } else {
-            state
-                .current_date
-                .as_ref()
-                .map(|d| format!("{} {}", d.date_label(), d.time_label()))
-                .unwrap_or_else(|| {
-                    timeline
-                        .map(|t| {
-                            format!("{} {}", crate::audio_labels::kind_label(t.kind()), t.year())
-                        })
-                        .unwrap_or_else(|| "Keine Aufnahmen".into())
-                })
-        };
-        let help = format!(
-            "{date}\n{}\nGeprüft: {} / {} · {} Fehler",
-            hover.unwrap_or_else(|| {
-                "Jahresleiste · Abschnittsbreiten proportional zur Dauer, grau noch vorläufig"
-                    .into()
-            }),
-            progress.checked,
-            progress.total,
-            progress.errors.len()
-        );
-        response.on_hover_text(help);
-        let enabled = !preparing && can_window;
-        let open = theme::transport_button(ui, enabled, button_size, "");
-        let icon = egui::Rect::from_center_size(open.rect.center(), egui::vec2(13., 11.));
-        ui.painter().rect_stroke(
-            icon,
-            1.,
-            egui::Stroke::new(1_f32, theme::transport_symbol(enabled, false)),
-            egui::StrokeKind::Inside,
-        );
-        ui.painter().line_segment(
-            [
-                egui::pos2(icon.left(), icon.top() + 3.),
-                egui::pos2(icon.right(), icon.top() + 3.),
-            ],
-            egui::Stroke::new(1_f32, theme::transport_symbol(enabled, false)),
-        );
-        open.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                open.enabled(),
-                "Player für diese Auswahl öffnen",
-            )
-        });
-        actions.window = open
-            .on_hover_text("Player für diese Auswahl öffnen")
-            .clicked();
-    });
+            open.widget_info(|| {
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Button,
+                    open.enabled(),
+                    "Player für diese Auswahl öffnen",
+                )
+            });
+            actions.window = open
+                .on_hover_text("Player für diese Auswahl öffnen")
+                .clicked();
+        },
+    );
     actions
 }
 impl super::Suite {
@@ -313,21 +334,23 @@ impl super::Suite {
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
-    pub(super) fn compact_photo_audio(&mut self, ui: &mut egui::Ui, photo: &std::path::Path) {
+    pub(super) fn compact_photo_audio(
+        &mut self,
+        ui: &mut egui::Ui,
+        photo: &std::path::Path,
+        can_record: bool,
+    ) -> bool {
         let audio = self.comments.audio_for_photo(photo);
         if self.viewer_audio.photo.as_deref() != Some(photo) {
-            self.viewer_audio = AudioHeader {
-                photo: Some(photo.to_owned()),
-                ..Default::default()
-            };
+            self.viewer_audio.photo = Some(photo.to_owned());
+            self.viewer_audio.draft = Default::default();
+            self.viewer_audio.drag = None;
+            // Preserve the year cache when browsing photos in the same year.
         }
         if let Some(root) = &self.root {
             self.viewer_audio
                 .draft
                 .ensure(&audio.items, root, &audio.group);
-            self.viewer_audio
-                .year_draft
-                .ensure(&self.items, root, &audio.year);
         }
         let live = self.services.audio_player.transport();
         let active = self
@@ -340,6 +363,16 @@ impl super::Suite {
         } else {
             AudioTransportSnapshot::default()
         };
+        let year = state
+            .current_date
+            .as_ref()
+            .map(|date| date.year().to_owned())
+            .unwrap_or_else(|| audio.year.clone());
+        if let Some(root) = &self.root {
+            self.viewer_audio
+                .year_draft
+                .ensure(&self.items, root, &year);
+        }
         let preparing = self.diary.preparing_for_view(&audio.group);
         let timeline = if matches {
             active
@@ -365,6 +398,7 @@ impl super::Suite {
                 can_start: self.viewer_audio.draft.selected().is_some() && !preparing,
                 can_window: self.viewer_audio.year_draft.selected().is_some(),
                 size: egui::vec2(34., 34.),
+                record: Some(can_record),
             },
         );
         if let Some(command) = actions.control
@@ -385,32 +419,44 @@ impl super::Suite {
             self.status = error;
         }
         if actions.window {
-            let selected = self
-                .viewer_audio
-                .draft
-                .selected()
-                .and_then(|path| audio.items.iter().find(|m| m.path() == path))
-                .or_else(|| {
-                    self.viewer_audio
-                        .year_draft
-                        .selected()
-                        .and_then(|path| self.items.iter().find(|m| m.path() == path))
-                });
-            if let Some(selected) = selected
-                && let Err(error) = self.diary.request_window(
-                    &self.items,
-                    selected,
-                    self.services.audio_source.clone(),
-                    &audio.year,
-                )
-            {
-                self.status = error;
+            let year_is_live = self.services.audio_player.transport().active
+                && self
+                    .diary
+                    .timeline_for_view(&year)
+                    .is_some_and(|timeline| self.viewer_audio.year_draft.accepts_active(timeline));
+            if year_is_live {
+                if let Err(error) = self.services.audio_player.control(AudioControl::ShowWindow) {
+                    self.status = error;
+                }
+            } else {
+                let selected = self
+                    .viewer_audio
+                    .draft
+                    .selected()
+                    .and_then(|path| audio.items.iter().find(|m| m.path() == path))
+                    .or_else(|| {
+                        self.viewer_audio
+                            .year_draft
+                            .selected()
+                            .and_then(|path| self.items.iter().find(|m| m.path() == path))
+                    });
+                if let Some(selected) = selected
+                    && let Err(error) = self.diary.request_window(
+                        &self.items,
+                        selected,
+                        self.services.audio_source.clone(),
+                        &year,
+                    )
+                {
+                    self.status = error;
+                }
             }
         }
         if state.active || self.diary.is_loading() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
+        actions.record
     }
     pub(super) fn start_audio_for_view(&mut self) {
         let Some(root) = &self.root else {

@@ -77,6 +77,8 @@ pub trait ImageDecoder: Send + Sync + 'static {
 }
 pub trait MediaOpener: Send + Sync + 'static {
     fn open(&self, path: &std::path::Path) -> Result<(), String>;
+    /// Select the media in the system file manager without opening its contents.
+    fn reveal(&self, path: &std::path::Path) -> Result<(), String>;
 }
 
 pub trait OrientationWriter: Send + Sync + 'static {

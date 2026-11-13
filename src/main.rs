@@ -82,11 +82,8 @@ fn main() -> eframe::Result {
         comment_media: std::sync::Arc::new(comments_fs::CommentFiles {
             audio: audio_source.clone(),
             copier: importer.clone(),
-            dates: importer.clone(),
         }),
         comments: std::sync::Arc::new(comments_fs::YamlComments {
-            dates: importer.clone(),
-            copier: importer.clone(),
             priority: priority.clone(),
         }),
         recorder: std::sync::Arc::new(comment_recorder::NativeCommentRecorder::new()),

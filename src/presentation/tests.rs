@@ -50,6 +50,9 @@ impl crate::ports::ImageDecoder for UnusedAdapters {
     }
 }
 impl crate::ports::MediaOpener for UnusedAdapters {
+    fn reveal(&self, _: &std::path::Path) -> Result<(), String> {
+        panic!("test must not reveal files")
+    }
     fn open(&self, _: &std::path::Path) -> Result<(), String> {
         panic!("layout must not open")
     }
@@ -162,7 +165,7 @@ impl photosuite_application::organization::CatalogRepository for UnusedAdapters 
         Ok(Vec::new())
     }
 }
-fn test_suite() -> Suite {
+pub(super) fn test_suite() -> Suite {
     let adapters = Arc::new(UnusedAdapters);
     Suite {
         comments: photosuite_application::comments::CommentSession::new(
@@ -1581,7 +1584,7 @@ impl photosuite_application::comments::CommentRecorder for UnusedAdapters {
     }
 }
 impl photosuite_application::comments::CommentRepository for UnusedAdapters {
-    fn write_sidecar(
+    fn write_photo_record(
         &self,
         _: &std::path::Path,
         _: &crate::domain::comments::Comment,
@@ -1635,9 +1638,6 @@ fn photo_recording_dialog_fits_narrow_and_wide_windows_without_microphone_access
                     "2008/09/img_20080916_035811.jpg".into(),
                 )
                 .unwrap(),
-                time: Some(
-                    crate::domain::CaptureTime::parse("2008:09:16 03:58:11", "Name").unwrap(),
-                ),
             })
             .unwrap();
         let ctx = egui::Context::default();
@@ -1709,12 +1709,7 @@ impl photosuite_application::comments::CommentMediaStore for UnusedAdapters {
     ) -> Result<(), String> {
         Err("unused".into())
     }
-    fn photo_time(
-        &self,
-        _: &photosuite_application::comments::PhotoTarget,
-    ) -> Result<crate::domain::CaptureTime, String> {
-        Err("unused".into())
-    }
+
     fn exists(&self, _: &std::path::Path) -> Result<bool, String> {
         Err("unused".into())
     }

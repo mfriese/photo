@@ -4,7 +4,7 @@ use eframe::egui;
 pub(super) enum Icon {
     Previous,
     Next,
-    External,
+    Reveal,
     Tag,
     Record,
     RotateLeft,
@@ -50,14 +50,20 @@ pub(super) fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, help: &str) -
             ));
             p.circle_stroke(point(-3., -3.), 1.5, stroke);
         }
-        Icon::External => {
-            p.line_segment([point(-1., -6.), point(-7., -6.)], stroke);
-            p.line_segment([point(-7., -6.), point(-7., 7.)], stroke);
-            p.line_segment([point(-7., 7.), point(6., 7.)], stroke);
-            p.line_segment([point(6., 7.), point(6., 1.)], stroke);
-            p.line_segment([point(-1., 1.), point(7., -7.)], stroke);
-            p.line_segment([point(1., -7.), point(7., -7.)], stroke);
-            p.line_segment([point(7., -7.), point(7., -1.)], stroke);
+        Icon::Reveal => {
+            p.add(egui::Shape::closed_line(
+                vec![
+                    point(-8., -5.),
+                    point(-3., -5.),
+                    point(-1., -2.),
+                    point(7., -2.),
+                    point(7., 7.),
+                    point(-8., 7.),
+                ],
+                stroke,
+            ));
+            p.circle_stroke(point(3., 0.), 4., stroke);
+            p.line_segment([point(6., 3.), point(9., 6.)], stroke);
         }
         Icon::RotateLeft | Icon::RotateRight | Icon::Reset | Icon::Reload => {
             let d = if matches!(icon, Icon::RotateLeft | Icon::Reset) {

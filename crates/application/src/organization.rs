@@ -399,7 +399,7 @@ mod tests {
     }
     #[test]
     fn comment_reconciliation_waits_for_tags_repairs_memberships_and_is_idempotent() {
-        use crate::domain::comments::{Comment, CommentCatalog, RecordedAt};
+        use crate::domain::comments::{Comment, CommentCatalog};
         let repository = Arc::new(Memory::default());
         let mut tags = TagCatalog::default();
         tags.create("comment").unwrap();
@@ -421,8 +421,6 @@ mod tests {
                         LibraryFile::new(format!("2026/audio/c/com_20261113_120000_{n:03}.m4a"))
                             .unwrap(),
                         photo.clone(),
-                        RecordedAt::parse("2026-11-13T12:00:00+01:00").unwrap(),
-                        None,
                     )
                     .unwrap(),
                 )

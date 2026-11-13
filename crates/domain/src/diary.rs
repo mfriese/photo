@@ -105,11 +105,26 @@ impl<'a> AudioScope<'a> {
 pub struct AudioViewScope<'a> {
     audio: AudioScope<'a>,
     month: Option<&'a str>,
+    photo: Option<&'a str>,
 }
 impl<'a> AudioViewScope<'a> {
     pub fn parse(group: &'a str) -> Option<Self> {
+        if let Some(photo) = group.strip_prefix("photo/") {
+            let file = crate::tags::LibraryFile::new(photo.into()).ok()?;
+            crate::comments::Comment::metadata_path(&file).ok()?;
+            let year = photo.split(std::path::MAIN_SEPARATOR).next()?;
+            return Some(Self {
+                audio: AudioScope::for_year(year, AudioKind::Comments)?,
+                month: None,
+                photo: Some(photo),
+            });
+        }
         if let Some(audio) = AudioScope::parse(group) {
-            return Some(Self { audio, month: None });
+            return Some(Self {
+                audio,
+                month: None,
+                photo: None,
+            });
         }
         let mut parts = group.split(std::path::MAIN_SEPARATOR);
         let year = parts.next()?;
@@ -125,6 +140,7 @@ impl<'a> AudioViewScope<'a> {
         Some(Self {
             audio: AudioScope::for_year(year, AudioKind::All)?,
             month,
+            photo: None,
         })
     }
     pub fn year(self) -> &'a str {
@@ -136,7 +152,13 @@ impl<'a> AudioViewScope<'a> {
     pub fn month(self) -> Option<&'a str> {
         self.month
     }
+    pub fn photo_reference(self) -> Option<&'a str> {
+        self.photo
+    }
     pub fn group(self) -> String {
+        if let Some(photo) = self.photo {
+            return format!("photo/{photo}");
+        }
         self.month
             .map(|month| {
                 Path::new(self.year())
@@ -147,6 +169,9 @@ impl<'a> AudioViewScope<'a> {
             .unwrap_or_else(|| self.audio.group())
     }
     pub fn includes(self, media: &crate::Media) -> bool {
+        if self.photo.is_some() {
+            return media.is_audio() && audio_kind(media) == Some(AudioKind::Comments);
+        }
         self.audio.includes(media)
             && self.month.is_none_or(|month| {
                 crate::capture_from_filename(media).is_some_and(|date| date.month() == month)
