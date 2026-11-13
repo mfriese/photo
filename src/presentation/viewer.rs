@@ -8,7 +8,7 @@ impl super::Suite {
         pending: &mut Vec<crate::commands::Command>,
     ) {
         if let Some(index) = self.selected {
-            if !self.comments.open
+            if !self.comments.is_open()
                 && !self.options_open
                 && !self.tag_view.open
                 && !self.bindings.visible
@@ -92,7 +92,7 @@ impl super::Suite {
                         );
                     }
                 });
-            if !self.comments.open && !self.tag_view.open {
+            if !self.comments.is_open() && !self.tag_view.open {
                 next |= ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
                 previous |= ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
             }

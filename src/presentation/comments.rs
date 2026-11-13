@@ -13,8 +13,8 @@ pub(super) struct CommentView {
 impl Suite {
     pub(super) fn poll_comments(&mut self, ctx: &egui::Context) {
         self.comments.poll();
-        if !self.comments.open && !self.comments.error.is_empty() {
-            self.status = format!("Audiokommentare: {}", self.comments.error);
+        if !self.comments.is_open() && !self.comments.error().is_empty() {
+            self.status = format!("Audiokommentare: {}", self.comments.error());
         }
 
         if self.comments.take_changed() {
@@ -30,16 +30,16 @@ impl Suite {
             self.audio_header.draft = Default::default();
             self.media_dates.clear();
         }
-        if self.comments.busy() || self.comments.open {
+        if self.comments.busy() || self.comments.is_open() {
             ctx.request_repaint_after(std::time::Duration::from_millis(33));
         }
         if ctx.input(|i| i.viewport().close_requested())
             && !self.comment_view.allow_quit
-            && (self.comments.has_unsaved() || self.comments.saving)
+            && (self.comments.has_unsaved() || self.comments.is_saving())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.comment_view.confirm_quit = true;
-            self.comments.open = true;
+            self.comments.show();
         }
     }
     pub(super) fn comment_dialog(&mut self, ctx: &egui::Context) {
@@ -63,7 +63,7 @@ impl Suite {
                 self.status = error;
             }
         }
-        if !self.comments.open {
+        if !self.comments.is_open() {
             return;
         }
         let mut close = false;
@@ -75,13 +75,13 @@ impl Suite {
             ui.horizontal(|ui| {
                 ui.heading("Audiokommentar");
                 close = ui
-                    .add_enabled(!self.comments.saving, egui::Button::new("Schließen"))
+                    .add_enabled(!self.comments.is_saving(), egui::Button::new("Schließen"))
                     .clicked();
             });
             egui::ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - 110.).max(180.))
                 .show(ui, |ui| {
-                    if let Some(target) = &self.comments.target {
+                    if let Some(target) = self.comments.target() {
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::Image::from_uri(super::preview_uri(
@@ -105,7 +105,7 @@ impl Suite {
                     }
                     ui.separator();
                     capture_controls(ui, &mut self.comments, self.services.audio_player.as_ref());
-                    if let Some(target) = &self.comments.target {
+                    if let Some(target) = self.comments.target() {
                         let comments = self.comments.for_photo(&target.file);
                         if !comments.is_empty() {
                             ui.separator();
@@ -119,7 +119,8 @@ impl Suite {
                                     ));
                                     if ui
                                         .add_enabled(
-                                            !self.comments.has_unsaved() && !self.comments.saving,
+                                            !self.comments.has_unsaved()
+                                                && !self.comments.is_saving(),
                                             egui::Button::new("Anhören"),
                                         )
                                         .clicked()
@@ -152,14 +153,14 @@ impl Suite {
                 ui.set_width(width);
                 ui.heading("Aufnahme noch nicht gespeichert");
                 ui.label("Aufnahme behalten und zurückkehren oder die ungespeicherte Aufnahme verwerfen?");
-                if self.comments.saving {
+                if self.comments.is_saving() {
                     ui.label("Speichern läuft. Bitte Abschluss abwarten.");
                 }
                 if ui.button("Zurück zur Aufnahme").clicked() {
                     self.comment_view.confirm_close = false;
                     self.comment_view.confirm_quit = false;
                 }
-                if ui.add_enabled(!self.comments.saving, egui::Button::new("Aufnahme verwerfen")).clicked() {
+                if ui.add_enabled(!self.comments.is_saving(), egui::Button::new("Aufnahme verwerfen")).clicked() {
                     self.comments.discard();
                     self.comment_view.confirm_close = false;
                     if self.comment_view.confirm_quit {
@@ -177,14 +178,15 @@ fn capture_controls(
     session: &mut photosuite_application::comments::CommentSession,
     player: &dyn photosuite_application::diary::AudioPlayer,
 ) {
-    let phase = session.snapshot.phase;
-    let idle = matches!(phase, Phase::Idle | Phase::Ready | Phase::Error) && !session.saving;
+    let phase = session.snapshot().phase;
+    let idle = matches!(phase, Phase::Idle | Phase::Ready | Phase::Error) && !session.is_saving();
+    let mut selected_device = session.device().to_owned();
     ui.add_enabled_ui(idle, |ui| {
         ui.label("Mikrofon");
         let selected = session
-            .devices
+            .devices()
             .iter()
-            .find(|d| d.id == session.device)
+            .find(|d| d.id == session.device())
             .map(|d| d.name.as_str())
             .unwrap_or("Systemstandard");
         egui::ComboBox::from_id_salt("comment_microphone")
@@ -192,15 +194,20 @@ fn capture_controls(
             .truncate()
             .selected_text(selected)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut session.device, String::new(), "Systemstandard");
-                for device in &session.devices {
-                    ui.selectable_value(&mut session.device, device.id.clone(), &device.name);
+                ui.selectable_value(&mut selected_device, String::new(), "Systemstandard");
+                for device in session.devices() {
+                    ui.selectable_value(&mut selected_device, device.id.clone(), &device.name);
                 }
             });
         if ui.small_button("Geräte aktualisieren").clicked() {
             session.refresh_devices();
         }
     });
+    if selected_device != session.device()
+        && let Err(error) = session.set_device(selected_device)
+    {
+        session.report_error(error);
+    }
     ui.add_space(6.);
     let status = match phase {
         Phase::Idle => "Bereit zur Aufnahme",
@@ -213,11 +220,11 @@ fn capture_controls(
     };
     ui.horizontal_wrapped(|ui| {
         ui.strong(status);
-        let seconds = session.snapshot.seconds as u64;
+        let seconds = session.snapshot().seconds as u64;
         ui.label(format!("{:02}:{:02}", seconds / 60, seconds % 60));
     });
-    waveform(ui, &session.snapshot.wave, session.snapshot.level);
-    ui.add(egui::ProgressBar::new(session.snapshot.level).desired_height(8.))
+    waveform(ui, &session.snapshot().wave, session.snapshot().level);
+    ui.add(egui::ProgressBar::new(session.snapshot().level).desired_height(8.))
         .on_hover_text("Mikrofonpegel; bei dauerhaft vollem Ausschlag Abstand vergrößern");
     ui.horizontal_wrapped(|ui| {
         let label = if phase == Phase::Ready {
@@ -226,11 +233,11 @@ fn capture_controls(
             "Aufnehmen"
         };
         if ui
-            .add_enabled(idle && session.loaded, egui::Button::new(label))
+            .add_enabled(session.can_start(), egui::Button::new(label))
             .clicked()
             && let Err(error) = session.start(player)
         {
-            session.error = error;
+            session.report_error(error);
         }
         if phase == Phase::Recording && ui.button("⏸ Pause").clicked() {
             session.command(Command::Pause);
@@ -244,40 +251,43 @@ fn capture_controls(
             session.command(Command::Finish);
         }
         if phase == Phase::Ready {
-            let label = if session.snapshot.playing {
+            let label = if session.snapshot().playing {
                 "⏸ Probehören"
             } else {
                 "▶ Probehören"
             };
             if ui
-                .add_enabled(!session.saving, egui::Button::new(label))
+                .add_enabled(!session.is_saving(), egui::Button::new(label))
                 .clicked()
             {
                 session.command(Command::Preview);
             }
             if ui
-                .add_enabled(!session.saving, egui::Button::new("Speichern"))
+                .add_enabled(!session.is_saving(), egui::Button::new("Speichern"))
                 .clicked()
                 && let Err(error) = session.save()
             {
-                session.error = error;
+                session.report_error(error);
             }
         }
     });
     if matches!(phase, Phase::Preparing | Phase::Finishing) || session.busy() {
         ui.spinner();
     }
-    if !session.snapshot.message.is_empty() {
-        ui.label(&session.snapshot.message);
+    if !session.snapshot().message.is_empty() {
+        ui.label(&session.snapshot().message);
     }
-    if !session.error.is_empty() {
-        ui.strong(&session.error);
+    if !session.error().is_empty() {
+        ui.strong(session.error());
     }
-    if !session.loaded && !session.is_loading() && ui.button("Zuordnungen erneut laden").clicked() {
+    if !session.is_loaded()
+        && !session.is_loading()
+        && ui.button("Zuordnungen erneut laden").clicked()
+    {
         session.reload();
     }
-    if !session.message.is_empty() {
-        ui.label(&session.message);
+    if !session.message().is_empty() {
+        ui.label(session.message());
     }
     if !session.has_unsaved() {
         ui.label("Mikrofonzugriff erst nach „Aufnehmen“. Speicherung als M4A/AAC; das Foto bleibt unverändert.");

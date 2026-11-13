@@ -69,9 +69,9 @@ impl Suite {
                 .map(|cwd| cwd.join(&path))
                 .unwrap_or(path)
         };
-        if self.comments.has_unsaved() || self.comments.saving {
+        if self.comments.has_unsaved() || self.comments.is_saving() {
             self.status = "Bitte die Audioaufnahme zuerst speichern oder verwerfen".into();
-            self.comments.open = true;
+            self.comments.show();
             return;
         }
         self.comments.load(path.clone());
@@ -353,7 +353,7 @@ impl eframe::App for Suite {
                     && !self.editor.is_saving()
                     && !self.options_open
                     && !self.import_panel.visible
-                    && !self.comments.open
+                    && !self.comments.is_open()
                     && !self.tag_view.open
                     && self.settings_ready(),
             )
@@ -479,6 +479,7 @@ pub fn create(
         comments: photosuite_application::comments::CommentSession::new(
             services.comments.clone(),
             services.recorder.clone(),
+            services.comment_media.clone(),
         ),
         comment_view: Default::default(),
         record_photo: None,

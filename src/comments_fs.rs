@@ -15,11 +15,12 @@ use std::{
 };
 const FILE: &str = "photosuite-comments.yaml";
 const MAX: u64 = 32 * 1024 * 1024;
-pub struct YamlComments {
+pub struct CommentFiles {
     pub audio: Arc<dyn AudioSource>,
     pub copier: Arc<dyn ImportAdapter>,
     pub dates: Arc<dyn MediaDateSource>,
 }
+pub struct YamlComments;
 fn directory(path: &Path) -> Result<(), String> {
     let m = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !m.is_dir() || m.file_type().is_symlink() {
@@ -139,7 +140,9 @@ impl CommentRepository for YamlComments {
         crate::metadata_fs::atomic_write_if_current(&root.join(FILE), &bytes, expected)?;
         Ok(bytes)
     }
-    fn publish(&self, target: &PhotoTarget, take: &CapturedTake) -> Result<Comment, String> {
+}
+impl CommentMediaStore for CommentFiles {
+    fn validate(&self, target: &PhotoTarget, take: &CapturedTake) -> Result<(), String> {
         directory(&target.root)?;
         let photo = target.root.join(target.file.as_str());
         let mut parent = photo.parent();
@@ -160,34 +163,19 @@ impl CommentRepository for YamlComments {
         if !probe.audio_only || !probe.duration.is_finite() || probe.duration <= 0. {
             return Err("Keine gültige Audioaufnahme".into());
         }
-        let recorded = RecordedAt::parse(&take.recorded_at)?;
-        let photo_time = target.time.clone().or_else(|| {
-            Media::from_path(photo, String::new()).and_then(|m| self.dates.captured_at(&m).ok())
-        });
-        for suffix in 0..10000 {
-            let path = recorded.target(&target.root, suffix);
-            if self.copier.exists(&path)? {
-                continue;
-            }
-            let relative = path
-                .strip_prefix(&target.root)
-                .map_err(|e| e.to_string())?
-                .to_str()
-                .ok_or("Ungültiger Audiopfad")?
-                .to_owned();
-            let comment = Comment::new(
-                take.id.clone(),
-                LibraryFile::new(relative)?,
-                target.file.clone(),
-                recorded.clone(),
-                photo_time.clone(),
-            )?;
-            // Existing import publication uses exclusive creation, byte verification and exFAT fallback.
-            self.copier
-                .copy_verified(&take.path, &path, &AtomicBool::new(false), &|_| {})?;
-            return Ok(comment);
-        }
-        Err("Zu viele gleichzeitige Aufnahmen mit demselben Zeitstempel".into())
+        Ok(())
+    }
+    fn photo_time(&self, target: &PhotoTarget) -> Result<CaptureTime, String> {
+        let photo = Media::from_path(target.root.join(target.file.as_str()), String::new())
+            .ok_or("Kommentarziel muss ein Foto sein")?;
+        self.dates.captured_at(&photo)
+    }
+    fn exists(&self, path: &Path) -> Result<bool, String> {
+        self.copier.exists(path)
+    }
+    fn copy_verified(&self, source: &Path, target: &Path) -> Result<(), String> {
+        self.copier
+            .copy_verified(source, target, &AtomicBool::new(false), &|_| {})
     }
 }
 
@@ -213,7 +201,7 @@ mod tests {
             Err("no metadata".into())
         }
     }
-    fn adapter() -> YamlComments {
+    fn adapter() -> CommentFiles {
         let audio = Arc::new(ValidAudio);
         let repository = Arc::new(crate::infrastructure::FileSystemRepository {
             priority: Default::default(),
@@ -224,7 +212,7 @@ mod tests {
             repository,
             tool: crate::exiftool::ExifTool::for_executable(Path::new("/tmp/test")),
         });
-        YamlComments {
+        CommentFiles {
             audio,
             copier,
             dates: Arc::new(NoDate),
@@ -252,10 +240,10 @@ mod tests {
         };
         let target = target(library.path());
         let adapter = adapter();
-        let first = adapter.publish(&target, &take).unwrap();
+        let first = publish_comment(&adapter, &target, &take).unwrap();
         let mut second = take.clone();
         second.id = "22345678-1234-1234-1234-123456789abc".into();
-        let second = adapter.publish(&target, &second).unwrap();
+        let second = publish_comment(&adapter, &target, &second).unwrap();
         assert!(second.audio().as_str().ends_with("_001.m4a"));
         assert_eq!(fs::read(&path).unwrap(), b"verified test payload");
         assert_eq!(
@@ -269,8 +257,8 @@ mod tests {
         let mut catalog = CommentCatalog::default();
         catalog.insert(first.clone()).unwrap();
         catalog.insert(second).unwrap();
-        let bytes = adapter.save(library.path(), &catalog, None).unwrap();
-        let loaded = adapter.load(library.path()).unwrap();
+        let bytes = YamlComments.save(library.path(), &catalog, None).unwrap();
+        let loaded = YamlComments.load(library.path()).unwrap();
         assert_eq!(loaded.catalog.entries(), catalog.entries());
         assert_eq!(loaded.revision, Some(bytes.clone()));
         let text = String::from_utf8(bytes.clone()).unwrap();
@@ -283,7 +271,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            adapter
+            YamlComments
                 .load(library.path())
                 .unwrap()
                 .catalog
@@ -293,11 +281,11 @@ mod tests {
         );
         fs::write(library.path().join(FILE), b"version: 2\ncomments: {}\n").unwrap();
         assert!(
-            adapter
+            YamlComments
                 .save(library.path(), &catalog, Some(&bytes))
                 .is_err()
         );
-        assert!(adapter.load(library.path()).is_err());
+        assert!(YamlComments.load(library.path()).is_err());
         assert!(library.path().join(first.audio().as_str()).is_file());
     }
     #[test]
@@ -309,9 +297,9 @@ mod tests {
             "version: 8\ncomments: {}\n",
         ] {
             fs::write(directory.path().join(FILE), bytes).unwrap();
-            assert!(adapter().load(directory.path()).is_err());
+            assert!(YamlComments.load(directory.path()).is_err());
             assert!(
-                adapter()
+                YamlComments
                     .save(directory.path(), &CommentCatalog::default(), None)
                     .is_err()
             );
@@ -329,7 +317,7 @@ mod tests {
         let external = tempfile::tempdir().unwrap();
         fs::write(external.path().join("file"), b"outside").unwrap();
         symlink(external.path().join("file"), root.path().join(FILE)).unwrap();
-        assert!(adapter().load(root.path()).is_err());
+        assert!(YamlComments.load(root.path()).is_err());
         assert_eq!(fs::read(external.path().join("file")).unwrap(), b"outside");
         fs::remove_file(root.path().join(FILE)).unwrap();
         symlink(external.path(), root.path().join("2008")).unwrap();
@@ -343,7 +331,7 @@ mod tests {
             path: external.path().join("file"),
             recorded_at: "2026-11-12T15:30:00+01:00".into(),
         };
-        assert!(adapter().publish(&target, &take).is_err());
+        assert!(publish_comment(&adapter(), &target, &take).is_err());
         assert!(!root.path().join("2026").exists());
     }
 }

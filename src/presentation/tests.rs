@@ -168,6 +168,7 @@ fn test_suite() -> Suite {
         comments: photosuite_application::comments::CommentSession::new(
             adapters.clone(),
             adapters.clone(),
+            adapters.clone(),
         ),
         comment_view: Default::default(),
         record_photo: None,
@@ -198,6 +199,7 @@ fn test_suite() -> Suite {
         options_open: false,
         services: crate::application::Services {
             comments: adapters.clone(),
+            comment_media: adapters.clone(),
             recorder: adapters.clone(),
             media_dates: adapters.clone(),
             organization: adapters.clone(),
@@ -1564,13 +1566,6 @@ impl photosuite_application::comments::CommentRepository for UnusedAdapters {
             revision: None,
         })
     }
-    fn publish(
-        &self,
-        _: &photosuite_application::comments::PhotoTarget,
-        _: &photosuite_application::comments::CapturedTake,
-    ) -> Result<crate::domain::comments::Comment, String> {
-        Err("unused".into())
-    }
     fn save(
         &self,
         _: &std::path::Path,
@@ -1645,6 +1640,28 @@ fn photo_recording_dialog_fits_narrow_and_wide_windows_without_microphone_access
         }
         assert!(found);
         assert!(!suite.comments.has_unsaved());
-        assert!(!suite.comments.snapshot.playing);
+        assert!(!suite.comments.snapshot().playing);
+    }
+}
+
+impl photosuite_application::comments::CommentMediaStore for UnusedAdapters {
+    fn validate(
+        &self,
+        _: &photosuite_application::comments::PhotoTarget,
+        _: &photosuite_application::comments::CapturedTake,
+    ) -> Result<(), String> {
+        Err("unused".into())
+    }
+    fn photo_time(
+        &self,
+        _: &photosuite_application::comments::PhotoTarget,
+    ) -> Result<crate::domain::CaptureTime, String> {
+        Err("unused".into())
+    }
+    fn exists(&self, _: &std::path::Path) -> Result<bool, String> {
+        Err("unused".into())
+    }
+    fn copy_verified(&self, _: &std::path::Path, _: &std::path::Path) -> Result<(), String> {
+        Err("unused".into())
     }
 }

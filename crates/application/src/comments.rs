@@ -69,7 +69,6 @@ pub struct StoredComments {
 }
 pub trait CommentRepository: Send + Sync + 'static {
     fn load(&self, root: &Path) -> Result<StoredComments, String>;
-    fn publish(&self, target: &PhotoTarget, take: &CapturedTake) -> Result<Comment, String>;
     fn save(
         &self,
         root: &Path,
@@ -77,6 +76,18 @@ pub trait CommentRepository: Send + Sync + 'static {
         expected: Option<&[u8]>,
     ) -> Result<Vec<u8>, String>;
 }
+/// Technical operations only. Naming, collision selection and Comment construction
+/// are application/domain decisions, never a filesystem adapter's workflow.
+pub trait CommentMediaStore: Send + Sync + 'static {
+    fn validate(&self, target: &PhotoTarget, take: &CapturedTake) -> Result<(), String>;
+    fn photo_time(&self, target: &PhotoTarget) -> Result<CaptureTime, String>;
+    fn exists(&self, path: &Path) -> Result<bool, String>;
+    /// Exclusive, byte-verified publication; must never overwrite an existing file.
+    fn copy_verified(&self, source: &Path, target: &Path) -> Result<(), String>;
+}
+mod publication;
+pub use publication::publish_comment;
+
 enum Outcome {
     Loaded(PathBuf, Result<StoredComments, String>),
     Saved {
@@ -87,21 +98,22 @@ enum Outcome {
 pub struct CommentSession {
     repository: Arc<dyn CommentRepository>,
     recorder: Arc<dyn CommentRecorder>,
+    media: Arc<dyn CommentMediaStore>,
     root: Option<PathBuf>,
     catalog: CommentCatalog,
     revision: Option<Vec<u8>>,
     request: Option<PathBuf>,
     worker: Option<mpsc::Receiver<Outcome>>,
     device_worker: Option<mpsc::Receiver<Result<Vec<InputDevice>, String>>>,
-    pub devices: Vec<InputDevice>,
-    pub device: String,
-    pub snapshot: CaptureSnapshot,
-    pub target: Option<PhotoTarget>,
-    pub open: bool,
-    pub error: String,
-    pub message: String,
-    pub saving: bool,
-    pub loaded: bool,
+    devices: Vec<InputDevice>,
+    device: String,
+    snapshot: CaptureSnapshot,
+    target: Option<PhotoTarget>,
+    open: bool,
+    error: String,
+    message: String,
+    saving: bool,
+    loaded: bool,
     capture_owned: bool,
     previous_id: String,
     pending_start: bool,
@@ -110,10 +122,15 @@ pub struct CommentSession {
     changed: bool,
 }
 impl CommentSession {
-    pub fn new(repository: Arc<dyn CommentRepository>, recorder: Arc<dyn CommentRecorder>) -> Self {
+    pub fn new(
+        repository: Arc<dyn CommentRepository>,
+        recorder: Arc<dyn CommentRecorder>,
+        media: Arc<dyn CommentMediaStore>,
+    ) -> Self {
         Self {
             repository,
             recorder,
+            media,
             root: None,
             catalog: CommentCatalog::default(),
             revision: None,
@@ -136,6 +153,66 @@ impl CommentSession {
             saved: false,
             changed: false,
         }
+    }
+    pub fn devices(&self) -> &[InputDevice] {
+        &self.devices
+    }
+    pub fn device(&self) -> &str {
+        &self.device
+    }
+    pub fn snapshot(&self) -> &CaptureSnapshot {
+        &self.snapshot
+    }
+    pub fn target(&self) -> Option<&PhotoTarget> {
+        self.target.as_ref()
+    }
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+    pub fn is_saving(&self) -> bool {
+        self.saving
+    }
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+    pub fn error(&self) -> &str {
+        &self.error
+    }
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+    pub fn report_error(&mut self, error: String) {
+        self.error = error;
+    }
+    pub fn show(&mut self) {
+        if self.target.is_some() {
+            self.open = true;
+        }
+    }
+    pub fn can_start(&self) -> bool {
+        self.open
+            && self.loaded
+            && !self.saving
+            && self.published.is_none()
+            && matches!(
+                self.snapshot.phase,
+                CapturePhase::Idle | CapturePhase::Ready | CapturePhase::Error
+            )
+    }
+    pub fn set_device(&mut self, device: String) -> Result<(), String> {
+        if self.saving
+            || !matches!(
+                self.snapshot.phase,
+                CapturePhase::Idle | CapturePhase::Ready | CapturePhase::Error
+            )
+        {
+            return Err("Mikrofon kann während einer Aufnahme nicht gewechselt werden".into());
+        }
+        if !device.is_empty() && !self.devices.iter().any(|d| d.id == device) {
+            return Err("Mikrofon gehört nicht zur verfügbaren Geräteliste".into());
+        }
+        self.device = device;
+        Ok(())
     }
     pub fn load(&mut self, root: PathBuf) {
         if self.has_unsaved() || self.saving {
@@ -209,6 +286,11 @@ impl CommentSession {
         if self.root.as_ref() != Some(&target.root) {
             return Err("Kommentar gehört nicht zur geöffneten Bibliothek".into());
         }
+        if !Media::from_path(PathBuf::from(target.file.as_str()), String::new())
+            .is_some_and(|m| m.is_photo())
+        {
+            return Err("Audiokommentare können nur einem Foto zugeordnet werden".into());
+        }
         self.recorder.command(CaptureCommand::Discard)?;
         self.snapshot = CaptureSnapshot::default();
         self.target = Some(target);
@@ -232,14 +314,8 @@ impl CommentSession {
         });
     }
     pub fn start(&mut self, player: &dyn crate::diary::AudioPlayer) -> Result<(), String> {
-        if self.saving || !self.loaded || self.target.is_none() || self.published.is_some() {
+        if !self.can_start() || self.target.is_none() {
             return Err("Aufnahme ist noch nicht bereit".into());
-        }
-        if !matches!(
-            self.snapshot.phase,
-            CapturePhase::Idle | CapturePhase::Ready | CapturePhase::Error
-        ) {
-            return Err("Aufnahme läuft bereits".into());
         }
         if player.transport().playing {
             player.control(crate::diary::AudioControl::Toggle)?;
@@ -258,6 +334,26 @@ impl CommentSession {
         Ok(())
     }
     pub fn command(&mut self, command: CaptureCommand) {
+        if matches!(command, CaptureCommand::Discard) {
+            self.discard();
+            return;
+        }
+        let valid = !self.saving
+            && self.capture_owned
+            && match command {
+                CaptureCommand::Pause => self.snapshot.phase == CapturePhase::Recording,
+                CaptureCommand::Resume => self.snapshot.phase == CapturePhase::Paused,
+                CaptureCommand::Finish => matches!(
+                    self.snapshot.phase,
+                    CapturePhase::Recording | CapturePhase::Paused
+                ),
+                CaptureCommand::Preview => self.snapshot.phase == CapturePhase::Ready,
+                CaptureCommand::Discard => unreachable!(),
+            };
+        if !valid {
+            self.error = "Befehl im aktuellen Aufnahmezustand nicht möglich".into();
+            return;
+        }
         if let Err(error) = self.recorder.command(command) {
             self.error = error;
         }
@@ -266,7 +362,10 @@ impl CommentSession {
         if self.saving {
             return;
         }
-        self.command(CaptureCommand::Discard);
+        if let Err(error) = self.recorder.command(CaptureCommand::Discard) {
+            self.error = error;
+            return;
+        }
         self.capture_owned = false;
         self.pending_start = false;
         self.open = false;
@@ -295,6 +394,8 @@ impl CommentSession {
             self.command(CaptureCommand::Preview);
         }
         let repository = self.repository.clone();
+        let media = self.media.clone();
+        let capture_lifetime = self.recorder.clone();
         let existing = self.published.clone();
         let retry = existing.is_some();
         let mut catalog = self.catalog.clone();
@@ -305,9 +406,11 @@ impl CommentSession {
         self.error.clear();
         self.message = "Aufnahme prüfen, kopieren und zuordnen …".into();
         std::thread::spawn(move || {
+            // Keep native staging alive even if the owning window is unexpectedly dropped.
+            let _capture_lifetime = capture_lifetime;
             let published = match existing {
                 Some(comment) => Ok(comment),
-                None => repository.publish(&target, &take),
+                None => publish_comment(media.as_ref(), &target, &take),
             };
             let outcome = match published {
                 Err(error) => Outcome::Saved {
@@ -442,7 +545,9 @@ impl CommentSession {
 }
 impl Drop for CommentSession {
     fn drop(&mut self) {
-        self.recorder.command(CaptureCommand::Discard).ok();
+        if !self.saving {
+            self.recorder.command(CaptureCommand::Discard).ok();
+        }
     }
 }
 
@@ -459,6 +564,7 @@ mod tests {
         catalog: Mutex<CommentCatalog>,
         copies: AtomicUsize,
         saves: AtomicUsize,
+        commands: AtomicUsize,
     }
     impl crate::diary::AudioPlayer for Fake {
         fn revise(
@@ -486,6 +592,7 @@ mod tests {
             Ok(())
         }
         fn command(&self, _: CaptureCommand) -> Result<(), String> {
+            self.commands.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
         fn snapshot(&self) -> CaptureSnapshot {
@@ -499,16 +606,6 @@ mod tests {
                 revision: None,
             })
         }
-        fn publish(&self, target: &PhotoTarget, take: &CapturedTake) -> Result<Comment, String> {
-            self.copies.fetch_add(1, Ordering::SeqCst);
-            Comment::new(
-                take.id.clone(),
-                LibraryFile::new("2026/audio/comment_20261112_153000.m4a".into())?,
-                target.file.clone(),
-                crate::domain::comments::RecordedAt::parse(&take.recorded_at)?,
-                target.time.clone(),
-            )
-        }
         fn save(
             &self,
             _: &Path,
@@ -520,6 +617,21 @@ mod tests {
             }
             *self.catalog.lock().unwrap() = catalog.clone();
             Ok(vec![1])
+        }
+    }
+    impl CommentMediaStore for Fake {
+        fn validate(&self, _: &PhotoTarget, _: &CapturedTake) -> Result<(), String> {
+            Ok(())
+        }
+        fn photo_time(&self, _: &PhotoTarget) -> Result<CaptureTime, String> {
+            Err("unknown".into())
+        }
+        fn exists(&self, _: &Path) -> Result<bool, String> {
+            Ok(false)
+        }
+        fn copy_verified(&self, _: &Path, _: &Path) -> Result<(), String> {
+            self.copies.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
     }
     fn wait(session: &mut CommentSession) {
@@ -535,7 +647,7 @@ mod tests {
     #[test]
     fn failed_reference_save_retries_without_copying_or_losing_take() {
         let fake = Arc::new(Fake::default());
-        let mut session = CommentSession::new(fake.clone(), fake.clone());
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
         session.load("/library".into());
         wait(&mut session);
         session
@@ -576,12 +688,184 @@ mod tests {
     #[test]
     fn root_changes_discard_stale_load_results() {
         let fake = Arc::new(Fake::default());
-        let mut session = CommentSession::new(fake.clone(), fake);
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake);
         session.load("/a".into());
         session.poll();
         session.load("/b".into());
         wait(&mut session);
         assert_eq!(session.root.as_deref(), Some(Path::new("/b")));
         assert!(session.loaded);
+    }
+    #[test]
+    fn workflow_guards_are_enforced_without_ui_and_reject_nonphoto_targets() {
+        let fake = Arc::new(Fake::default());
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
+        assert!(session.start(fake.as_ref()).is_err());
+        let baseline = fake.commands.load(Ordering::SeqCst);
+        session.command(CaptureCommand::Preview);
+        assert_eq!(fake.commands.load(Ordering::SeqCst), baseline);
+        session.load("/library".into());
+        wait(&mut session);
+        assert!(
+            session
+                .open_photo(PhotoTarget {
+                    root: "/library".into(),
+                    file: LibraryFile::new("2008/audio/a.wav".into()).unwrap(),
+                    time: None
+                })
+                .is_err()
+        );
+        assert!(!session.is_open());
+        session
+            .open_photo(PhotoTarget {
+                root: "/library".into(),
+                file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+                time: None,
+            })
+            .unwrap();
+        session.start(fake.as_ref()).unwrap();
+        assert!(session.set_device("changed".into()).is_err());
+        assert!(!session.can_start());
+        let baseline = fake.commands.load(Ordering::SeqCst);
+        session.command(CaptureCommand::Resume);
+        assert_eq!(fake.commands.load(Ordering::SeqCst), baseline);
+        session.command(CaptureCommand::Discard);
+        assert!(!session.has_unsaved());
+        assert!(!session.is_open());
+    }
+    struct TraceStore(Mutex<Vec<String>>);
+    impl CommentMediaStore for TraceStore {
+        fn validate(&self, _: &PhotoTarget, _: &CapturedTake) -> Result<(), String> {
+            self.0.lock().unwrap().push("validate".into());
+            Ok(())
+        }
+        fn photo_time(&self, _: &PhotoTarget) -> Result<CaptureTime, String> {
+            self.0.lock().unwrap().push("date".into());
+            Err("unknown photo date".into())
+        }
+        fn exists(&self, path: &Path) -> Result<bool, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(path.file_name().unwrap().to_string_lossy().into_owned());
+            Ok(!path.to_string_lossy().ends_with("_002.m4a"))
+        }
+        fn copy_verified(&self, _: &Path, target: &Path) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("copy:{}", target.display()));
+            Ok(())
+        }
+    }
+    #[test]
+    fn publication_policy_validates_before_io_and_selects_suffix_in_application() {
+        let store = TraceStore(Mutex::new(Vec::new()));
+        let target = PhotoTarget {
+            root: "/library".into(),
+            file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+            time: None,
+        };
+        let mut take = CapturedTake {
+            id: "invalid".into(),
+            path: "/tmp/take.m4a".into(),
+            recorded_at: "2026-11-12T15:30:00+01:00".into(),
+        };
+        assert!(publish_comment(&store, &target, &take).is_err());
+        assert!(store.0.lock().unwrap().is_empty());
+        take.id = "12345678-1234-1234-1234-123456789abc".into();
+        let comment = publish_comment(&store, &target, &take).unwrap();
+        assert_eq!(
+            comment.audio().as_str(),
+            "2026/audio/comment_20261112_153000_002.m4a"
+        );
+        assert!(comment.photo_time().is_none());
+        assert_eq!(comment.logical_year(), "2008");
+        let trace = store.0.lock().unwrap();
+        assert_eq!(trace[0], "validate");
+        assert_eq!(trace[1], "date");
+        assert_eq!(trace.len(), 6);
+        assert!(trace[5].starts_with("copy:"));
+    }
+    struct BlockingStore {
+        entered: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        fake: Arc<Fake>,
+    }
+    impl CommentMediaStore for BlockingStore {
+        fn validate(&self, _: &PhotoTarget, _: &CapturedTake) -> Result<(), String> {
+            Ok(())
+        }
+        fn photo_time(&self, _: &PhotoTarget) -> Result<CaptureTime, String> {
+            Err("unknown".into())
+        }
+        fn exists(&self, _: &Path) -> Result<bool, String> {
+            Ok(false)
+        }
+        fn copy_verified(&self, _: &Path, _: &Path) -> Result<(), String> {
+            self.entered.send(()).map_err(|e| e.to_string())?;
+            self.release
+                .lock()
+                .unwrap()
+                .recv()
+                .map_err(|e| e.to_string())?;
+            self.fake.copies.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    #[test]
+    fn saving_rejects_commands_and_dropping_owner_does_not_discard_staging_midcopy() {
+        let fake = Arc::new(Fake::default());
+        let (entered_tx, entered) = mpsc::sync_channel(1);
+        let (release, release_rx) = mpsc::channel();
+        let media = Arc::new(BlockingStore {
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+            fake: fake.clone(),
+        });
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), media);
+        session.load("/library".into());
+        wait(&mut session);
+        session
+            .open_photo(PhotoTarget {
+                root: "/library".into(),
+                file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+                time: None,
+            })
+            .unwrap();
+        wait(&mut session);
+        session.start(fake.as_ref()).unwrap();
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Ready,
+            id: "new".into(),
+            take: Some(CapturedTake {
+                id: "12345678-1234-1234-1234-123456789abc".into(),
+                path: "/tmp/take.m4a".into(),
+                recorded_at: "2026-11-12T15:30:00+01:00".into(),
+            }),
+            ..Default::default()
+        };
+        session.poll();
+        session.save().unwrap();
+        entered
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let commands = fake.commands.load(Ordering::SeqCst);
+        session.command(CaptureCommand::Preview);
+        session.command(CaptureCommand::Discard);
+        assert!(session.is_saving());
+        assert!(session.has_unsaved());
+        assert!(session.is_open());
+        assert_eq!(fake.commands.load(Ordering::SeqCst), commands);
+        drop(session);
+        assert_eq!(fake.commands.load(Ordering::SeqCst), commands);
+        release.send(()).unwrap();
+        for _ in 0..1000 {
+            if fake.copies.load(Ordering::SeqCst) == 1 {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("copy did not finish after owner drop");
     }
 }

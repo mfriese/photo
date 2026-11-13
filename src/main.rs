@@ -79,11 +79,12 @@ fn main() -> eframe::Result {
         tool: exiftool.clone(),
     });
     let services = application::Services {
-        comments: std::sync::Arc::new(comments_fs::YamlComments {
+        comment_media: std::sync::Arc::new(comments_fs::CommentFiles {
             audio: audio_source.clone(),
             copier: importer.clone(),
             dates: importer.clone(),
         }),
+        comments: std::sync::Arc::new(comments_fs::YamlComments),
         recorder: std::sync::Arc::new(comment_recorder::NativeCommentRecorder::new()),
         media_dates: importer.clone(),
         organization: std::sync::Arc::new(tag_store::YamlTags),

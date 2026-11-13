@@ -15,7 +15,7 @@ fn shortcut(key: &str, shift: bool) -> Option<Shortcut> {
 }
 impl Suite {
     fn menu_entries(&self, ctx: &egui::Context) -> Vec<Entry> {
-        let blocked = self.comments.open
+        let blocked = self.comments.is_open()
             || self.options_open
             || self.import_panel.visible
             || self.tag_view.open

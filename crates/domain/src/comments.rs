@@ -88,7 +88,7 @@ impl Comment {
             .map(|time| CaptureTime::parse(&time.exif_value(), "Fotozuordnung"))
             .transpose()?;
         Ok(Self {
-            id,
+            id: id.to_ascii_lowercase(),
             audio,
             photo,
             recorded_at,
@@ -267,5 +267,22 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn uuid_casing_does_not_create_distinct_comment_identities() {
+        let c = comment();
+        let upper = Comment::new(
+            c.id().to_uppercase(),
+            c.audio().clone(),
+            c.photo().clone(),
+            c.recorded_at().clone(),
+            c.photo_time().cloned(),
+        )
+        .unwrap();
+        assert_eq!(upper, c);
+        let mut catalog = CommentCatalog::default();
+        catalog.insert(c).unwrap();
+        catalog.insert(upper).unwrap();
+        assert_eq!(catalog.entries().len(), 1);
     }
 }
