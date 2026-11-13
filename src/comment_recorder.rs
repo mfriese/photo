@@ -98,12 +98,20 @@ impl CommentRecorder for NativeCommentRecorder {
             unsafe extern "C" {
                 fn photosuite_comment_command(pointer: *mut std::ffi::c_void, command: i32);
             }
+            if let CaptureCommand::Seek(seconds) = command {
+                unsafe extern "C" {
+                    fn photosuite_comment_seek(pointer: *mut std::ffi::c_void, seconds: f64);
+                }
+                unsafe { photosuite_comment_seek(self.pointer as _, seconds) };
+                return Ok(());
+            }
             let code = match command {
                 CaptureCommand::Pause => 0,
                 CaptureCommand::Resume => 1,
                 CaptureCommand::Finish => 2,
                 CaptureCommand::Preview => 3,
                 CaptureCommand::Discard => 4,
+                CaptureCommand::Seek(_) => unreachable!(),
             };
             unsafe { photosuite_comment_command(self.pointer as _, code) };
             Ok(())
@@ -147,6 +155,19 @@ impl CommentRecorder for NativeCommentRecorder {
                             .as_f64()
                             .filter(|n| n.is_finite() && *n >= 0.)
                             .unwrap_or(0.),
+                        edit_failed: v["edit_failed"].as_bool().unwrap_or(false),
+                        position: v["position"]
+                            .as_f64()
+                            .filter(|n| n.is_finite() && *n >= 0.)
+                            .unwrap_or(0.),
+                        wave_start: v["wave_start"]
+                            .as_f64()
+                            .filter(|n| n.is_finite() && *n >= 0.)
+                            .unwrap_or(0.),
+                        wave_span: v["wave_span"]
+                            .as_f64()
+                            .filter(|n| n.is_finite() && *n > 0.)
+                            .unwrap_or(32.),
                         level: v["level"].as_f64().unwrap_or(0.).clamp(0., 1.) as f32,
                         peak: v["peak"].as_f64().unwrap_or(-160.) as f32,
                         wave: v["wave"]

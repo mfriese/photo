@@ -95,3 +95,12 @@ Schließbestätigung: Layout bleibt Präsentation; automatisches Finalisieren vo
 Footeraktionen verwenden unverändert request_save und bestehenden Schließschutz. Dropdown-Geometrie und Farb-/Pixelprojektion bleiben Präsentation; bounded Telemetrie enthält jetzt 960 statt 120 Messwerte, damit die 32-Sekunden-Zeitachse bei voller 30-Hz-Auflösung erhalten bleibt. Nativer Test prüft Erhalt jedes Messwerts/Speicherlimit; UI-Regressionen prüfen Peak-Erhalt beim Verdichten, lückenlose Pixelspalten und grün/gelb/rot. Keine neuen Medien-Schreibwege.
 
 Abschluss der dichten Kurven-/Footeranpassung: 205 Rust-Tests, native Tests, Clippy, Formatierung, Workspace-Build und Architekturprüfung bestanden; keine echte Mikrofonaufnahme und keine manuelle Sichtprüfung durchgeführt.
+
+## Audio-Cursor und abschnittsweises Ersetzen
+Domänenwert AudioCursor sichert Positionsgrenzen; Sitzungsbefehle validieren Seek/Preview/Resume und sperren die Save-Übergänge. UI enthält keine Datei-/Schnittlogik. AVFoundation-Adapter finalisiert Abschnitte, separater comment_edit-Helfer erstellt den technischen Prefix-/Replacement-Export in neue eigene Tempdatei; Generationsschutz und bisheriger Arbeitsstand bleiben bis Erfolg erhalten. Fehler werden strukturiert gemeldet und stoppen automatisches Speichern.
+
+Nativer Test benutzt zwei erzeugte Testtöne: tatsächliche Exportdauer, Frequenz des erhaltenen Präfixes und des Ersatzabschnitts, erhaltene Quelldatei sowie Rückfall bei ungültigem Abschnitt werden geprüft. Keine Mikrofonaufnahme im Test; Resume-Geräteöffnung wird durch einen Testadapter ersetzt. UI-Interaktionstest prüft Cursorwahl sowie Sperre während Aufnahme; Anwendungstests prüfen ungültige Positionen und fehlgeschlagenes Ersetzen ohne automatische Veröffentlichung.
+
+Entfernen flüchtiger Aufnahme-/Pausentexte: reine Meldungs-/Darstellungsanpassung, keine Änderung an Befehlsfreigaben, Finalisierung, Fehlerbehandlung oder Speicherworkflow. Native Fehler-/Warnmeldungen werden weiterhin übertragen und angezeigt.
+
+Pausierte Kurve: native Finalisierung erhält vorhandene Messwerte und den expliziten Fensterstart; Snapshot-Spanne bleibt konstant 32 Sekunden. Keine zusätzliche UI-Fachlogik oder Änderung am Audioinhalt. Nativer Regressionstest vergleicht Messwerte/Fensterstart vor und nach Finalisierung und pausiertem Ersatzexport.

@@ -55,3 +55,6 @@ char *photosuite_comment_snapshot(void *recorder);
 
 // Matches application CAPTURE_WAVE_SAMPLES: 30-Hz envelope history, approximately 32 s.
 #define PHOTOSUITE_COMMENT_WAVE_SAMPLES 960
+
+// Queue a cursor update in a paused/finalized own-temp take.
+void photosuite_comment_seek(void *recorder,double seconds);

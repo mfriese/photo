@@ -282,3 +282,8 @@ Der Aufnahmedialog besitzt eine Titelzeile mit X. Aufnahmebuttons, Status und re
 Beim Schließen einer ungespeicherten Aufnahme bietet der Dialog **Speichern** oder **Verwerfen**. Speichern beendet bei Bedarf zunächst die Aufnahme; erst nach erfolgreichem Speichern schließt der Dialog.
 
 Unten rechts im Aufnahmedialog: X zum Abbrechen mit Sicherheitsabfrage, Häkchen zum Abschließen/Speichern. Die Mikrofonauswahl ist rechtsbündig und gleich hoch wie die Aufnahmebuttons. Die dichte Kurve färbt Ausschläge unter der gelben Grenze grün, bis zur roten Grenze gelb und darüber rot.
+
+### Vorhören und ab einer Markierung neu aufnehmen
+Links neben Aufnahme steht jetzt Play. Pausieren, dann in der Kurve klicken oder die helle Markierung ziehen: Play spielt ab dort; der rote Aufnahmekreis erhält den bisherigen Anfang und ersetzt alles ab dieser Stelle durch die neue Aufnahme. Ohne Verschieben wird am Ende weiter aufgenommen. Bei Pause bleibt der zuvor sichtbare 32-Sekunden-Ausschnitt unverändert stehen; er wird nicht auf die gesamte Breite gestreckt. Nur die aktuelle ungespeicherte Aufnahme wird bearbeitet; gespeicherte Dateien bleiben unverändert. AAC-Abschnitte werden bei Bedarf neu kodiert; Abschluss kann kurz dauern.
+
+Aufnahme und Pause blenden keine kurzzeitigen Vorbereitungstexte mehr ein; Fehlermeldungen bleiben sichtbar.

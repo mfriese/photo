@@ -90,3 +90,7 @@ Aktueller Aufnahme-Dialog: Titel und X rechts oben; kein Schließen-Textbutton. 
 Ungespeichert-Bestätigung: Überschrift, 12 Punkte Abstand zur Frage, 18 Punkte Abstand zur zentrierten horizontalen Aktionsgruppe. Zwei gleich große Buttons (100×32) mit 12 Punkten Zwischenraum: Speichern / Verwerfen. Während Abschluss/Speichern beide deaktivieren, Fehler im Dialog erhalten.
 
 Aufnahme-Fußbereich mit proportionalem Foto und zwei gleich hohen quadratischen Symbolbuttons rechts: X und Häkchen; in schmalen Fenstern rechtsbündig darunter. Keine zusätzliche Speichern-Texttaste oder Mikrofonzugriff-Infotext. Mikrofon-Dropdown rechtsbündig in reservierter Breite, 34 Punkte hoch. Verlauf ohne Lücken aus 960 Messwerten/32 Sekunden: pro physischem Pixel ein Strich, grün unter Gelb, gelb bis Rot, darüber rot.
+
+Kommentaraufnahme: Play/Pause-Vorhören als gezeichneter 34-Punkte-Button links vor Aufnahme/Pause und Stop. Die Kurve erhält eine helle Abspielmarkierung mit Griff; bei Pause/Fertig bleibt der sichtbare Ausschnitt unverändert und kann per Klicken/Ziehen positioniert werden. Status zeigt Position/Gesamtdauer. Während Aufnahme kein Seek, weiterhin langsame 32-Sekunden-Darstellung. Keine zusätzliche Anhören-Textzeile.
+
+Bei Aufnahme/Pause keine aufblitzenden Vorbereitungstexte oder zusätzliche Meldungszeile. Übergangsphasen zeigen nur die Dauer im festen Statusbereich; stabile Aufnahme-/Pausenbeschriftung und echte Fehler bleiben erhalten.

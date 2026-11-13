@@ -37,6 +37,10 @@ pub struct CapturedTake {
 pub struct CaptureSnapshot {
     pub phase: CapturePhase,
     pub seconds: f64,
+    pub position: f64,
+    pub edit_failed: bool,
+    pub wave_start: f64,
+    pub wave_span: f64,
     pub level: f32,
     pub peak: f32,
     pub wave: Vec<f32>,
@@ -51,6 +55,7 @@ pub enum CaptureCommand {
     Resume,
     Finish,
     Preview,
+    Seek(f64),
     Discard,
 }
 pub trait CommentRecorder: Send + Sync + 'static {
@@ -349,15 +354,33 @@ impl CommentSession {
             return;
         }
         let valid = !self.saving
+            && !self.is_save_pending()
             && self.capture_owned
             && match command {
                 CaptureCommand::Pause => self.snapshot.phase == CapturePhase::Recording,
-                CaptureCommand::Resume => self.snapshot.phase == CapturePhase::Paused,
+                CaptureCommand::Resume => {
+                    self.snapshot.phase == CapturePhase::Paused && self.published.is_none()
+                }
                 CaptureCommand::Finish => matches!(
                     self.snapshot.phase,
                     CapturePhase::Recording | CapturePhase::Paused
                 ),
-                CaptureCommand::Preview => self.snapshot.phase == CapturePhase::Ready,
+                CaptureCommand::Preview => {
+                    matches!(
+                        self.snapshot.phase,
+                        CapturePhase::Paused | CapturePhase::Ready
+                    ) && self.snapshot.seconds > 0.
+                }
+                CaptureCommand::Seek(position) => {
+                    matches!(
+                        self.snapshot.phase,
+                        CapturePhase::Paused | CapturePhase::Ready
+                    ) && crate::domain::audio_edit::AudioCursor::new(
+                        position,
+                        self.snapshot.seconds,
+                    )
+                    .is_ok()
+                }
                 CaptureCommand::Discard => unreachable!(),
             };
         if !valid {
@@ -398,6 +421,9 @@ impl CommentSession {
         }
         if !self.has_unsaved() {
             return Err("Keine ungespeicherte Aufnahme vorhanden".into());
+        }
+        if self.snapshot.edit_failed {
+            return Err("Der neue Abschnitt wurde nicht übernommen. Erneut aufnehmen oder mit Stop den bisherigen Stand bestätigen.".into());
         }
         match self.snapshot.phase {
             CapturePhase::Ready => self.save(),
@@ -493,6 +519,10 @@ impl CommentSession {
                 self.snapshot = snapshot;
             }
         }
+        if self.save_intent.is_some() && self.snapshot.edit_failed {
+            self.save_intent = None;
+            self.error = self.snapshot.message.clone();
+        }
         if let Some(intent) = self.save_intent {
             match (intent, self.snapshot.phase) {
                 (SaveIntent::Finish, CapturePhase::Recording | CapturePhase::Paused) => {
@@ -502,6 +532,12 @@ impl CommentSession {
                             self.error = error;
                             self.save_intent = None;
                         }
+                    }
+                }
+                (SaveIntent::Ready, CapturePhase::Paused) => {
+                    if let Err(error) = self.recorder.command(CaptureCommand::Finish) {
+                        self.error = error;
+                        self.save_intent = None;
                     }
                 }
                 (_, CapturePhase::Ready) => {
@@ -979,5 +1015,82 @@ mod tests {
         wait(&mut session);
         assert!(!session.has_unsaved());
         assert_eq!(fake.copies.load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn seek_and_preview_are_only_allowed_on_valid_paused_positions() {
+        let fake = Arc::new(Fake::default());
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
+        session.load("/library".into());
+        wait(&mut session);
+        session
+            .open_photo(PhotoTarget {
+                root: "/library".into(),
+                file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+                time: None,
+            })
+            .unwrap();
+        wait(&mut session);
+        session.start(fake.as_ref()).unwrap();
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Paused,
+            id: "new".into(),
+            seconds: 10.,
+            ..Default::default()
+        };
+        session.poll();
+        let initial = fake.commands.load(Ordering::SeqCst);
+        session.command(CaptureCommand::Seek(5.));
+        session.command(CaptureCommand::Preview);
+        assert_eq!(fake.commands.load(Ordering::SeqCst), initial + 2);
+        for value in [-1., 11., f64::NAN] {
+            session.command(CaptureCommand::Seek(value));
+        }
+        assert_eq!(fake.commands.load(Ordering::SeqCst), initial + 2);
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Recording,
+            id: "new".into(),
+            seconds: 10.,
+            ..Default::default()
+        };
+        session.poll();
+        session.command(CaptureCommand::Seek(5.));
+        assert_eq!(fake.commands.load(Ordering::SeqCst), initial + 2);
+    }
+    #[test]
+    fn failed_replacement_cancels_auto_save_until_the_user_confirms_old_version() {
+        let fake = Arc::new(Fake::default());
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
+        session.load("/library".into());
+        wait(&mut session);
+        session
+            .open_photo(PhotoTarget {
+                root: "/library".into(),
+                file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+                time: None,
+            })
+            .unwrap();
+        wait(&mut session);
+        session.start(fake.as_ref()).unwrap();
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Finishing,
+            id: "new".into(),
+            seconds: 10.,
+            ..Default::default()
+        };
+        session.poll();
+        session.request_save().unwrap();
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Paused,
+            id: "new".into(),
+            seconds: 10.,
+            edit_failed: true,
+            message: "merge failed".into(),
+            ..Default::default()
+        };
+        session.poll();
+        assert!(!session.is_save_pending());
+        assert!(session.request_save().is_err());
+        assert_eq!(fake.copies.load(Ordering::SeqCst), 0);
+        assert!(session.has_unsaved());
     }
 }

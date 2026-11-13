@@ -2,6 +2,8 @@ fn main() {
     for source in [
         "native/audio.m",
         "native/comment_recorder.m",
+        "native/comment_edit.m",
+        "native/comment_edit.h",
         "native/audio_transport.m",
         "native/audio_transport.h",
         "native/audio_timeline_view.m",
@@ -39,6 +41,7 @@ fn main() {
         "audio",
         "audio_transport",
         "comment_recorder",
+        "comment_edit",
         "audio_timeline_view",
         "context_photos",
         "context_photo_view",

@@ -397,16 +397,31 @@ fn capture_controls(
     let idle = matches!(phase, Phase::Idle | Phase::Ready | Phase::Error) && !session.is_saving();
     let status = match phase {
         Phase::Idle => "Bereit zur Aufnahme",
-        Phase::Preparing => "Mikrofon wird vorbereitet …",
+        Phase::Preparing => "",
         Phase::Recording => "Aufnahme läuft",
         Phase::Paused => "Aufnahme pausiert",
-        Phase::Finishing => "Aufnahme wird abgeschlossen …",
+        Phase::Finishing => "",
         Phase::Ready => "Aufnahme bereit zum Speichern",
         Phase::Error => "Aufnahme nicht möglich",
     };
-    waveform(ui, &session.snapshot().wave);
+    if let Some(position) = recording_waveform(
+        ui,
+        session.snapshot(),
+        matches!(phase, Phase::Paused | Phase::Ready)
+            && !session.is_saving()
+            && !session.is_save_pending(),
+    ) {
+        session.command(Command::Seek(position));
+    }
     level_meter(ui, session.snapshot().level, session.snapshot().peak);
     ui.horizontal(|ui| {
+        let can_play = matches!(phase, Phase::Paused | Phase::Ready)
+            && session.snapshot().seconds > 0.
+            && !session.is_saving()
+            && !session.is_save_pending();
+        if preview_button(ui, session.snapshot().playing, can_play).clicked() {
+            session.command(Command::Preview);
+        }
         let active = matches!(phase, Phase::Recording | Phase::Paused);
         let primary = transport_button(
             ui,
@@ -416,7 +431,7 @@ fn capture_controls(
         );
         let tip = match phase {
             Phase::Recording => "Aufnahme pausieren",
-            Phase::Paused => "Aufnahme fortsetzen",
+            Phase::Paused => "Ab der Markierung aufnehmen; bisherigen Rest ersetzen",
             Phase::Ready => "Neu aufnehmen (ungespeicherte Aufnahme ersetzen)",
             _ => "Aufnehmen",
         };
@@ -449,7 +464,20 @@ fn capture_controls(
             |ui| {
                 ui.set_min_size(egui::vec2(status_width, 34.));
                 let seconds = session.snapshot().seconds as u64;
-                let message = format!("{status} · {:02}:{:02}", seconds / 60, seconds % 60);
+                let position = session.snapshot().position as u64;
+                let message = if status.is_empty() {
+                    format!("{:02}:{:02}", seconds / 60, seconds % 60)
+                } else if matches!(phase, Phase::Paused | Phase::Ready) {
+                    format!(
+                        "{status} · {:02}:{:02} / {:02}:{:02}",
+                        position / 60,
+                        position % 60,
+                        seconds / 60,
+                        seconds % 60
+                    )
+                } else {
+                    format!("{status} · {:02}:{:02}", seconds / 60, seconds % 60)
+                };
                 ui.add(egui::Label::new(egui::RichText::new(&message).strong()).truncate())
                     .on_hover_text(message);
             },
@@ -463,22 +491,62 @@ fn capture_controls(
             },
         );
     });
-    if phase == Phase::Ready {
-        ui.horizontal(|ui| {
-            let label = if session.snapshot().playing {
-                "⏸ Anhören"
-            } else {
-                "▶ Anhören"
-            };
-            if ui
-                .add_enabled(!session.is_saving(), egui::Button::new(label))
-                .clicked()
-            {
-                session.command(Command::Preview);
-            }
-        });
-    }
     ui.separator();
+}
+fn preview_button(ui: &mut egui::Ui, playing: bool, enabled: bool) -> egui::Response {
+    let response = if playing {
+        transport_button(ui, true, enabled, false)
+    } else {
+        let response = ui.add_enabled(
+            enabled,
+            egui::Button::new("").min_size(egui::vec2(34., 34.)),
+        );
+        let c = response.rect.center();
+        ui.painter().add(egui::Shape::convex_polygon(
+            vec![
+                c + egui::vec2(-4., -6.),
+                c + egui::vec2(-4., 6.),
+                c + egui::vec2(6., 0.),
+            ],
+            crate::theme::MUTED,
+            egui::Stroke::NONE,
+        ));
+        response
+    };
+    let label = if playing {
+        "Vorhören pausieren"
+    } else {
+        "Ab der Markierung abspielen"
+    };
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    response.on_hover_text(label)
+}
+fn recording_waveform(
+    ui: &mut egui::Ui,
+    snapshot: &photosuite_application::comments::CaptureSnapshot,
+    seekable: bool,
+) -> Option<f64> {
+    let (rect, response) = waveform(ui, &snapshot.wave);
+    let span = snapshot.wave_span.max(0.001);
+    let fraction = ((snapshot.position - snapshot.wave_start) / span).clamp(0., 1.) as f32;
+    let x = rect.left() + rect.width() * fraction;
+    ui.painter().line_segment(
+        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+        egui::Stroke::new(1_f32, crate::theme::TEXT),
+    );
+    ui.painter()
+        .circle_filled(egui::pos2(x, rect.bottom() - 3.), 3., crate::theme::TEXT);
+    let result = if seekable && (response.clicked() || response.dragged()) {
+        response.interact_pointer_pos().map(|point| {
+            (snapshot.wave_start
+                + (((point.x - rect.left()) / rect.width()).clamp(0., 1.) as f64) * span)
+                .clamp(0., snapshot.seconds)
+        })
+    } else {
+        None
+    };
+    response.on_hover_text(if seekable {"Klicken oder ziehen: Abspielposition wählen. Play hört ab dort vor; Aufnahme ersetzt den Rest ab der Markierung."}else{"Während der Aufnahme ist die Position gesperrt. Zum Vorhören oder Ersetzen pausieren."});
+    result
 }
 fn microphone_picker(
     ui: &mut egui::Ui,
@@ -668,10 +736,12 @@ fn wave_column(values: &[f32], column: usize, columns: usize) -> f32 {
         .filter(|n| n.is_finite())
         .fold(0., f32::max)
 }
-fn waveform(ui: &mut egui::Ui, values: &[f32]) {
-    let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 68.), egui::Sense::hover());
-    response.on_hover_text("Pegelverlauf: ungefähr 32 Sekunden. Bewegung auf ein Achtel verlangsamt; kurze Ausschläge bleiben sichtbar.");
+fn waveform(ui: &mut egui::Ui, values: &[f32]) -> (egui::Rect, egui::Response) {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 68.),
+        egui::Sense::click_and_drag(),
+    );
+    response.clone().on_hover_text("Pegelverlauf: ungefähr 32 Sekunden. Bewegung auf ein Achtel verlangsamt; kurze Ausschläge bleiben sichtbar.");
     ui.painter().rect_filled(rect, 4., crate::theme::CANVAS);
     let pixel = 1. / ui.ctx().pixels_per_point();
     ui.painter().line_segment(
@@ -713,6 +783,7 @@ fn waveform(ui: &mut egui::Ui, values: &[f32]) {
             );
         }
     }
+    (rect, response)
 }
 
 #[cfg(test)]
@@ -828,5 +899,68 @@ mod tests {
         assert_eq!(wave_column(&values, 1, 120), 0.01);
         assert_eq!(wave_column(&values, 14, 1920), 0.8);
         assert_eq!(wave_column(&values, 15, 1920), 0.8);
+    }
+    #[test]
+    fn clicking_a_paused_waveform_selects_the_corresponding_time() {
+        for seekable in [true, false] {
+            let ctx = egui::Context::default();
+            let snapshot = photosuite_application::comments::CaptureSnapshot {
+                seconds: 10.,
+                wave_span: 10.,
+                position: 2.,
+                wave: vec![0.05; 960],
+                ..Default::default()
+            };
+            let input = |events| egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 200.),
+                )),
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run(input(vec![]), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    recording_waveform(ui, &snapshot, seekable);
+                });
+            });
+            let rect = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(r) if (r.rect.height() - 68.).abs() < 0.1 => Some(r.rect),
+                    _ => None,
+                })
+                .unwrap();
+            let point = rect.center();
+            let mut selected = None;
+            let _ = ctx.run(
+                input(vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]),
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        selected = recording_waveform(ui, &snapshot, seekable);
+                    });
+                },
+            );
+            if seekable {
+                assert!((selected.unwrap() - 5.).abs() < 0.01);
+            } else {
+                assert!(selected.is_none());
+            }
+        }
     }
 }

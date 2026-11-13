@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 mod capture_time;
 pub use capture_time::CaptureTime;
+pub mod audio_edit;
 pub mod commands;
 pub mod comments;
 pub mod diary;
