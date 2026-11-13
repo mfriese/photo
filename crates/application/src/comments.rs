@@ -8,6 +8,8 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
 };
+/// Bounded telemetry window: 30 envelope measurements/sec over approximately 32 sec.
+pub const CAPTURE_WAVE_SAMPLES: usize = 960;
 #[derive(Clone, Debug)]
 pub struct InputDevice {
     pub id: String,
@@ -95,6 +97,11 @@ enum Outcome {
         result: Result<StoredComments, String>,
     },
 }
+#[derive(Clone, Copy)]
+enum SaveIntent {
+    Finish,
+    Ready,
+}
 pub struct CommentSession {
     repository: Arc<dyn CommentRepository>,
     recorder: Arc<dyn CommentRecorder>,
@@ -120,6 +127,7 @@ pub struct CommentSession {
     published: Option<Comment>,
     saved: bool,
     changed: bool,
+    save_intent: Option<SaveIntent>,
 }
 impl CommentSession {
     pub fn new(
@@ -152,6 +160,7 @@ impl CommentSession {
             published: None,
             saved: false,
             changed: false,
+            save_intent: None,
         }
     }
     pub fn devices(&self) -> &[InputDevice] {
@@ -191,6 +200,7 @@ impl CommentSession {
     }
     pub fn can_start(&self) -> bool {
         self.open
+            && !self.is_save_pending()
             && self.loaded
             && !self.saving
             && self.published.is_none()
@@ -367,6 +377,7 @@ impl CommentSession {
             return;
         }
         self.capture_owned = false;
+        self.save_intent = None;
         self.pending_start = false;
         self.open = false;
         self.target = None;
@@ -377,8 +388,37 @@ impl CommentSession {
         }
         self.published = None;
     }
+    pub fn is_save_pending(&self) -> bool {
+        self.save_intent.is_some()
+    }
+    /// Explicit save from the close confirmation: finalize first, then publish.
+    pub fn request_save(&mut self) -> Result<(), String> {
+        if self.saving || self.is_save_pending() {
+            return Ok(());
+        }
+        if !self.has_unsaved() {
+            return Err("Keine ungespeicherte Aufnahme vorhanden".into());
+        }
+        match self.snapshot.phase {
+            CapturePhase::Ready => self.save(),
+            CapturePhase::Preparing => {
+                self.save_intent = Some(SaveIntent::Finish);
+                Ok(())
+            }
+            CapturePhase::Recording | CapturePhase::Paused => {
+                self.recorder.command(CaptureCommand::Finish)?;
+                self.save_intent = Some(SaveIntent::Ready);
+                Ok(())
+            }
+            CapturePhase::Finishing => {
+                self.save_intent = Some(SaveIntent::Ready);
+                Ok(())
+            }
+            _ => Err("Aufnahme kann noch nicht gespeichert werden".into()),
+        }
+    }
     pub fn save(&mut self) -> Result<(), String> {
-        if self.saving || self.worker.is_some() || !self.loaded {
+        if self.saving || self.is_save_pending() || self.worker.is_some() || !self.loaded {
             return Err("Speicherauftrag noch nicht möglich".into());
         }
         let target = self.target.clone().ok_or("Foto fehlt")?;
@@ -451,6 +491,34 @@ impl CommentSession {
             {
                 self.pending_start = false;
                 self.snapshot = snapshot;
+            }
+        }
+        if let Some(intent) = self.save_intent {
+            match (intent, self.snapshot.phase) {
+                (SaveIntent::Finish, CapturePhase::Recording | CapturePhase::Paused) => {
+                    match self.recorder.command(CaptureCommand::Finish) {
+                        Ok(()) => self.save_intent = Some(SaveIntent::Ready),
+                        Err(error) => {
+                            self.error = error;
+                            self.save_intent = None;
+                        }
+                    }
+                }
+                (_, CapturePhase::Ready) => {
+                    self.save_intent = None;
+                    if let Err(error) = self.save() {
+                        self.error = error;
+                    }
+                }
+                (_, CapturePhase::Error) => {
+                    self.save_intent = None;
+                    self.error = if self.snapshot.message.is_empty() {
+                        "Aufnahme konnte nicht abgeschlossen werden".into()
+                    } else {
+                        self.snapshot.message.clone()
+                    };
+                }
+                _ => {}
             }
         }
         if let Some(worker) = &self.device_worker {
@@ -867,5 +935,49 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         panic!("copy did not finish after owner drop");
+    }
+    #[test]
+    fn close_save_finishes_a_paused_take_and_preserves_retry_on_storage_failure() {
+        let fake = Arc::new(Fake::default());
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
+        session.load("/library".into());
+        wait(&mut session);
+        session
+            .open_photo(PhotoTarget {
+                root: "/library".into(),
+                file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+                time: None,
+            })
+            .unwrap();
+        wait(&mut session);
+        session.start(fake.as_ref()).unwrap();
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Paused,
+            id: "new".into(),
+            ..Default::default()
+        };
+        session.poll();
+        session.request_save().unwrap();
+        assert!(session.is_save_pending());
+        assert!(!session.can_start());
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Ready,
+            id: "new".into(),
+            take: Some(CapturedTake {
+                id: "12345678-1234-1234-1234-123456789abc".into(),
+                path: "/tmp/take.m4a".into(),
+                recorded_at: "2026-11-12T15:30:00+01:00".into(),
+            }),
+            ..Default::default()
+        };
+        session.poll();
+        wait(&mut session);
+        assert!(session.has_unsaved());
+        assert!(!session.is_save_pending());
+        assert!(session.error().contains("Zuordnung noch nicht"));
+        session.request_save().unwrap();
+        wait(&mut session);
+        assert!(!session.has_unsaved());
+        assert_eq!(fake.copies.load(Ordering::SeqCst), 1);
     }
 }

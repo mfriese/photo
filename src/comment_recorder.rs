@@ -154,7 +154,7 @@ impl CommentRecorder for NativeCommentRecorder {
                             .map(|values| {
                                 values
                                     .iter()
-                                    .take(120)
+                                    .take(CAPTURE_WAVE_SAMPLES)
                                     .map(|n| n.as_f64().unwrap_or(0.).clamp(0., 1.) as f32)
                                     .collect()
                             })

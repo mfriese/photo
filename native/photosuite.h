@@ -52,3 +52,6 @@ int photosuite_comment_start(void *recorder,const char *device);
 // 0 pause, 1 resume, 2 finish, 3 preview play/pause, 4 discard/cancel.
 void photosuite_comment_command(void *recorder,int command);
 char *photosuite_comment_snapshot(void *recorder);
+
+// Matches application CAPTURE_WAVE_SAMPLES: 30-Hz envelope history, approximately 32 s.
+#define PHOTOSUITE_COMMENT_WAVE_SAMPLES 960

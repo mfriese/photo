@@ -32,6 +32,11 @@ static NSString *PSRecordDate(void){NSDateFormatter *f=[NSDateFormatter new];f.l
 static char *PSRecordJSON(id object){NSData *data=[NSJSONSerialization dataWithJSONObject:object options:0 error:nil];if(!data)return NULL;char *bytes=malloc(data.length+1);if(!bytes)return NULL;memcpy(bytes,data.bytes,data.length);bytes[data.length]=0;return bytes;}
 @implementation PSCommentRecorder
 - (instancetype)init{if((self=[super init])){_queue=dispatch_queue_create("de.photosuite.comment.capture",DISPATCH_QUEUE_SERIAL);_phase=@"idle";_message=@"";_wave=[NSMutableArray new];}return self;}
+// Keep every 30-Hz envelope measurement; 960 points span approximately 32 seconds.
+- (void)appendWaveLevel:(float)level {
+    [self.wave addObject:@(level)];
+    if(self.wave.count>PHOTOSUITE_COMMENT_WAVE_SAMPLES)[self.wave removeObjectAtIndex:0];
+}
 - (void)stopMeter {if(self.meter){dispatch_source_cancel(self.meter);self.meter=nil;}}
 - (void)startMeter {
     if(self.meter)return;
@@ -45,14 +50,14 @@ static char *PSRecordJSON(id object){NSData *data=[NSJSONSerialization dataWithJ
         double duration=CMTimeGetSeconds(s.output.recordedDuration);
         @synchronized(s){s.level=isfinite(db)?fminf(1,powf(10,db/20)):0;s.peak=isfinite(peak)?peak:-160;
             if(s.output && isfinite(duration)&&duration>=0)s.seconds=duration;
-            if([s.phase isEqualToString:@"recording"]||s.preview.isPlaying){[s.wave addObject:@(s.level)];if(s.wave.count>120)[s.wave removeObjectAtIndex:0];}}
+            if([s.phase isEqualToString:@"recording"]||s.preview.isPlaying){[s appendWaveLevel:s.level];}}
     });dispatch_resume(self.meter);
 }
 - (void)removeObservers {for(id observer in self.observers){[NSNotificationCenter.defaultCenter removeObserver:observer];}self.observers=nil;}
 - (void)deviceFailed:(NSString *)message {
     if(!self.capture || self.cancelled)return;
     @synchronized(self){self.message=message?:@"Mikrofonverbindung unterbrochen";}
-    if(self.output.isRecording){@synchronized(self){self.phase=@"finishing";}[self.output stopRecording];}
+    if(self.output.isRecording || self.output.isRecordingPaused){@synchronized(self){self.phase=@"finishing";}[self.output stopRecording];}
     else {[self.capture stopRunning];[self removeObservers];[self fail:message];self.keepAlive=nil;}
 }
 - (void)cleanup {
@@ -105,14 +110,14 @@ static char *PSRecordJSON(id object){NSData *data=[NSJSONSerialization dataWithJ
     dispatch_async(self.queue,^{@autoreleasepool{
         if(command==0 && self.output.isRecording){[self.output pauseRecording];@synchronized(self){self.phase=@"paused";}}
         else if(command==1 && self.output.isRecordingPaused){[self.output resumeRecording];@synchronized(self){self.phase=@"recording";}}
-        else if(command==2 && self.output.isRecording){@synchronized(self){self.phase=@"finishing";self.message=@"Aufnahme wird abgeschlossen …";}[self.output stopRecording];}
+        else if(command==2 && (self.output.isRecording || self.output.isRecordingPaused)){@synchronized(self){self.phase=@"finishing";self.message=@"Aufnahme wird abgeschlossen …";}[self.output stopRecording];}
         else if(command==3 && [self.phase isEqualToString:@"ready"]){
             if(self.preview.isPlaying){[self.preview pause];}
             else {NSError *error=nil;if(!self.preview){self.preview=[[AVAudioPlayer alloc] initWithContentsOfURL:self.file error:&error];self.preview.delegate=self;self.preview.meteringEnabled=YES;}
                 if(!self.preview||![self.preview play]){@synchronized(self){self.message=error.localizedDescription?:@"Probehören nicht möglich";}return;}[self startMeter];}
         }
         else if(command==4){self.cancelled=YES;++self.generation;[self.preview stop];
-            if(self.output.isRecording){@synchronized(self){self.phase=@"finishing";}[self.output stopRecording];}
+            if(self.output.isRecording || self.output.isRecordingPaused){@synchronized(self){self.phase=@"finishing";}[self.output stopRecording];}
             else {[self.capture stopRunning];self.capture=nil;self.output=nil;[self cleanup];@synchronized(self){self.phase=@"idle";self.seconds=0;self.message=@"";}self.keepAlive=nil;}
         }
     }});

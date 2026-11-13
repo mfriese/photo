@@ -1578,7 +1578,7 @@ impl photosuite_application::comments::CommentRepository for UnusedAdapters {
 
 #[test]
 fn photo_recording_dialog_fits_narrow_and_wide_windows_without_microphone_access() {
-    for width in [360., 800.] {
+    for (width, height) in [(360., 400.), (800., 600.)] {
         let mut suite = test_suite();
         suite.root = Some("/library".into());
         suite.items = vec![
@@ -1617,16 +1617,38 @@ fn photo_recording_dialog_fits_narrow_and_wide_windows_without_microphone_access
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(width, 600.),
+                        egui::vec2(width, height),
                     )),
                     ..Default::default()
                 },
                 |ctx| suite.comment_dialog(ctx),
             );
+            let mut status_rect = None;
+            let mut device_rect = None;
             for shape in output.shapes {
+                if let egui::Shape::Circle(circle) = &shape.shape
+                    && circle.radius == 6.
+                    && circle.fill == crate::theme::RECORD_RED
+                {
+                    assert!(
+                        circle.center.y + 6. <= height && circle.center.y - 6. >= 0.,
+                        "record button must stay visible at {width}x{height}"
+                    );
+                }
                 if let egui::Shape::Text(text) = shape.shape {
+                    if text.galley.job.text.is_empty() {
+                        continue;
+                    }
+                    if text.galley.job.text.starts_with("Bereit zur Aufnahme") {
+                        status_rect = Some(text.visual_bounding_rect());
+                    }
+                    if text.galley.job.text == "Systemstandard" {
+                        device_rect = Some(text.visual_bounding_rect());
+                    }
+                    assert_ne!(text.galley.job.text, "Schließen");
+                    assert!(!text.galley.job.text.starts_with("Gelb bis Rot:"));
                     crate::theme::assert_text_glyphs(&ctx, &text);
-                    if text.galley.job.text == "Aufnehmen" {
+                    if text.galley.job.text.starts_with("Bereit zur Aufnahme") {
                         found = true;
                     }
                     let rect = text.visual_bounding_rect();
@@ -1636,6 +1658,10 @@ fn photo_recording_dialog_fits_narrow_and_wide_windows_without_microphone_access
                         text.galley.job.text
                     );
                 }
+            }
+            if let (Some(status), Some(device)) = (status_rect, device_rect) {
+                assert!(status.right() < device.left());
+                assert!((status.center().y - device.center().y).abs() < 3.);
             }
         }
         assert!(found);

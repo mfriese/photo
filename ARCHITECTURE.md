@@ -288,3 +288,13 @@ TagCatalog::tags_for liefert Zugehörigkeiten für einen validierten LibraryFile
 
 ### Nachprüfung der Aufnahmegrenzen
 Die UI erhält nur lesenden Zugriff auf Sitzungssnapshot, Ziel, Lade-/Speicherzustand und Geräte. Änderungen erfolgen ausschließlich über validierte Aktionen; Phasenregeln gelten auch ohne GUI. Discard läuft über denselben Sitzungsübergang, statt den nativen Recorder am Sitzungszustand vorbei zu steuern. Ein PhotoTarget wird beim Öffnen erneut als Foto geprüft. Speicherworker halten den Recorder und dessen temporäre Aufnahme bis zum Kopierende am Leben, auch wenn der Sitzungsbesitzer unerwartet freigegeben wird. UUID-Schreibweisen werden im Comment-Aggregat vereinheitlicht, damit Groß-/Kleinschreibung keine zweite Identität erzeugt.
+
+Die Aufnahme-Pegelprojektion und Symbolgeometrie bleiben reine Präsentation (`presentation/comments`); Aufnahmezustände/Befehlsvalidierung bleiben in CommentSession. Der native Adapter behandelt pausierte Outputs explizit beim Stoppen und Verwerfen. ComboBox-Öffnen fordert die bestehende begrenzte Geräteabfrage an, ohne Dateizugriff oder neue Adapter im Dialog.
+
+Der native Aufnahmeadapter hält alle 30-Hz-Messungen in einem auf 960 Punkte begrenzten Puffer; die Punkte decken dadurch ungefähr 32 Sekunden statt vier ab. Live-Pegel und Bedienpolling werden nicht verlangsamt. Dies ist technische Messwertaufbereitung, ohne Änderung an Domänenzeiten oder Audiodaten.
+
+Die weitere Aufnahme-Dialogverdichtung bleibt ausschließlich Präsentation: Titel-X, feste Dreizonen-Transportzeile, proportionale Foto-Vorschau, physische Pixelstriche und dezente Pegelhilfen. Schließen delegiert unverändert an den bisherigen Unsaved-/Speicher-Schutz; der Bildloader wird nur über die vorhandene asynchrone egui-Schnittstelle verwendet.
+
+Der Schließdialog nutzt `CommentSession::request_save`: die Anwendung finalisiert vorbereitende/laufende/pausierte Aufnahmen und startet nach Ready den vorhandenen Speicherablauf. Die UI hält nur den Schließwunsch und schließt erst nach Erfolg; Speicherfehler erhalten Aufnahme und Bestätigung. Kein zweiter Speicherpfad im Dialog.
+
+Aufnahmeaktionen rechts unten sind reine Präsentationsprojektionen auf den bestehenden Schließschutz und request_save. Dichter Verlauf: Native/Port behalten maximal 960 Messwerte; UI ordnet sie lückenlos physischen Pixelspalten zu (Maximum beim Verdichten, Wiederholung beim Vergrößern) und färbt nach den vorhandenen Pegelgrenzen. Zeitskala und Audiobytes unverändert.

@@ -78,3 +78,20 @@ Die ursprüngliche Aufnahmeintegration hatte korrekte Cargo-Abhängigkeiten, abe
 Zusätzliche Regressionen prüfen diese Regeln ohne GUI, ungültige Referenzen vor jeglichem Adapterzugriff, Reihenfolge Validierung/Metadaten, Suffixauswahl in der Anwendung und case-unabhängige UUID-Identität. Gesamte Kernabhängigkeiten und Produktionspräsentation zusätzlich auf direkte Infrastruktur-/FS-/FFI-Zugriffe geprüft; Dateizugriffe in Integrationstests sind keine Produktionsabhängigkeiten. Dies ist keine formale Fehlerfreiheitsgarantie der Gesamtanwendung. Dokumentierte Grenzen (Mehrprozess-CAS, Absturzüberreste, macOS-Hardwaretest) bleiben bestehen.
 
 Prüfabschluss dieser Nachprüfung: 198 Rust-Tests bestanden (104 Desktop, 67 Anwendung, 27 Domäne); Kern zusätzlich separat getestet. Cargo-Abhängigkeitsprüfung, Formatierung, Clippy ohne Warnungen, Workspace-Build sowie native Audio-, Video-, Menü- und Recorder-Tests bestanden. Kein Zugriff auf ein echtes Mikrofon und keine Benutzerfotos verändert.
+
+## Aufnahmepegel und kompakter Transport
+Darstellung (logarithmische Pegelskala, Zielmarken, gezeichnete Symbole, feste Transportzeile) von der vorhandenen Sitzungssteuerung getrennt gehalten. Mikrofonliste wird einmal pro Öffnen über den begrenzten Geräteworker aktualisiert. Native Stop-/Cancel-Guards berücksichtigen auch isRecordingPaused, damit eine Pause nicht die Finalisierung verhindert. Regressionen prüfen Pegelabbildung/Reserve, konstante Transportmaße, schmale 360×400-Dialoge und native Fortsetzen-/Stop-Abläufe mit simuliertem pausiertem Output ohne Mikrofonzugriff.
+
+Abschluss: 200 Rust-Tests bestanden, Kern separat geprüft; Clippy, Formatierung, Workspace-Build, Cargo-Architekturprüfung und sämtliche nativen Tests grün. Reale Mikrofonaufnahme und manuelle Sichtprüfung nicht ausgeführt; Screenshots weiterhin zurückgestellt.
+
+Langsamer Kurvenverlauf: begrenzte Messwerthistorie bleibt im Aufnahmeadapter; Live-Pegel unverändert bei 30 Hz, 960-Punkte-Verlauf über ungefähr 32 Sekunden. Der native Regressionstest prüft Erhalt aller Messwerte und Speicherlimit ohne Mikrofonzugriff.
+
+## Aufnahme-Dialog: Dreizonenzeile und feine Kurve
+Reine Präsentationsänderung ohne neue Fachregeln oder Dateizugriffe: Titel-X erhält denselben Schließschutz, Status und Mikrofon erhalten begrenzte getrennte Bereiche, Fotoformat wird über den bestehenden asynchronen Bildloader ermittelt. Geometrietests prüfen variable proportionale Fotobreite und physische Pixelstriche samt Mittellinie; schmale Dialogregression prüft Status/Mikrofon in derselben Zeile und das Entfernen der alten Textbuttons/Hinweiszeile.
+
+Schließbestätigung: Layout bleibt Präsentation; automatisches Finalisieren vor Speichern liegt in CommentSession. Regressionen prüfen Abstände/nebeneinanderliegende Buttons sowie Speichern aus pausiertem Zustand mit wiederholbarem Zuordnungsfehler ohne zweite Kopie.
+
+## Dichter Aufnahmeverlauf und Symbolabschluss
+Footeraktionen verwenden unverändert request_save und bestehenden Schließschutz. Dropdown-Geometrie und Farb-/Pixelprojektion bleiben Präsentation; bounded Telemetrie enthält jetzt 960 statt 120 Messwerte, damit die 32-Sekunden-Zeitachse bei voller 30-Hz-Auflösung erhalten bleibt. Nativer Test prüft Erhalt jedes Messwerts/Speicherlimit; UI-Regressionen prüfen Peak-Erhalt beim Verdichten, lückenlose Pixelspalten und grün/gelb/rot. Keine neuen Medien-Schreibwege.
+
+Abschluss der dichten Kurven-/Footeranpassung: 205 Rust-Tests, native Tests, Clippy, Formatierung, Workspace-Build und Architekturprüfung bestanden; keine echte Mikrofonaufnahme und keine manuelle Sichtprüfung durchgeführt.

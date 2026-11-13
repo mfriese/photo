@@ -272,3 +272,13 @@ Neue Kommentare liegen als M4A/AAC im Audioordner des tatsächlichen Aufnahmejah
 Erster Entwurf für macOS: maximal eine Stunde je Aufnahme, Gerätewahl nur für die Sitzung. Pegel/Audiokurve zeigen die Amplitudenhüllkurve. Bei Speicherfehlern bleiben veröffentlichte Audiodateien erhalten; Zuordnung kann erneut gespeichert werden. Nach einem Absturz sind temporäre oder noch unzugeordnete Aufnahmen möglich. Einzelne extern umbenannte Bilder werden nicht automatisch neu zugeordnet. Transkription ist noch nicht enthalten. Automatisierte Tests greifen nicht auf dein Mikrofon zu; eine Aufnahme mit realem Eingabegerät wurde nicht manuell geprüft. Screenshots folgen wie vereinbart später.
 
 Die Audioaufnahme folgt denselben Architekturgrenzen wie die übrigen Anwendungsfälle: gekapselter Sitzungszustand, unabhängig testbare Veröffentlichungsregeln und getrennte Ports für Aufnahme, Medienoperationen und YAML-Verwaltung. UI und native Aufnahmeadapter entscheiden nicht über Kollisionsbenennung oder Fotozuordnungen.
+
+Die Aufnahmesteuerung bleibt im Dialog fest sichtbar: roter Kreis startet bzw. setzt fort, zwei Balken pausieren, das Quadrat beendet die Aufnahme. Eingabegeräte werden beim Öffnen der Auswahl aktualisiert. Gelb (−18 dBFS) bis Rot (−6 dBFS) kennzeichnet den empfohlenen Orientierungsbereich; oberhalb Rot verbleiben 6 dB Reserve bis 0 dBFS. Die App regelt die Mikrofonverstärkung nicht automatisch.
+
+Der Pegelverlauf läuft langsam über ungefähr 32 Sekunden (ein Achtel der ursprünglichen Geschwindigkeit); der Live-Pegel reagiert weiterhin schnell. Alle 30 Messungen je Sekunde bleiben im 960-Punkte-Verlauf erhalten; beim Anpassen an schmale Displays bleiben kurze Ausschläge durch Maximumsbildung sichtbar.
+
+Der Aufnahmedialog besitzt eine Titelzeile mit X. Aufnahmebuttons, Status und rechtsbündige Mikrofonauswahl teilen eine feste Zeile. Die langsam laufende Kurve zeigt feine, auf die Displayauflösung abgestimmte Striche, dezente Pegelgrenzen und eine vertikale Mittellinie.
+
+Beim Schließen einer ungespeicherten Aufnahme bietet der Dialog **Speichern** oder **Verwerfen**. Speichern beendet bei Bedarf zunächst die Aufnahme; erst nach erfolgreichem Speichern schließt der Dialog.
+
+Unten rechts im Aufnahmedialog: X zum Abbrechen mit Sicherheitsabfrage, Häkchen zum Abschließen/Speichern. Die Mikrofonauswahl ist rechtsbündig und gleich hoch wie die Aufnahmebuttons. Die dichte Kurve färbt Ausschläge unter der gelben Grenze grün, bis zur roten Grenze gelb und darüber rot.
