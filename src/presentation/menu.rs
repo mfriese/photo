@@ -209,7 +209,10 @@ impl Suite {
             }
             Action::Refresh => {
                 if let Some(root) = self.root.clone() {
-                    self.load(root);
+                    self.load(root.clone());
+                    if self.root.as_ref() == Some(&root) {
+                        self.comments.refresh_index();
+                    }
                 }
             }
             Action::Import => self.import_panel.open(self.root.clone()),

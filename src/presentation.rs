@@ -4,6 +4,7 @@ mod captions;
 mod chrome;
 mod comments;
 mod diary;
+mod icons;
 mod library;
 mod menu;
 mod tags;
@@ -26,6 +27,7 @@ pub struct Suite {
     search_open: bool,
     help_open: bool,
     audio_header: audio_header::AudioHeader,
+    viewer_audio: audio_header::AudioHeader,
     organization: photosuite_application::organization::OrganizationSession,
     tag_view: tags::TagView,
     diary: photosuite_application::diary::DiarySession,
@@ -74,7 +76,6 @@ impl Suite {
             self.comments.show();
             return;
         }
-        self.comments.load(path.clone());
         if self.root.as_ref() != Some(&path) || self.organization.catalog().is_none() {
             if let Err(error) = self.organization.open(path.clone()) {
                 self.status = error;
@@ -83,6 +84,7 @@ impl Suite {
             }
             self.tag_view.clear_scope();
         }
+        self.comments.load(path.clone());
         self.persist_preferences();
         self.preferences.library_scope = None;
         self.storyboard.clear();
@@ -219,14 +221,33 @@ impl Suite {
             return;
         }
         let mut p = self.snapshot();
-        crate::options_ui::show(
+        let index_action = crate::options_ui::show(
             ctx,
             &mut self.options_open,
             &mut p,
             self.editor.is_saving(),
             &mut self.bindings.visible,
             &self.preferences_error,
+            crate::options_ui::CommentIndexStatus {
+                available: self.comments.can_rebuild(),
+                rebuilding: self.comments.is_rebuilding(),
+                message: if self.comments.is_rebuilding() {
+                    &self.comments.rebuild_progress().phase
+                } else {
+                    self.comments.message()
+                },
+                error: self.comments.error(),
+            },
         );
+        match index_action {
+            Some(crate::options_ui::CommentIndexAction::Rebuild) => {
+                if let Err(error) = self.comments.rebuild() {
+                    self.status = error;
+                }
+            }
+            Some(crate::options_ui::CommentIndexAction::Cancel) => self.comments.cancel_rebuild(),
+            None => {}
+        }
         self.apply_preferences(p);
         self.persist_preferences();
     }
@@ -494,6 +515,7 @@ pub fn create(
         search_open: false,
         help_open: false,
         audio_header: Default::default(),
+        viewer_audio: Default::default(),
         organization: photosuite_application::organization::OrganizationSession::new(
             services.organization.clone(),
         ),

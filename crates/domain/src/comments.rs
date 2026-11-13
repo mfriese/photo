@@ -36,7 +36,8 @@ impl RecordedAt {
         };
         root.join(self.time.year())
             .join("audio")
-            .join(format!("comment_{}{suffix}.m4a", self.time.stamp()))
+            .join("c")
+            .join(format!("com_{}{suffix}.m4a", self.time.stamp()))
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,13 +75,14 @@ impl Comment {
         if audio == photo
             || !Media::from_audio_asset(PathBuf::from(audio.as_str()), String::new()).is_some_and(
                 |_| {
-                    Path::new(audio.as_str())
-                        .file_stem()
-                        .is_some_and(|s| s.to_string_lossy().to_lowercase().starts_with("comment_"))
+                    Path::new(audio.as_str()).file_stem().is_some_and(|s| {
+                        let name = s.to_string_lossy().to_lowercase();
+                        name.starts_with("comment_") || name.starts_with("com_")
+                    })
                 },
             )
         {
-            return Err("Kommentar benötigt eine comment_-Audiodatei".into());
+            return Err("Kommentar benötigt eine com_- oder ältere comment_-Audiodatei".into());
         }
         // Persisted photo time is a snapshot: normalize provenance so reload/retry
         // compares the same reference value rather than transient metadata labels.
@@ -94,6 +96,29 @@ impl Comment {
             recorded_at,
             photo_time,
         })
+    }
+    /// Dedicated metadata directory of the physical audio year. Legacy media stay in place.
+    pub fn sidecar(&self) -> LibraryFile {
+        let path = Path::new(self.audio.as_str());
+        let year = self
+            .audio
+            .as_str()
+            .split(std::path::MAIN_SEPARATOR)
+            .next()
+            .filter(|year| {
+                crate::diary::AudioScope::for_year(year, crate::diary::AudioKind::All).is_some()
+            })
+            .unwrap_or_else(|| self.recorded_at.time().year());
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        LibraryFile::new(
+            Path::new(year)
+                .join("audio")
+                .join("y")
+                .join(format!("{stem}.yaml"))
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .expect("validated relative audio path and year")
     }
     pub fn id(&self) -> &str {
         &self.id
@@ -189,7 +214,7 @@ mod tests {
         assert_eq!(c.logical_year(), "2008");
         assert_eq!(
             c.recorded_at().target(Path::new("/library"), 1),
-            PathBuf::from("/library/2026/audio/comment_20261112_153000_001.m4a")
+            PathBuf::from("/library/2026/audio/c/com_20261112_153000_001.m4a")
         );
         let m = Media::from_audio_asset(PathBuf::from(c.audio().as_str()), "2026/audio".into())
             .unwrap()

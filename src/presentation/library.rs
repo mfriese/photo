@@ -29,6 +29,9 @@ impl super::Suite {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
+                    if theme::navigation(ui,self.group.is_none() && self.tag_view.active.is_none(),"Alles").clicked() {
+                        self.group=None;self.tag_view.active=None;
+                    }
                     theme::eyebrow(ui,"Jahre");ui.add_space(2.);
                     for (year, months) in years.into_iter().rev() {
                         let response = egui::CollapsingHeader::new(egui::RichText::new(&year).size(14.).strong())
@@ -40,7 +43,7 @@ impl super::Suite {
                                     let response=egui::CollapsingHeader::new("Audio")
                                         .id_salt((&self.root,&audio)).default_open(false)
                                         .show(ui,|ui|{
-                                            for (kind,label) in [(crate::domain::diary::AudioKind::Diary,"Tagebuch"),(crate::domain::diary::AudioKind::Comments,"Fotokommentare")] {
+                                            for (kind,label) in [(crate::domain::diary::AudioKind::Diary,"Tagebuch"),(crate::domain::diary::AudioKind::Comments,"Kommentare")] {
                                                 let group=crate::domain::diary::AudioScope::for_year(&year,kind).unwrap().group();
                                                 if theme::navigation(ui,self.group.as_ref()==Some(&group),label).clicked() {
                                                     self.group=Some(group);self.tag_view.active=None;

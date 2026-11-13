@@ -19,6 +19,9 @@ impl Suite {
         }
 
         if self.comments.take_changed() {
+            if let Some((root, catalog)) = self.comments.authoritative_catalog() {
+                self.organization.reconcile_comments(root, catalog);
+            }
             for media in &mut self.items {
                 *media = self.comments.project(media.clone());
             }
@@ -29,6 +32,7 @@ impl Suite {
             }
             self.diary_catalog.cancel();
             self.audio_header.draft = Default::default();
+            self.viewer_audio = Default::default();
             self.media_dates.clear();
         }
         if self.comments.busy() || self.comments.is_open() {
@@ -497,10 +501,7 @@ fn preview_button(ui: &mut egui::Ui, playing: bool, enabled: bool) -> egui::Resp
     let response = if playing {
         transport_button(ui, true, enabled, false)
     } else {
-        let response = ui.add_enabled(
-            enabled,
-            egui::Button::new("").min_size(egui::vec2(34., 34.)),
-        );
+        let response = crate::theme::transport_button(ui, enabled, egui::vec2(34., 34.), "");
         let c = response.rect.center();
         ui.painter().add(egui::Shape::convex_polygon(
             vec![
@@ -508,7 +509,7 @@ fn preview_button(ui: &mut egui::Ui, playing: bool, enabled: bool) -> egui::Resp
                 c + egui::vec2(-4., 6.),
                 c + egui::vec2(6., 0.),
             ],
-            crate::theme::MUTED,
+            crate::theme::transport_symbol(enabled, false),
             egui::Stroke::NONE,
         ));
         response
@@ -608,20 +609,9 @@ fn capture_details(
 }
 // Draw transport shapes instead of font glyphs, keeping size and alignment stable.
 fn transport_button(ui: &mut egui::Ui, pause: bool, enabled: bool, stop: bool) -> egui::Response {
-    let response = ui.add_enabled(
-        enabled,
-        egui::Button::new("").min_size(egui::vec2(34., 34.)),
-    );
+    let response = crate::theme::transport_button(ui, enabled, egui::vec2(34., 34.), "");
     let center = response.rect.center();
-    let color = if enabled {
-        if !pause && !stop {
-            crate::theme::RECORD_RED
-        } else {
-            crate::theme::TEXT
-        }
-    } else {
-        crate::theme::MUTED
-    };
+    let color = crate::theme::transport_symbol(enabled, !pause && !stop);
     if stop {
         ui.painter().rect_filled(
             egui::Rect::from_center_size(center, egui::vec2(11., 11.)),

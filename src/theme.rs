@@ -15,6 +15,60 @@ pub const BADGE_BACKGROUND: Color32 = Color32::from_black_alpha(220);
 pub const BADGE_PADDING: f32 = 3.;
 pub const SELECTED: Color32 = Color32::from_rgb(43, 67, 103);
 
+pub const HOVER: Color32 = Color32::from_rgb(48, 59, 76);
+pub const DISABLED_TEXT: Color32 = Color32::from_rgb(100, 110, 125);
+pub const DISABLED_BG: Color32 = Color32::from_rgb(24, 28, 35);
+pub const DISABLED_BORDER: Color32 = Color32::from_rgb(34, 40, 50);
+pub const AUDIO_PENDING: Color32 = Color32::from_rgb(71, 77, 87);
+pub const AUDIO_ERROR: Color32 = Color32::from_rgb(166, 64, 51);
+pub const AUDIO_ODD: Color32 = Color32::from_rgb(92, 140, 201);
+pub const AUDIO_EVEN: Color32 = Color32::from_rgb(59, 102, 166);
+
+/// Shared transport geometry, border and interaction states, mirrored by native/theme.h.
+pub fn transport_button(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    size: egui::Vec2,
+    text: &str,
+) -> egui::Response {
+    ui.scope(|ui| {
+        ui.visuals_mut().disabled_alpha = 1.;
+        ui.visuals_mut().widgets.hovered.weak_bg_fill = HOVER;
+        let visuals = ui.visuals_mut();
+        for widget in [
+            &mut visuals.widgets.inactive,
+            &mut visuals.widgets.hovered,
+            &mut visuals.widgets.active,
+        ] {
+            widget.expansion = 0.;
+        }
+        if !enabled {
+            let visuals = ui.visuals_mut();
+            visuals.override_text_color = Some(DISABLED_TEXT);
+            for widget in [
+                &mut visuals.widgets.inactive,
+                &mut visuals.widgets.noninteractive,
+            ] {
+                widget.bg_fill = DISABLED_BG;
+                widget.weak_bg_fill = DISABLED_BG;
+                widget.bg_stroke = Stroke::new(1_f32, DISABLED_BORDER);
+                widget.fg_stroke = Stroke::new(1_f32, DISABLED_TEXT);
+            }
+        }
+        ui.add_enabled(enabled, egui::Button::new(text).min_size(size))
+    })
+    .inner
+}
+pub fn transport_symbol(enabled: bool, record: bool) -> Color32 {
+    if !enabled {
+        DISABLED_TEXT
+    } else if record {
+        RECORD_RED
+    } else {
+        TEXT
+    }
+}
+
 pub fn install(ctx: &egui::Context) {
     // Our gallery surfaces are always dark. Keep egui's selected style in sync,
     // including when a light OS theme arrives after application initialization.
@@ -63,7 +117,7 @@ pub fn install(ctx: &egui::Context) {
     v.widgets.inactive.weak_bg_fill = RAISED;
     v.widgets.inactive.bg_stroke = Stroke::new(1_f32, BORDER);
     v.widgets.inactive.fg_stroke = Stroke::new(1_f32, TEXT);
-    v.widgets.hovered.bg_fill = Color32::from_rgb(48, 59, 76);
+    v.widgets.hovered.bg_fill = HOVER;
     v.widgets.hovered.weak_bg_fill = RAISED;
     v.widgets.hovered.bg_stroke = Stroke::new(1_f32, ACCENT);
     v.widgets.hovered.fg_stroke = Stroke::new(1_f32, TEXT);

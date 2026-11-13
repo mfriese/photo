@@ -1,3 +1,4 @@
+#import "theme.h"
 #import "context_photo_view.h"
 
 @implementation PSContextPhotoSlot
@@ -42,7 +43,7 @@ NSRect PSContextPhotoFillRect(NSSize image, NSRect frame) {
     paragraph.alignment=NSTextAlignmentCenter;
     paragraph.lineBreakMode=NSLineBreakByTruncatingTail;
     return @{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular],
-             NSForegroundColorAttributeName:[NSColor colorWithWhite:0.94 alpha:1],
+             NSForegroundColorAttributeName:PS_THEME_TEXT,
              NSParagraphStyleAttributeName:paragraph};
 }
 - (void)drawRect:(NSRect)dirty {
@@ -51,7 +52,7 @@ NSRect PSContextPhotoFillRect(NSSize image, NSRect frame) {
         PSContextPhotoSlot *slot=self.slots[i];
         NSRect rect=[self slotRect:i];
         NSBezierPath *frame=[NSBezierPath bezierPathWithRoundedRect:rect xRadius:6 yRadius:6];
-        [[NSColor colorWithWhite:0.10 alpha:1] setFill];[frame fill];
+        [PS_THEME_CANVAS setFill];[frame fill];
         if(slot.image){
             [NSGraphicsContext saveGraphicsState];[frame addClip];
             [slot.image drawInRect:PSContextPhotoFillRect(slot.image.size,rect) fromRect:NSZeroRect
@@ -63,7 +64,7 @@ NSRect PSContextPhotoFillRect(NSSize image, NSRect frame) {
             NSString *text=size.width<=rect.size.width-4 ? slot.message : @"…";
             [text drawInRect:NSMakeRect(rect.origin.x,NSMidY(rect)-8,rect.size.width,16) withAttributes:attributes];
         }
-        [(i==2?NSColor.systemBlueColor:[NSColor colorWithWhite:0.4 alpha:1]) setStroke];
+        [(i==2?PS_THEME_ACCENT:PS_THEME_BORDER) setStroke];
         frame.lineWidth=i==2?2:0.5;[frame stroke];
         NSRect caption=[self captionRect:i];
         [slot.dateText drawInRect:NSMakeRect(caption.origin.x,caption.origin.y+15,caption.size.width,15) withAttributes:attributes];

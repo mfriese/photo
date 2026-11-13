@@ -74,8 +74,50 @@ pub struct StoredComments {
     pub catalog: CommentCatalog,
     pub revision: Option<Vec<u8>>,
 }
+pub struct RecoveryBase {
+    pub stored: StoredComments,
+    pub warning: String,
+}
+#[derive(Clone, Debug, Default)]
+pub struct RebuildProgress {
+    pub checked: usize,
+    pub phase: String,
+}
 pub trait CommentRepository: Send + Sync + 'static {
     fn load(&self, root: &Path) -> Result<StoredComments, String>;
+    fn write_sidecar(&self, root: &Path, comment: &Comment) -> Result<(), String>;
+    fn commit(
+        &self,
+        root: &Path,
+        comment: &Comment,
+        catalog: &CommentCatalog,
+        expected: Option<&[u8]>,
+    ) -> Result<Vec<u8>, String> {
+        self.write_sidecar(root, comment)?;
+        self.save(root, catalog, expected)
+    }
+    fn recovery_base(&self, root: &Path) -> Result<RecoveryBase, String> {
+        Ok(RecoveryBase {
+            stored: self.load(root)?,
+            warning: String::new(),
+        })
+    }
+    fn scan_sidecars(
+        &self,
+        _root: &Path,
+        _cancel: &std::sync::atomic::AtomicBool,
+        _progress: &dyn Fn(RebuildProgress),
+    ) -> Result<Vec<Comment>, String> {
+        Err("Indexaufbau nicht verfügbar".into())
+    }
+    fn replace_index(
+        &self,
+        root: &Path,
+        catalog: &CommentCatalog,
+        expected: Option<&[u8]>,
+    ) -> Result<Vec<u8>, String> {
+        self.save(root, catalog, expected)
+    }
     fn save(
         &self,
         root: &Path,
@@ -96,6 +138,10 @@ mod publication;
 pub use publication::publish_comment;
 
 enum Outcome {
+    Rebuilt {
+        root: PathBuf,
+        result: Result<(StoredComments, String), String>,
+    },
     Loaded(PathBuf, Result<StoredComments, String>),
     Saved {
         published: Option<Box<Comment>>,
@@ -107,6 +153,13 @@ enum SaveIntent {
     Finish,
     Ready,
 }
+/// In-memory projection for the current photo; never probes audio on the UI thread.
+#[derive(Default)]
+pub struct PhotoAudio {
+    pub items: Vec<Media>,
+    pub group: String,
+    pub year: String,
+}
 pub struct CommentSession {
     repository: Arc<dyn CommentRepository>,
     recorder: Arc<dyn CommentRecorder>,
@@ -116,6 +169,11 @@ pub struct CommentSession {
     revision: Option<Vec<u8>>,
     request: Option<PathBuf>,
     worker: Option<mpsc::Receiver<Outcome>>,
+    refresh_pending: bool,
+    rebuilding: bool,
+    rebuild_cancel: Arc<std::sync::atomic::AtomicBool>,
+    rebuild_progress: RebuildProgress,
+    rebuild_updates: Option<mpsc::Receiver<RebuildProgress>>,
     device_worker: Option<mpsc::Receiver<Result<Vec<InputDevice>, String>>>,
     devices: Vec<InputDevice>,
     device: String,
@@ -149,6 +207,11 @@ impl CommentSession {
             revision: None,
             request: None,
             worker: None,
+            refresh_pending: false,
+            rebuilding: false,
+            rebuild_cancel: Default::default(),
+            rebuild_progress: Default::default(),
+            rebuild_updates: None,
             device_worker: None,
             devices: Vec::new(),
             device: String::new(),
@@ -236,6 +299,9 @@ impl CommentSession {
         if self.root.as_ref() != Some(&root) {
             self.discard();
         }
+        self.rebuild_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.refresh_pending = false;
         self.root = Some(root.clone());
         self.catalog = CommentCatalog::default();
         self.revision = None;
@@ -248,6 +314,98 @@ impl CommentSession {
         if let Some(root) = self.root.clone() {
             self.load(root);
         }
+    }
+    /// Reconcile individual records after the ordinary reload completes, on the same bounded worker.
+    pub fn refresh_index(&mut self) {
+        if self.root.is_some() && !self.has_unsaved() && !self.saving {
+            self.refresh_pending = true;
+        }
+    }
+    /// An incomplete/failed load must never erase derived tag memberships.
+    pub fn authoritative_catalog(&self) -> Option<(&Path, &CommentCatalog)> {
+        (self.loaded && !self.refresh_pending && !self.rebuilding)
+            .then(|| (self.root.as_deref().unwrap(), &self.catalog))
+    }
+    pub fn is_rebuilding(&self) -> bool {
+        self.rebuilding
+    }
+    pub fn can_rebuild(&self) -> bool {
+        self.root.is_some()
+            && !self.has_unsaved()
+            && !self.saving
+            && self.worker.is_none()
+            && !self.rebuilding
+    }
+    pub fn rebuild_progress(&self) -> &RebuildProgress {
+        &self.rebuild_progress
+    }
+    pub fn cancel_rebuild(&mut self) {
+        self.rebuild_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn rebuild(&mut self) -> Result<(), String> {
+        if !self.can_rebuild() {
+            return Err("Bitte laufende Aufnahme oder Kommentarauftrag zuerst abschließen".into());
+        }
+        let root = self.root.clone().ok_or("Keine Bibliothek geöffnet")?;
+        let repository = self.repository.clone();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.rebuild_cancel = cancel.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let (progress, updates) = mpsc::sync_channel(16);
+        self.worker = Some(rx);
+        self.rebuild_updates = Some(updates);
+        self.rebuilding = true;
+        self.error.clear();
+        self.rebuild_progress = RebuildProgress {
+            checked: 0,
+            phase: "Kommentar-YAMLs werden vorbereitet …".into(),
+        };
+        std::thread::spawn(move || {
+            let result = (|| {
+                let base = repository.recovery_base(&root)?;
+                // Only missing individual records may be recovered from the readable cache.
+                for (index, comment) in base.stored.catalog.entries().values().enumerate() {
+                    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                        return Err("Neuaufbau abgebrochen; Gesamtdatei unverändert".into());
+                    }
+                    repository.write_sidecar(&root, comment)?;
+                    let _ = progress.try_send(RebuildProgress {
+                        checked: index + 1,
+                        phase: format!(
+                            "{} fehlende Kommentar-YAMLs aus dem Index ergänzt",
+                            index + 1
+                        ),
+                    });
+                }
+                let entries = repository.scan_sidecars(&root, &cancel, &|update| {
+                    let _ = progress.try_send(update);
+                })?;
+                let mut catalog = CommentCatalog::default();
+                for comment in entries {
+                    catalog.insert(comment)?;
+                }
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err("Neuaufbau abgebrochen; Gesamtdatei unverändert".into());
+                }
+                let revision =
+                    repository.replace_index(&root, &catalog, base.stored.revision.as_deref())?;
+                let message = format!(
+                    "Kommentarindex neu aufgebaut: {} Zuordnungen. {}",
+                    catalog.entries().len(),
+                    base.warning
+                );
+                Ok((
+                    StoredComments {
+                        catalog,
+                        revision: Some(revision),
+                    },
+                    message,
+                ))
+            })();
+            let _ = tx.send(Outcome::Rebuilt { root, result });
+        });
+        Ok(())
     }
     pub fn catalog(&self) -> &CommentCatalog {
         &self.catalog
@@ -262,7 +420,11 @@ impl CommentSession {
         self.capture_owned && !self.saved
     }
     pub fn busy(&self) -> bool {
-        self.saving || self.is_loading() || self.device_worker.is_some()
+        self.refresh_pending
+            || self.rebuilding
+            || self.saving
+            || self.is_loading()
+            || self.device_worker.is_some()
     }
     pub fn project(&self, media: Media) -> Media {
         let comment = self
@@ -273,6 +435,45 @@ impl CommentSession {
             .and_then(|p| LibraryFile::new(p.into()).ok())
             .and_then(|p| self.catalog.by_audio(&p));
         media.place_comment(comment)
+    }
+    pub fn audio_for_photo(&self, path: &Path) -> PhotoAudio {
+        let Some(root) = &self.root else {
+            return PhotoAudio::default();
+        };
+        let Some(file) = path
+            .strip_prefix(root)
+            .ok()
+            .and_then(Path::to_str)
+            .and_then(|p| LibraryFile::new(p.into()).ok())
+        else {
+            return PhotoAudio::default();
+        };
+        let comments = self.catalog.for_photo(&file);
+        let year = comments
+            .first()
+            .map(|c| c.logical_year())
+            .or_else(|| file.as_str().split('/').next())
+            .unwrap_or("")
+            .to_owned();
+        let Some(scope) = crate::domain::diary::AudioScope::for_year(
+            &year,
+            crate::domain::diary::AudioKind::Comments,
+        ) else {
+            return PhotoAudio::default();
+        };
+        let group = scope.group();
+        let items = comments
+            .into_iter()
+            .filter_map(|comment| {
+                let path = root.join(comment.audio().as_str());
+                let group = Path::new(comment.audio().as_str())
+                    .parent()?
+                    .to_string_lossy()
+                    .into_owned();
+                Media::from_audio_asset(path, group).map(|m| m.place_comment(Some(comment)))
+            })
+            .collect();
+        PhotoAudio { items, group, year }
     }
     pub fn comment_media(&self) -> Vec<Media> {
         let Some(root) = &self.root else {
@@ -491,8 +692,12 @@ impl CommentSession {
                             revision = current.revision;
                         }
                         catalog.insert(comment.clone())?;
-                        let revision =
-                            repository.save(&target.root, &catalog, revision.as_deref())?;
+                        let revision = repository.commit(
+                            &target.root,
+                            &comment,
+                            &catalog,
+                            revision.as_deref(),
+                        )?;
                         Ok(StoredComments {
                             catalog,
                             revision: Some(revision),
@@ -573,11 +778,35 @@ impl CommentSession {
                 Err(mpsc::TryRecvError::Empty) => {}
             }
         }
+        if let Some(updates) = &self.rebuild_updates {
+            for update in updates.try_iter().take(16) {
+                self.rebuild_progress = update;
+            }
+        }
         if let Some(worker) = &self.worker {
             match worker.try_recv() {
                 Ok(outcome) => {
                     self.worker = None;
                     match outcome {
+                        Outcome::Rebuilt { root, result } => {
+                            self.rebuilding = false;
+                            self.rebuild_updates = None;
+                            if self.root.as_ref() == Some(&root) {
+                                match result {
+                                    Ok((stored, message)) => {
+                                        self.catalog = stored.catalog;
+                                        self.revision = stored.revision;
+                                        self.loaded = true;
+                                        self.changed = true;
+                                        self.message = message;
+                                        self.error.clear();
+                                    }
+                                    Err(error) => {
+                                        self.error = error;
+                                    }
+                                }
+                            }
+                        }
                         Outcome::Loaded(root, result) if self.root.as_ref() == Some(&root) => {
                             match result {
                                 Ok(stored) => {
@@ -626,7 +855,10 @@ impl CommentSession {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.worker = None;
+                    self.refresh_pending = false;
                     self.saving = false;
+                    self.rebuilding = false;
+                    self.rebuild_updates = None;
                     self.error =
                         "Kommentarauftrag unerwartet beendet; vorhandene Dateien bleiben erhalten"
                             .into();
@@ -645,10 +877,18 @@ impl CommentSession {
                 let _ = tx.send(Outcome::Loaded(root, result));
             });
         }
+        if self.refresh_pending && self.request.is_none() && self.can_rebuild() {
+            self.refresh_pending = false;
+            if let Err(error) = self.rebuild() {
+                self.error = error;
+            }
+        }
     }
 }
 impl Drop for CommentSession {
     fn drop(&mut self) {
+        self.rebuild_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         if !self.saving {
             self.recorder.command(CaptureCommand::Discard).ok();
         }
@@ -669,6 +909,7 @@ mod tests {
         copies: AtomicUsize,
         saves: AtomicUsize,
         commands: AtomicUsize,
+        scans: AtomicUsize,
     }
     impl crate::diary::AudioPlayer for Fake {
         fn revise(
@@ -704,6 +945,34 @@ mod tests {
         }
     }
     impl CommentRepository for Fake {
+        fn scan_sidecars(
+            &self,
+            _: &Path,
+            _: &std::sync::atomic::AtomicBool,
+            _: &dyn Fn(RebuildProgress),
+        ) -> Result<Vec<Comment>, String> {
+            self.scans.fetch_add(1, Ordering::SeqCst);
+            Ok(self
+                .catalog
+                .lock()
+                .unwrap()
+                .entries()
+                .values()
+                .cloned()
+                .collect())
+        }
+        fn replace_index(
+            &self,
+            _: &Path,
+            catalog: &CommentCatalog,
+            _: Option<&[u8]>,
+        ) -> Result<Vec<u8>, String> {
+            *self.catalog.lock().unwrap() = catalog.clone();
+            Ok(vec![1])
+        }
+        fn write_sidecar(&self, _: &Path, _: &Comment) -> Result<(), String> {
+            Ok(())
+        }
         fn load(&self, _: &Path) -> Result<StoredComments, String> {
             Ok(StoredComments {
                 catalog: self.catalog.lock().unwrap().clone(),
@@ -747,6 +1016,25 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         panic!("worker did not finish");
+    }
+    #[test]
+    fn refresh_waits_for_load_then_rebuilds_once_and_never_publishes_an_empty_loading_catalog() {
+        let fake = Arc::new(Fake::default());
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
+        session.load("/library".into());
+        assert!(session.authoritative_catalog().is_none());
+        session.refresh_index();
+        wait(&mut session);
+        assert_eq!(fake.scans.load(Ordering::SeqCst), 1);
+        assert!(session.authoritative_catalog().is_some());
+        for _ in 0..5 {
+            session.poll();
+        }
+        assert_eq!(fake.scans.load(Ordering::SeqCst), 1);
+        session.load("/other".into());
+        assert!(session.authoritative_catalog().is_none());
+        wait(&mut session);
+        assert_eq!(fake.scans.load(Ordering::SeqCst), 1);
     }
     #[test]
     fn failed_reference_save_retries_without_copying_or_losing_take() {
@@ -852,7 +1140,8 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(path.file_name().unwrap().to_string_lossy().into_owned());
-            Ok(!path.to_string_lossy().ends_with("_002.m4a"))
+            Ok(path.extension().is_some_and(|ext| ext == "m4a")
+                && !path.to_string_lossy().ends_with("_002.m4a"))
         }
         fn copy_verified(&self, _: &Path, target: &Path) -> Result<(), String> {
             self.0
@@ -881,15 +1170,15 @@ mod tests {
         let comment = publish_comment(&store, &target, &take).unwrap();
         assert_eq!(
             comment.audio().as_str(),
-            "2026/audio/comment_20261112_153000_002.m4a"
+            "2026/audio/c/com_20261112_153000_002.m4a"
         );
         assert!(comment.photo_time().is_none());
         assert_eq!(comment.logical_year(), "2008");
         let trace = store.0.lock().unwrap();
         assert_eq!(trace[0], "validate");
         assert_eq!(trace[1], "date");
-        assert_eq!(trace.len(), 6);
-        assert!(trace[5].starts_with("copy:"));
+        assert_eq!(trace.len(), 7);
+        assert!(trace[6].starts_with("copy:"));
     }
     struct BlockingStore {
         entered: mpsc::SyncSender<()>,

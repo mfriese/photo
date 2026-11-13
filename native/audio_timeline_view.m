@@ -1,5 +1,6 @@
 #import "audio_timeline_view.h"
 #include <math.h>
+#import "theme.h"
 @implementation PSAudioClipViewModel
 @end
 NSString *PSAudioDateText(double civil) {
@@ -15,9 +16,9 @@ NSString *PSAudioClockText(double civil) {
     return [formatter stringFromDate:[NSDate dateWithTimeIntervalSince1970:civil]];
 }
 NSColor *PSAudioClipColor(unsigned int state,NSUInteger index) {
-    if(state==0)return [NSColor colorWithSRGBRed:0.28 green:0.30 blue:0.34 alpha:1];
-    if(state==2)return [NSColor colorWithSRGBRed:0.65 green:0.25 blue:0.20 alpha:1];
-    return [NSColor colorWithSRGBRed:(index%2?0.36:0.23) green:(index%2?0.55:0.40) blue:(index%2?0.79:0.65) alpha:1];
+    if(state==0)return PS_THEME_AUDIO_PENDING;
+    if(state==2)return PS_THEME_AUDIO_ERROR;
+    return index%2?PS_THEME_AUDIO_ODD:PS_THEME_AUDIO_EVEN;
 }
 @interface PSAudioTimeline ()
 @property(nonatomic,strong) NSTrackingArea *tracking;
@@ -42,10 +43,10 @@ NSColor *PSAudioClipColor(unsigned int state,NSUInteger index) {
         PSAudioClipViewModel *clip=self.clips[i];
         NSRect segment=NSMakeRect(8+width*offset/total,15,width*clip.weight/total,28);
         [PSAudioClipColor(clip.verification,i) setFill];NSRectFill(segment);
-        [[NSColor colorWithWhite:0.92 alpha:1] setFill];NSRectFill(NSMakeRect(segment.origin.x,15,1,28));offset+=clip.weight;
+        [PS_THEME_TEXT setFill];NSRectFill(NSMakeRect(segment.origin.x,15,1,28));offset+=clip.weight;
     }
     CGFloat x=8+width*MIN(1,MAX(0,self.position/total));
-    [NSColor.whiteColor setFill];NSRectFill(NSMakeRect(x-1,8,2,42));
+    [PS_THEME_TEXT setFill];NSRectFill(NSMakeRect(x-1,8,2,42));
     [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x-5,4,10,10)] fill];
 }
 - (void)updateTrackingAreas {

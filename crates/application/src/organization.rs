@@ -59,6 +59,7 @@ pub struct OrganizationSession {
     revision: u64,
     acknowledged: u64,
     catalog: Option<Arc<TagCatalog>>,
+    pending_comments: Option<(PathBuf, crate::domain::comments::CommentCatalog)>,
     loading: bool,
     saving: bool,
     error: String,
@@ -74,6 +75,7 @@ impl OrganizationSession {
             revision: 0,
             acknowledged: 0,
             catalog: None,
+            pending_comments: None,
             loading: false,
             saving: false,
             error: String::new(),
@@ -88,6 +90,7 @@ impl OrganizationSession {
             root: root.clone(),
             generation,
         })?;
+        self.pending_comments = None;
         self.root = Some(root);
         self.generation = generation;
         self.revision = 0;
@@ -150,10 +153,12 @@ impl OrganizationSession {
                 Change::Created(name)
             }
             Action::Rename { old, new } => {
+                let old = crate::domain::tags::normalize_tag_name(&old)?;
                 let new = catalog.rename(&old, &new)?;
                 Change::Renamed { old, new }
             }
             Action::Remove(tag) => {
+                let tag = crate::domain::tags::normalize_tag_name(&tag)?;
                 catalog.remove(&tag)?;
                 Change::Removed(tag)
             }
@@ -181,6 +186,44 @@ impl OrganizationSession {
         self.revision = revision;
         self.saving = true;
         Ok(change)
+    }
+    /// Queue only a successfully loaded authoritative catalog. UI never derives memberships.
+    pub fn reconcile_comments(
+        &mut self,
+        root: &Path,
+        comments: &crate::domain::comments::CommentCatalog,
+    ) {
+        if self.root.as_deref() == Some(root) {
+            self.pending_comments = Some((root.to_owned(), comments.clone()));
+        }
+    }
+    fn reconcile_pending_comments(&mut self) -> Result<(), String> {
+        if self.catalog.is_none() || self.loading {
+            return Ok(());
+        }
+        let Some((root, comments)) = self.pending_comments.take() else {
+            return Ok(());
+        };
+        if self.root.as_deref() != Some(root.as_path()) {
+            return Ok(());
+        }
+        let mut catalog = self.catalog.as_deref().unwrap().clone();
+        catalog.reconcile_comments(&comments);
+        if self.catalog.as_deref() == Some(&catalog) {
+            return Ok(());
+        }
+        let catalog = Arc::new(catalog);
+        let revision = self.revision + 1;
+        self.worker.submit(Request::Save {
+            root,
+            generation: self.generation,
+            revision,
+            catalog: catalog.clone(),
+        })?;
+        self.catalog = Some(catalog);
+        self.revision = revision;
+        self.saving = true;
+        Ok(())
     }
     pub fn retry(&mut self) -> Result<(), String> {
         if self.saving() {
@@ -262,6 +305,9 @@ impl OrganizationSession {
                 _ => {}
             }
         }
+        if let Err(error) = self.reconcile_pending_comments() {
+            self.error = format!("Kommentar-Tags nicht abgeglichen: {error}");
+        }
     }
 }
 impl Drop for OrganizationSession {
@@ -278,6 +324,9 @@ pub fn visible(
     tag: &str,
 ) -> Vec<usize> {
     let query = query.to_lowercase();
+    let Some(files) = catalog.files_for(tag) else {
+        return Vec::new();
+    };
     items
         .iter()
         .enumerate()
@@ -288,7 +337,7 @@ pub fn visible(
                     .strip_prefix(root)
                     .ok()
                     .and_then(Path::to_str)
-                    .is_some_and(|relative| catalog.contains(tag, relative))
+                    .is_some_and(|relative| files.contains(relative))
                 && (query.is_empty()
                     || media
                         .path()
@@ -349,6 +398,79 @@ mod tests {
         }
     }
     #[test]
+    fn comment_reconciliation_waits_for_tags_repairs_memberships_and_is_idempotent() {
+        use crate::domain::comments::{Comment, CommentCatalog, RecordedAt};
+        let repository = Arc::new(Memory::default());
+        let mut tags = TagCatalog::default();
+        tags.create("comment").unwrap();
+        tags.assign(
+            "comment",
+            LibraryFile::new("2000/01/stale.jpg".into()).unwrap(),
+            true,
+        )
+        .unwrap();
+        tags.create("Familie").unwrap();
+        *repository.catalog.lock().unwrap() = tags;
+        let mut comments = CommentCatalog::default();
+        let photo = LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap();
+        for n in 1..=2 {
+            comments
+                .insert(
+                    Comment::new(
+                        format!("12345678-1234-1234-1234-{n:012}"),
+                        LibraryFile::new(format!("2026/audio/c/com_20261113_120000_{n:03}.m4a"))
+                            .unwrap(),
+                        photo.clone(),
+                        RecordedAt::parse("2026-11-13T12:00:00+01:00").unwrap(),
+                        None,
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+        }
+        let mut session = OrganizationSession::new(repository.clone());
+        session.open("/photos".into()).unwrap();
+        session.reconcile_comments(Path::new("/photos"), &comments);
+        wait(&mut session, |s| s.catalog().is_some() && !s.dirty());
+        let tags = session.catalog().unwrap();
+        assert_eq!(tags.tags()["comment"].len(), 1);
+        assert!(tags.contains("comment", photo.as_str()));
+        assert!(tags.tags().contains_key("familie"));
+        assert!(!tags.contains("comment", "2000/01/stale.jpg"));
+        let writes = repository.saves.lock().unwrap().len();
+        session.reconcile_comments(Path::new("/photos"), &comments);
+        session.poll();
+        assert!(!session.dirty());
+        assert_eq!(repository.saves.lock().unwrap().len(), writes);
+        // Late results from a different library cannot alter this catalog.
+        session.reconcile_comments(Path::new("/other"), &CommentCatalog::default());
+        session.poll();
+        assert!(
+            session
+                .catalog()
+                .unwrap()
+                .contains("comment", photo.as_str())
+        );
+        repository.fail.store(true, Ordering::SeqCst);
+        session.reconcile_comments(Path::new("/photos"), &CommentCatalog::default());
+        session.poll();
+        wait(&mut session, |s| !s.saving());
+        assert!(session.dirty() && !session.error().is_empty());
+        assert!(!session.catalog().unwrap().tags().contains_key("comment"));
+        assert!(session.catalog().unwrap().tags().contains_key("familie"));
+        repository.fail.store(false, Ordering::SeqCst);
+        session.retry().unwrap();
+        wait(&mut session, |s| !s.dirty());
+        assert!(
+            !repository
+                .catalog
+                .lock()
+                .unwrap()
+                .tags()
+                .contains_key("comment")
+        );
+    }
+    #[test]
     fn slow_writer_coalesces_many_changes_and_flushes_only_the_latest_pending_snapshot() {
         struct Slow {
             entered: AtomicBool,
@@ -391,7 +513,7 @@ mod tests {
                     file: None
                 })
                 .unwrap(),
-            Change::Created("Familie".into())
+            Change::Created("familie".into())
         );
         let deadline = Instant::now() + Duration::from_secs(3);
         while !repo.entered.load(Ordering::SeqCst) {
@@ -488,7 +610,7 @@ mod tests {
                 present: true,
             })
             .unwrap();
-        assert!(session.catalog().unwrap().albums().contains("Urlaub"));
+        assert!(session.catalog().unwrap().albums().contains("urlaub"));
         let items = vec![
             Media::from_path("/photos/2023/01/a.jpg".into(), "2023/01".into()).unwrap(),
             Media::from_path("/photos/2024/01/a.jpg".into(), "2024/01".into()).unwrap(),

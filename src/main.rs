@@ -84,7 +84,11 @@ fn main() -> eframe::Result {
             copier: importer.clone(),
             dates: importer.clone(),
         }),
-        comments: std::sync::Arc::new(comments_fs::YamlComments),
+        comments: std::sync::Arc::new(comments_fs::YamlComments {
+            dates: importer.clone(),
+            copier: importer.clone(),
+            priority: priority.clone(),
+        }),
         recorder: std::sync::Arc::new(comment_recorder::NativeCommentRecorder::new()),
         media_dates: importer.clone(),
         organization: std::sync::Arc::new(tag_store::YamlTags),

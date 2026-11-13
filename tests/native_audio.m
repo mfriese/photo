@@ -65,10 +65,31 @@ static NSColor *timelinePixel(PSAudioTimeline *view) {
     [view drawRect:view.bounds];[NSGraphicsContext restoreGraphicsState];
     return [[bitmap colorAtX:20 y:58-1-25] colorUsingColorSpace:NSColorSpace.deviceRGBColorSpace];
 }
+static void assertColor(NSColor *actual,NSColor *expected) {
+    actual=[actual colorUsingColorSpace:NSColorSpace.deviceRGBColorSpace];expected=[expected colorUsingColorSpace:NSColorSpace.deviceRGBColorSpace];
+    assert(fabs(actual.redComponent-expected.redComponent)<.035);
+    assert(fabs(actual.greenComponent-expected.greenComponent)<.035);
+    assert(fabs(actual.blueComponent-expected.blueComponent)<.035);
+}
+static NSColor *buttonPixel(PSAudioButton *button,NSInteger x,NSInteger y) {
+    NSBitmapImageRep *bitmap=[[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:34 pixelsHigh:34 bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+    [NSGraphicsContext saveGraphicsState];[NSGraphicsContext setCurrentContext:[NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap]];
+    [button drawRect:button.bounds];[NSGraphicsContext restoreGraphicsState];return [bitmap colorAtX:x y:y];
+}
+static void checkTransportTheme(void) {
+    PSAudioButton *button=[[PSAudioButton alloc] initWithFrame:NSMakeRect(0,0,34,34)];button.image=PSAudioSymbolImage(PSAudioRecord);button.bordered=NO;
+    assertColor(buttonPixel(button,17,17),PS_THEME_RECORD_RED);
+    assertColor(buttonPixel(button,5,17),PS_THEME_RAISED);
+    assertColor(buttonPixel(button,0,17),PS_THEME_BORDER);
+    button.hovered=YES;assertColor(buttonPixel(button,5,17),PS_THEME_HOVER);assertColor(buttonPixel(button,0,17),PS_THEME_ACCENT);
+    [button highlight:YES];assertColor(buttonPixel(button,5,17),PS_THEME_SELECTED);[button highlight:NO];
+    button.hovered=NO;button.image=PSAudioSymbolImage(PSAudioPlay);assertColor(buttonPixel(button,17,17),PS_THEME_TEXT);
+    button.enabled=NO;assertColor(buttonPixel(button,17,17),PS_THEME_DISABLED_TEXT);assertColor(buttonPixel(button,5,17),PS_THEME_DISABLED_BG);assertColor(buttonPixel(button,0,17),PS_THEME_DISABLED_BORDER);
+}
 int main(int argc,char **argv) {
     assert(argc==3);
     @autoreleasepool {
-        [NSApplication sharedApplication];checkPhotoView();
+        [NSApplication sharedApplication];checkPhotoView();checkTransportTheme();
         NSWindow *audioWindow=PSAudioCreateWindow();
         assert(audioWindow.level>NSNormalWindowLevel);
         assert(audioWindow.hidesOnDeactivate);
@@ -164,6 +185,33 @@ int main(int argc,char **argv) {
         assert(!compact.window.visible && compact.transport.player.currentItem==shared);
         assert(photosuite_audio_transport_state(embedded,&position,&currentDate)&1);
         assert(photosuite_audio_control(embedded,1,0.5)==0);loaded(compact);
+        // Native symbol controls remain centered and retain equal dimensions.
+        for(NSNumber *width in @[@440,@740,@1600]){
+            [compact.window setContentSize:NSMakeSize(width.doubleValue,370)];[compact.window.contentView layoutSubtreeIfNeeded];
+            assert(fabs(NSMidX(compact.controlGroup.frame)-compact.window.contentView.bounds.size.width/2)<.5);
+            assert(compact.controlGroup.arrangedSubviews.count==4);
+            assert(NSMinY(compact.controlGroup.frame)>=0);
+            assert(NSMaxY(compact.controlGroup.frame)<=NSMinY(compact.contextPhotos.frame));
+            for(NSView *button in compact.controlGroup.arrangedSubviews){
+                NSRect actual=[button convertRect:button.bounds toView:compact.window.contentView];
+                assert(actual.size.width>0&&actual.size.height>0);
+                assert(NSContainsRect(compact.window.contentView.bounds,actual));
+                assert(NSMaxY(actual)<NSMinY(compact.contextPhotos.frame));
+                assert(!button.isHiddenOrHasHiddenAncestor);
+            }
+            NSSize first=compact.controlGroup.arrangedSubviews[0].frame.size;
+            assert(fabs(first.width-34)<.5&&fabs(first.height-34)<.5);
+            for(NSButton *button in compact.controlGroup.arrangedSubviews){assert(button.title.length==0&&button.image&&!button.image.isTemplate&&!button.isBordered);assert(fabs(button.frame.size.width-first.width)<.5&&fabs(button.frame.size.height-first.height)<.5);}
+        }
+        compact.transport.wantsPlay=YES;[compact tick:nil];assert(compact.playButton.image==PSAudioSymbolImage(PSAudioPause));
+        [compact toggle:nil];assert(!compact.transport.wantsPlay);assert(compact.playButton.image==PSAudioSymbolImage(PSAudioPlay));
+        // Record intent is tied to the visible center photo; it never opens a microphone.
+        compact.photoRequest=1234;compact.photosStarted=YES;compact.photoPath=compact.transport.path;compact.photoRecordedAt=compact.timeline.clips[[compact currentIndex]].recordedAt;compact.lastPhotoSeek=compact.settledPhotoSeek;
+        compact.contextPhotos.loading=NO;compact.contextPhotos.slots[2].image=[[NSImage alloc] initWithSize:NSMakeSize(8,8)];[compact tick:nil];assert(compact.recordButton.enabled);
+        [compact.recordButton performClick:nil];unsigned long long recordSession=0,recordRequest=0;unsigned int recordSlot=99;
+        assert(photosuite_audio_context_record(&recordSession,&recordRequest,&recordSlot)==1);assert(recordSession==embedded&&recordRequest==1234&&recordSlot==2);assert(!compact.transport.wantsPlay&&!compact.window.visible);assert(photosuite_audio_context_record(&recordSession,&recordRequest,&recordSlot)==0);
+        compact.contextPhotos.loading=YES;[compact recordCurrentPhoto:nil];assert(photosuite_audio_context_record(&recordSession,&recordRequest,&recordSlot)==0);
+        compact.contextPhotos.loading=NO;[compact recordCurrentPhoto:nil];compact.photoRequest++;assert(photosuite_audio_context_record(&recordSession,&recordRequest,&recordSlot)==0);
         assert(photosuite_audio_control(embedded,3,0)==0);
         assert(!compact.transport.player.currentItem && photosuite_audio_state(embedded)==0);
         puts("Native audio: provisional weights/colors, real playback, in-place reorder, position preservation, seeks, corrected auto-advance, photo clicks and cancellation OK");

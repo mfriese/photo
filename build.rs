@@ -1,4 +1,19 @@
 fn main() {
+    println!("cargo:rerun-if-changed=src/theme.rs");
+    println!("cargo:rerun-if-changed=native/theme.h");
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let theme = std::fs::read_to_string("src/theme.rs").unwrap();
+    let mut header = String::from("// Generated from src/theme.rs; do not edit.\n");
+    for line in theme.lines() {
+        if let Some((name, value)) = line
+            .strip_prefix("pub const ")
+            .and_then(|s| s.split_once(": Color32 = Color32::from_rgb("))
+        {
+            let rgb = value.strip_suffix(");").expect("theme RGB literal");
+            header.push_str(&format!("#define PS_THEME_{name} PSThemeColor({rgb})\n"));
+        }
+    }
+    std::fs::write(out.join("theme_palette.h"), header).unwrap();
     for source in [
         "native/audio.m",
         "native/comment_recorder.m",
@@ -21,7 +36,6 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
-    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
         Ok("aarch64") => "arm64",
         Ok("x86_64") => "x86_64",
@@ -56,6 +70,8 @@ fn main() {
                     arch,
                     "-c"
                 ])
+                .arg("-I")
+                .arg(&out)
                 .arg(format!("native/{source}.m"))
                 .arg("-o")
                 .arg(&object)

@@ -144,7 +144,7 @@ impl CaptureTime {
             format!("_{suffix:03}")
         };
         let (folder, prefix) = if media.is_audio() {
-            ("audio", "aud")
+            ("audio/d", "aud")
         } else {
             (self.month.as_str(), "img")
         };
@@ -162,11 +162,11 @@ mod tests {
         let media = Media::from_path("a.WAV".into(), String::new()).unwrap();
         assert_eq!(
             time.target(Path::new("library"), &media, 0),
-            PathBuf::from("library/2008/audio/aud_20080916_035811.wav")
+            PathBuf::from("library/2008/audio/d/aud_20080916_035811.wav")
         );
         assert_eq!(
             time.target(Path::new("library"), &media, 2),
-            PathBuf::from("library/2008/audio/aud_20080916_035811_002.wav")
+            PathBuf::from("library/2008/audio/d/aud_20080916_035811_002.wav")
         );
     }
     #[test]

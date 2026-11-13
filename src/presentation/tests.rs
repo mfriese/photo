@@ -183,6 +183,7 @@ fn test_suite() -> Suite {
         search_open: false,
         help_open: false,
         audio_header: Default::default(),
+        viewer_audio: Default::default(),
         organization: photosuite_application::organization::OrganizationSession::new(
             adapters.clone(),
         ),
@@ -260,6 +261,7 @@ fn audio_photo_event_reveals_year_without_viewer_or_focus_change() {
             photosuite_application::diary::AudioPlayerUpdate {
                 is_open: true,
                 photo_to_reveal: self.0.lock().unwrap().take(),
+                photo_to_record: None,
             }
         }
     }
@@ -494,12 +496,12 @@ fn library_years_start_collapsed_and_expand_on_click() {
             .iter()
             .any(|(text, _)| text == "Alle Aufnahmen")
     );
-    for label in ["Tagebuch", "Fotokommentare"] {
+    for label in ["Tagebuch", "Kommentare"] {
         assert!(audio_entries.iter().any(|(text, _)| text == label));
     }
     let comments = audio_entries
         .iter()
-        .find(|(text, _)| text == "Fotokommentare")
+        .find(|(text, _)| text == "Kommentare")
         .unwrap()
         .1
         .center();
@@ -1005,16 +1007,17 @@ fn tag_cloud_includes_non_album_tags_and_preserves_year_navigation() {
         assert!(!texts.iter().any(|(text, _)| *text == removed));
     }
     let bounds = |label| texts.iter().find(|(text, _)| *text == label).unwrap().1;
+    assert!(bounds("Alles").bottom() < bounds("2023").top());
     assert!(bounds("Tags").top() > bounds("2023").bottom());
     assert!(
-        (bounds("A").center().y - bounds("B").center().y).abs() < 2.,
+        (bounds("a").bottom() - bounds("b").bottom()).abs() < 2.,
         "short tags should share a row"
     );
     let target = output
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) if text.galley.job.text == "Urlaub" => {
+            egui::Shape::Text(text) if text.galley.job.text == "urlaub" => {
                 Some(text.visual_bounding_rect().center())
             }
             _ => None,
@@ -1038,12 +1041,33 @@ fn tag_cloud_includes_non_album_tags_and_preserves_year_navigation() {
         ]),
         |ctx| suite.library_sidebar(ctx),
     );
-    assert_eq!(suite.tag_view.active.as_deref(), Some("Urlaub"));
+    assert_eq!(suite.tag_view.active.as_deref(), Some("urlaub"));
     suite.videos_only = false;
     assert_eq!(suite.visible(), vec![0]);
     suite.tag_view.active = None;
     suite.group = Some("2024".into());
     assert_eq!(suite.visible(), vec![1]);
+    let point = bounds("Alles").center();
+    let _ = ctx.run(
+        input(vec![
+            egui::Event::PointerMoved(point),
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]),
+        |ctx| suite.library_sidebar(ctx),
+    );
+    assert!(suite.group.is_none() && suite.tag_view.active.is_none());
+    assert_eq!(suite.visible(), vec![0, 1]);
 }
 #[test]
 fn tag_dialog_fits_narrow_windows_and_mixed_albums_do_not_send_audio_to_image_viewer() {
@@ -1141,7 +1165,7 @@ fn tag_checkbox_assigns_and_removes_the_current_file() {
     });
     // First frame can be used by egui for automatic window sizing.
     if !output.shapes.iter().any(
-        |shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="Urlaub"),
+        |shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="urlaub"),
     ) {
         output = ctx.run(input(vec![]), |ctx| {
             suite.tag_view.show(ctx, &mut suite.organization)
@@ -1151,7 +1175,7 @@ fn tag_checkbox_assigns_and_removes_the_current_file() {
         .shapes
         .iter()
         .find_map(|shape| match &shape.shape {
-            egui::Shape::Text(text) if text.galley.job.text == "Urlaub" => {
+            egui::Shape::Text(text) if text.galley.job.text == "urlaub" => {
                 Some(text.visual_bounding_rect().center())
             }
             _ => None,
@@ -1557,6 +1581,13 @@ impl photosuite_application::comments::CommentRecorder for UnusedAdapters {
     }
 }
 impl photosuite_application::comments::CommentRepository for UnusedAdapters {
+    fn write_sidecar(
+        &self,
+        _: &std::path::Path,
+        _: &crate::domain::comments::Comment,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn load(
         &self,
         _: &std::path::Path,
@@ -1690,4 +1721,63 @@ impl photosuite_application::comments::CommentMediaStore for UnusedAdapters {
     fn copy_verified(&self, _: &std::path::Path, _: &std::path::Path) -> Result<(), String> {
         Err("unused".into())
     }
+}
+
+#[test]
+fn player_record_intent_opens_the_recording_target_without_starting_capture_or_changing_gallery() {
+    struct RecordIntent(std::sync::Mutex<Option<PathBuf>>);
+    impl photosuite_application::diary::AudioPlayer for RecordIntent {
+        fn open(
+            &self,
+            _: &crate::domain::diary_timeline::DiaryTimeline,
+            _: &std::path::Path,
+            _: &[Media],
+        ) -> Result<(), String> {
+            panic!("record intent must not reopen playback")
+        }
+        fn revise(
+            &self,
+            _: &crate::domain::diary_timeline::DiaryTimeline,
+            _: &photosuite_application::diary::VerificationProgress,
+        ) -> Result<(), String> {
+            panic!("record intent must not revise playback")
+        }
+        fn poll(&self) -> photosuite_application::diary::AudioPlayerUpdate {
+            photosuite_application::diary::AudioPlayerUpdate {
+                is_open: true,
+                photo_to_reveal: None,
+                photo_to_record: self.0.lock().unwrap().take(),
+            }
+        }
+    }
+    let ctx = egui::Context::default();
+    let mut suite = test_suite();
+    suite.root = Some("/Photos".into());
+    suite.group = Some("2008".into());
+    suite.items = vec![
+        Media::from_path(
+            "/Photos/2008/09/img_20080916_035811.jpg".into(),
+            "2008/09".into(),
+        )
+        .unwrap(),
+    ];
+    suite.services.audio_player = Arc::new(RecordIntent(std::sync::Mutex::new(Some(
+        suite.items[0].path().into(),
+    ))));
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        suite.poll_audio_player(ctx)
+    });
+    assert_eq!(suite.record_photo, Some(0));
+    assert_eq!(suite.group.as_deref(), Some("2008"));
+    assert!(suite.selected.is_none());
+    assert!(!suite.comments.has_unsaved());
+    suite.record_photo = None;
+    suite.services.audio_player = Arc::new(RecordIntent(std::sync::Mutex::new(Some(
+        "/Other/a.jpg".into(),
+    ))));
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        suite.poll_audio_player(ctx)
+    });
+    assert!(suite.record_photo.is_none());
+    assert!(!suite.status.is_empty());
 }

@@ -73,6 +73,7 @@ impl DiaryClip {
 pub struct DiaryTimeline {
     year: String,
     kind: crate::diary::AudioKind,
+    month: Option<String>,
     clips: Vec<DiaryClip>,
 }
 impl DiaryTimeline {
@@ -89,6 +90,7 @@ impl DiaryTimeline {
         }
         let mut timeline = Self {
             year,
+            month: None,
             clips,
             kind: crate::diary::AudioKind::All,
         };
@@ -109,6 +111,18 @@ impl DiaryTimeline {
     pub fn with_kind(mut self, kind: crate::diary::AudioKind) -> Self {
         self.kind = kind;
         self
+    }
+    pub fn with_month(mut self, month: Option<String>) -> Result<Self, String> {
+        if let Some(month) = &month
+            && (month.len() != 2 || !month.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)))
+        {
+            return Err("Ungültiger Audiomonat".into());
+        }
+        self.month = month;
+        Ok(self)
+    }
+    pub fn month(&self) -> Option<&str> {
+        self.month.as_deref()
     }
     pub fn kind(&self) -> crate::diary::AudioKind {
         self.kind

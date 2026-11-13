@@ -1,3 +1,4 @@
+use super::icons::{Icon, button};
 use super::image_uri;
 use eframe::egui;
 impl super::Suite {
@@ -22,51 +23,36 @@ impl super::Suite {
             let mut next = false;
             let mut previous = false;
             let mut open = true;
-            egui::Window::new("Großansicht")
+            let m = self.items[index].clone();
+            let (date, clock, date_detail) = super::captions::text(&mut self.media_dates, &m);
+            egui::Window::new(format!("Großansicht · {date} {clock}"))
+                .id(egui::Id::new("media_viewer"))
                 .open(&mut open)
                 .default_size([950., 700.])
                 .max_width((ctx.content_rect().width() - 32.).max(280.))
                 .max_height((ctx.content_rect().height() - 32.).max(240.))
                 .show(ctx, |ui| {
                     crate::options_ui::spacing(ui);
-                    let m = &self.items[index];
-                    let (date, clock, date_detail) =
-                        super::captions::text(&mut self.media_dates, m);
-                    ui.horizontal(|ui| {
-                        if m.is_photo() && ui.button("Aufnahme …").clicked() {
-                            self.record_photo = Some(index);
-                        }
-                        if ui.button("Tags …").clicked() {
-                            match self.organization.file(m.path()) {
-                                Ok(file) => self.tag_view.edit(file),
-                                Err(error) => self.status = error,
-                            }
-                        }
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(format!("{date} {clock}")).strong(),
-                            )
-                            .truncate(),
-                        )
-                        .on_hover_text(date_detail)
-                        .context_menu(|ui| {
-                            if ui.button("Tags bearbeiten …").clicked() {
-                                match self.organization.file(m.path()) {
-                                    Ok(file) => self.tag_view.edit(file),
-                                    Err(error) => self.status = error,
-                                }
-                                ui.close();
-                            }
-                        });
-                    });
                     let actions = viewer_controls(
                         ui,
-                        m.is_video(),
-                        position,
-                        visible.len(),
-                        self.editor.is_saving(),
-                        self.write_exif,
+                        ViewerState {
+                            video: m.is_video(),
+                            position,
+                            total: visible.len(),
+                            saving: self.editor.is_saving(),
+                            write_exif: self.write_exif,
+                        },
+                        |ui| self.compact_photo_audio(ui, m.path()),
                     );
+                    if actions.record {
+                        self.record_photo = Some(index);
+                    }
+                    if actions.tags {
+                        match self.organization.file(m.path()) {
+                            Ok(file) => self.tag_view.edit(file),
+                            Err(error) => self.status = error,
+                        };
+                    }
                     previous = actions.previous;
                     next = actions.next;
                     if actions.external
@@ -89,7 +75,8 @@ impl super::Suite {
                         centered_preview(
                             ui,
                             egui::Image::from_uri(image_uri(m.path(), self.editor.rotations())),
-                        );
+                        )
+                        .on_hover_text(&date_detail);
                     }
                 });
             if !self.comments.is_open() && !self.tag_view.open {
@@ -117,16 +104,29 @@ struct ViewerActions {
     next: bool,
     external: bool,
     reload: bool,
+    record: bool,
+    tags: bool,
     command: Option<crate::commands::Command>,
 }
-fn viewer_controls(
-    ui: &mut egui::Ui,
+struct ViewerState {
     video: bool,
     position: Option<usize>,
     total: usize,
     saving: bool,
     write_exif: bool,
+}
+fn viewer_controls(
+    ui: &mut egui::Ui,
+    state: ViewerState,
+    audio: impl FnOnce(&mut egui::Ui),
 ) -> ViewerActions {
+    let ViewerState {
+        video,
+        position,
+        total,
+        saving,
+        write_exif,
+    } = state;
     use crate::commands::Command;
     let mut actions = ViewerActions::default();
     egui::Frame::group(ui.style())
@@ -136,98 +136,81 @@ fn viewer_controls(
         .inner_margin(6.)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let cell_width =
-                ((ui.available_width() - 3. * ui.spacing().item_spacing.x) / 4.).clamp(1., 112.);
-            let button = |text| egui::Button::new(text).wrap_mode(egui::TextWrapMode::Truncate);
+            ui.spacing_mut().item_spacing.x = 6.;
             ui.horizontal(|ui| {
-                actions.previous = ui
-                    .add_enabled_ui(position.is_some_and(|p| p > 0), |ui| {
-                        ui.add_sized([cell_width, 28.], button("Zurück"))
-                    })
-                    .inner
-                    .on_hover_text("Vorheriges Medium · Pfeiltaste links")
-                    .clicked();
-                actions.next = ui
-                    .add_enabled_ui(position.is_some_and(|p| p + 1 < total), |ui| {
-                        ui.add_sized([cell_width, 28.], button("Weiter"))
-                    })
-                    .inner
-                    .on_hover_text("Nächstes Medium · Pfeiltaste rechts")
-                    .clicked();
-                actions.external = ui
-                    .add_sized([cell_width, 28.], button("Extern öffnen"))
-                    .on_hover_text("Im Standardprogramm öffnen")
-                    .clicked();
-                let position = position
-                    .map(|p| format!("{} / {total}", p + 1))
-                    .unwrap_or_else(|| "Außerhalb des Filters".into());
-                ui.add_sized([cell_width, 28.], egui::Label::new(&position).truncate())
-                    .on_hover_text(position);
+                actions.previous = button(
+                    ui,
+                    Icon::Previous,
+                    position.is_some_and(|p| p > 0),
+                    "Vorheriges Medium · Pfeiltaste links",
+                )
+                .clicked();
+                actions.next = button(
+                    ui,
+                    Icon::Next,
+                    position.is_some_and(|p| p + 1 < total),
+                    "Nächstes Medium · Pfeiltaste rechts",
+                )
+                .clicked();
+                actions.external =
+                    button(ui, Icon::External, true, "Im Standardprogramm öffnen").clicked();
+                actions.tags = button(ui, Icon::Tag, true, "Tags bearbeiten").clicked();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width().max(1.), 34.),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    audio,
+                );
             });
             ui.horizontal(|ui| {
                 if video {
-                    if ui
-                        .add_sized([cell_width, 28.], button("Abspielen"))
-                        .on_hover_text("Im PhotoSuite-Player abspielen · Leertaste (Standard)")
-                        .clicked()
-                    {
+                    if button(ui, Icon::Play, true, "Video abspielen · Leertaste").clicked() {
                         actions.command = Some(Command::PlayVideo);
                     }
-                    actions.reload = ui
-                        .add_sized([cell_width, 28.], button("Vorschau laden"))
-                        .on_hover_text("Alle sechs Videovorschaubilder erneut laden")
-                        .clicked();
-                    ui.allocate_exact_size(egui::vec2(cell_width, 28.), egui::Sense::hover());
+                    actions.reload = button(
+                        ui,
+                        Icon::Reload,
+                        true,
+                        "Sechs Videovorschaubilder erneut laden",
+                    )
+                    .clicked();
+                    ui.allocate_exact_size(egui::vec2(34., 34.), egui::Sense::hover());
                 } else {
-                    for (command, label, help) in [
+                    for (command, icon, help) in [
                         (
                             Command::RotateLeft,
-                            "Links drehen",
+                            Icon::RotateLeft,
                             "90° gegen den Uhrzeigersinn drehen",
                         ),
                         (
                             Command::RotateRight,
-                            "Rechts drehen",
+                            Icon::RotateRight,
                             "90° im Uhrzeigersinn drehen",
                         ),
                         (
                             Command::ResetRotation,
-                            "Zurücksetzen",
-                            "Sitzungsdrehung verwerfen und gespeicherte EXIF-Ausrichtung anzeigen",
+                            Icon::Reset,
+                            "Sitzungsdrehung zurücksetzen",
                         ),
                     ] {
-                        if ui
-                            .add_enabled_ui(!saving, |ui| {
-                                ui.add_sized([cell_width, 28.], button(label))
-                            })
-                            .inner
-                            .on_hover_text(help)
-                            .clicked()
-                        {
+                        let mode = if saving {
+                            "Speichert …"
+                        } else if write_exif {
+                            "EXIF-Schreiben aktiviert: neue Drehungen ändern die JPEG-Datei"
+                        } else {
+                            "Nur Sitzungsdrehung · Original unverändert"
+                        };
+                        if button(ui, icon, !saving, &format!("{help}\n{mode}")).clicked() {
                             actions.command = Some(command);
                         }
                     }
                 }
-                let (status, help) = if video {
-                    (
-                        "Video",
-                        "Video mit sechs Vorschaubildern; Wiedergabe im PhotoSuite-Player",
-                    )
-                } else if saving {
-                    ("Speichert …", "EXIF-Ausrichtung wird gespeichert …")
-                } else if write_exif {
-                    (
-                        "EXIF: an",
-                        "Neue Drehungen ändern die JPEG-Datei ohne Sicherungsdatei",
-                    )
-                } else {
-                    (
-                        "Sitzungsdrehung",
-                        "Drehung nur für diese Sitzung · Original unverändert",
-                    )
-                };
-                ui.add_sized([cell_width, 28.], egui::Label::new(status).truncate())
-                    .on_hover_text(help);
+                actions.record = button(
+                    ui,
+                    Icon::Record,
+                    !video,
+                    "Audiokommentar zu diesem Foto aufnehmen",
+                )
+                .clicked();
             });
         });
     actions
@@ -332,7 +315,15 @@ mod tests {
                                 crate::options_ui::spacing(ui);
                                 let top = ui.cursor().top();
                                 let actions = viewer_controls(
-                                    ui, video, position, 1000000, saving, write_exif,
+                                    ui,
+                                    ViewerState {
+                                        video,
+                                        position,
+                                        total: 1000000,
+                                        saving,
+                                        write_exif,
+                                    },
+                                    |_| {},
                                 );
                                 assert!(
                                     !actions.previous && !actions.next && actions.command.is_none()
@@ -344,6 +335,9 @@ mod tests {
                     assert!(height < 110., "Controls exceed two rows: {height}");
                     for shape in output.shapes {
                         if let egui::Shape::Text(text) = shape.shape {
+                            if text.galley.job.text.is_empty() {
+                                continue;
+                            }
                             crate::theme::assert_text_glyphs(&ctx, &text);
                             assert!(text.galley.rows.len() <= 1, "Control text wrapped");
                             assert!(

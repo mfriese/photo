@@ -64,7 +64,10 @@ pub fn date_from_filename(stem: &str) -> Option<CaptureTime> {
     let comment = stem
         .get(..8)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("comment_"));
-    let value = if imported {
+    let short_comment = stem
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("com_"));
+    let value = if imported || short_comment {
         stem.get(4..)?
     } else if comment {
         stem.get(8..)?
@@ -98,7 +101,7 @@ pub fn date_from_filename(stem: &str) -> Option<CaptureTime> {
         parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
     );
     let origin = if comment {
-        "FALLBACK Fotokommentar-Dateiname"
+        "FALLBACK Kommentar-Dateiname"
     } else if imported {
         "FALLBACK Diary-Importdateiname"
     } else {
@@ -112,8 +115,15 @@ pub fn date_from_filename(stem: &str) -> Option<CaptureTime> {
 }
 /// A comment's logical time belongs to the photograph, not to its later recording session.
 pub fn comment_time(stem: &str) -> Option<CaptureTime> {
-    stem.get(..8)
-        .filter(|prefix| prefix.eq_ignore_ascii_case("comment_"))?;
+    if !stem
+        .get(..8)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("comment_"))
+        && !stem
+            .get(..4)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("com_"))
+    {
+        return None;
+    }
     date_from_filename(stem)
 }
 #[cfg(test)]

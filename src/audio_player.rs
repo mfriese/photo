@@ -182,6 +182,11 @@ impl AudioPlayer for NativeAudioPlayer {
             use photosuite_application::photo_context::PhotoEvent;
             use std::ffi::CString;
             unsafe extern "C" {
+                fn photosuite_audio_context_record(
+                    session: *mut u64,
+                    request: *mut u64,
+                    slot: *mut u32,
+                ) -> i32;
                 fn photosuite_audio_context_click(
                     session: *mut u64,
                     request: *mut u64,
@@ -226,6 +231,7 @@ impl AudioPlayer for NativeAudioPlayer {
                 return photosuite_application::diary::AudioPlayerUpdate {
                     is_open: true,
                     photo_to_reveal: None,
+                    photo_to_record: None,
                 };
             };
             if flags & 2 != 0 {
@@ -372,9 +378,23 @@ impl AudioPlayer for NativeAudioPlayer {
             } else {
                 None
             };
+            let (mut record_session, mut record_request, mut record_slot) = (0, 0, 0);
+            let record = unsafe {
+                photosuite_audio_context_record(
+                    &mut record_session,
+                    &mut record_request,
+                    &mut record_slot,
+                )
+            };
+            let photo_to_record = if record != 0 && record_session == session {
+                context.photo_at(record_request, record_slot as usize)
+            } else {
+                None
+            };
             photosuite_application::diary::AudioPlayerUpdate {
                 is_open: true,
                 photo_to_reveal,
+                photo_to_record,
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -397,9 +417,13 @@ impl NativeAudioPlayer {
             let session =
                 projection::NativeLayout::new(timeline, &VerificationProgress::default())?.open(
                     &format!(
-                        "{} · {}",
+                        "{} · {}{}",
                         crate::audio_labels::kind_label(timeline.kind()),
-                        timeline.year()
+                        timeline.year(),
+                        timeline
+                            .month()
+                            .map(|month| format!("/{month}"))
+                            .unwrap_or_default()
                     ),
                     selected,
                     show_window,

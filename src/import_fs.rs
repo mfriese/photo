@@ -234,16 +234,54 @@ impl ImportAdapter for FileImportAdapter {
     ) -> Result<(), String> {
         regular(source)?;
         let parent = target.parent().ok_or("Ziel ohne Verzeichnis")?;
-        // Only two generated components (year/month) are created; reject symlink escapes.
-        let year = parent.parent().ok_or("Jahr fehlt")?;
-        for dir in [year, parent] {
+        // Build missing descendants from the closest existing directory. Validate every
+        // ancestor before creating anything; never traverse a symlink (including audio/d,c,y).
+        let mut missing = Vec::new();
+        let mut ancestor = parent;
+        loop {
+            match fs::symlink_metadata(ancestor) {
+                Ok(metadata) => {
+                    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                        return Err("Zielordner ist kein reguläres Verzeichnis".into());
+                    }
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    missing.push(ancestor);
+                    ancestor = ancestor
+                        .parent()
+                        .ok_or("Ziel ohne Bibliotheksverzeichnis")?;
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
+        let levels = if parent
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "audio")
+        {
+            4
+        } else {
+            3
+        };
+        for component in parent.ancestors().take(levels) {
+            let metadata = match fs::symlink_metadata(component) {
+                Ok(m) => m,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.to_string()),
+            };
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err("Symbolischer Zielpfad wird nicht verwendet".into());
+            }
+        }
+        for dir in missing.into_iter().rev() {
             match fs::create_dir(dir) {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e.to_string()),
             }
             let m = fs::symlink_metadata(dir).map_err(|e| e.to_string())?;
-            if m.file_type().is_symlink() || !m.is_dir() {
+            if !m.is_dir() || m.file_type().is_symlink() {
                 return Err("Zielordner ist kein reguläres Verzeichnis".into());
             }
         }
@@ -443,14 +481,14 @@ mod tests {
                 .message
                 .contains("2 kopiert, 1 übersprungen, 0 Fehler")
         );
-        let first = target.path().join("2008/audio/aud_20080916_035811.wav");
+        let first = target.path().join("2008/audio/d/aud_20080916_035811.wav");
         assert_eq!(fs::read(first).unwrap(), before);
         assert!(!target.path().join("2008/audio/diary").exists());
         assert!(!target.path().join("2008/audio/comments").exists());
         assert!(
             target
                 .path()
-                .join("2008/audio/aud_20080916_035811_001.wav")
+                .join("2008/audio/d/aud_20080916_035811_001.wav")
                 .exists()
         );
         assert_eq!(fs::read(source.path().join("a.wav")).unwrap(), before);
@@ -486,7 +524,7 @@ mod tests {
                 .message
                 .contains("1 kopiert, 0 übersprungen, 0 Fehler")
         );
-        let imported = target.path().join("2008/audio/aud_20080916_035811.wav");
+        let imported = target.path().join("2008/audio/d/aud_20080916_035811.wav");
         let date = crate::audio::NativeAudioSource {
             tool: crate::exiftool::ExifTool::development(),
         }
@@ -510,11 +548,11 @@ mod tests {
                 .iter()
                 .any(|event| event.message.contains("FALLBACK Audio-Dateiname"))
         );
-        assert!(
-            preview
-                .iter()
-                .any(|event| { event.message.contains("2023/audio/aud_20231227_225132.wav") })
-        );
+        assert!(preview.iter().any(|event| {
+            event
+                .message
+                .contains("2023/audio/d/aud_20231227_225132.wav")
+        }));
         assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
         let result = run(source.path(), target.path(), false);
         assert!(
@@ -525,7 +563,7 @@ mod tests {
                 .contains("1 kopiert, 0 übersprungen, 0 Fehler")
         );
         assert_eq!(
-            fs::read(target.path().join("2023/audio/aud_20231227_225132.wav")).unwrap(),
+            fs::read(target.path().join("2023/audio/d/aud_20231227_225132.wav")).unwrap(),
             original
         );
         assert_eq!(fs::read(path).unwrap(), original);

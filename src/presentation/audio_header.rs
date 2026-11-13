@@ -7,10 +7,13 @@ use photosuite_application::diary::{AudioControl, AudioTransportSnapshot, Verifi
 pub(super) struct AudioHeader {
     pub draft: photosuite_application::diary::GalleryAudio,
     drag: Option<f64>,
+    photo: Option<std::path::PathBuf>,
+    year_draft: photosuite_application::diary::GalleryAudio,
 }
 #[derive(Default)]
 struct Actions {
     start: bool,
+    window: bool,
     control: Option<AudioControl>,
 }
 fn controls(
@@ -22,27 +25,62 @@ fn controls(
     can_start: bool,
     drag: &mut Option<f64>,
 ) -> Actions {
+    controls_sized(
+        ui,
+        timeline,
+        state,
+        progress,
+        drag,
+        ControlStyle {
+            preparing,
+            can_start,
+            can_window: state.active || can_start,
+            size: egui::vec2(28., 22.),
+        },
+    )
+}
+struct ControlStyle {
+    preparing: bool,
+    can_start: bool,
+    can_window: bool,
+    size: egui::Vec2,
+}
+fn controls_sized(
+    ui: &mut egui::Ui,
+    timeline: Option<&DiaryTimeline>,
+    state: &AudioTransportSnapshot,
+    progress: &VerificationProgress,
+    drag: &mut Option<f64>,
+    style: ControlStyle,
+) -> Actions {
+    let ControlStyle {
+        preparing,
+        can_start,
+        can_window,
+        size: button_size,
+    } = style;
     let mut actions = Actions::default();
     let width = ui.available_width();
     ui.horizontal(|ui| {
-        ui.set_height(26.);
+        ui.set_height(button_size.y.max(26.));
         ui.spacing_mut().item_spacing.x = 6.;
         let caption = if state.active && state.playing {
             "⏸"
         } else {
             "▶"
         };
-        if ui
-            .add_enabled(
-                !preparing && !state.failed && (state.active || can_start),
-                egui::Button::new(caption).min_size(egui::vec2(28., 22.)),
-            )
-            .on_hover_text(if state.playing {
-                "Wiedergabe pausieren"
-            } else {
-                "Wiedergabe starten"
-            })
-            .clicked()
+        if theme::transport_button(
+            ui,
+            !preparing && !state.failed && (state.active || can_start),
+            button_size,
+            caption,
+        )
+        .on_hover_text(if state.playing {
+            "Wiedergabe pausieren"
+        } else {
+            "Wiedergabe starten"
+        })
+        .clicked()
         {
             if state.active && !preparing && timeline.is_some() {
                 actions.control = Some(AudioControl::Toggle);
@@ -50,13 +88,23 @@ fn controls(
                 actions.start = true;
             }
         }
-        let bar_width = (width - 28. - 6.).max(1.);
-        let (rect, response) =
-            ui.allocate_exact_size(egui::vec2(bar_width, 22.), egui::Sense::click_and_drag());
+        let bar_width = (width - button_size.x * 2. - 12.).max(1.);
+        let (rect, response) = ui.allocate_exact_size(
+            egui::vec2(bar_width, button_size.y),
+            egui::Sense::click_and_drag(),
+        );
         let track = rect.shrink2(egui::vec2(0., 4.));
-        ui.painter().rect_filled(track, 2., theme::RAISED);
+        ui.painter().rect_filled(
+            track,
+            2.,
+            if state.active || can_start {
+                theme::RAISED
+            } else {
+                theme::DISABLED_BG
+            },
+        );
         let mut hover = None;
-        if let Some(timeline) = timeline {
+        if let Some(timeline) = timeline.filter(|_| state.active || can_start) {
             let total: f64 = timeline.clips().iter().map(|c| c.weight()).sum();
             let mut offset = 0.;
             for (index, clip) in timeline.clips().iter().enumerate() {
@@ -64,13 +112,13 @@ fn controls(
                 offset += clip.weight();
                 let right = track.left() + track.width() * (offset / total) as f32;
                 let color = if progress.errors.contains_key(clip.path()) {
-                    egui::Color32::from_rgb(166, 64, 51)
+                    theme::AUDIO_ERROR
                 } else if !clip.is_verified() {
-                    egui::Color32::from_rgb(71, 77, 87)
+                    theme::AUDIO_PENDING
                 } else if index % 2 == 1 {
-                    egui::Color32::from_rgb(92, 140, 201)
+                    theme::AUDIO_ODD
                 } else {
-                    egui::Color32::from_rgb(59, 102, 166)
+                    theme::AUDIO_EVEN
                 };
                 ui.painter().rect_filled(
                     egui::Rect::from_min_max(
@@ -166,6 +214,32 @@ fn controls(
             progress.errors.len()
         );
         response.on_hover_text(help);
+        let enabled = !preparing && can_window;
+        let open = theme::transport_button(ui, enabled, button_size, "");
+        let icon = egui::Rect::from_center_size(open.rect.center(), egui::vec2(13., 11.));
+        ui.painter().rect_stroke(
+            icon,
+            1.,
+            egui::Stroke::new(1_f32, theme::transport_symbol(enabled, false)),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().line_segment(
+            [
+                egui::pos2(icon.left(), icon.top() + 3.),
+                egui::pos2(icon.right(), icon.top() + 3.),
+            ],
+            egui::Stroke::new(1_f32, theme::transport_symbol(enabled, false)),
+        );
+        open.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                open.enabled(),
+                "Player für diese Auswahl öffnen",
+            )
+        });
+        actions.window = open
+            .on_hover_text("Player für diese Auswahl öffnen")
+            .clicked();
     });
     actions
 }
@@ -175,27 +249,43 @@ impl super::Suite {
             return;
         };
         let group = self.group.as_deref().unwrap_or("");
-        let state = self.services.audio_player.transport();
-        if !state.active
-            && photosuite_application::diary::gallery_year(group).is_none()
-            && !self.diary.is_loading()
-        {
+        if photosuite_application::diary::playback_scope(group).is_none() {
             return;
         }
         self.audio_header.draft.ensure(&self.items, root, group);
-        let preparing = self.diary.is_loading() && self.diary.timeline().is_none();
-        let timeline = if state.active {
-            self.diary.timeline().or(self.audio_header.draft.timeline())
+        let live = self.services.audio_player.transport();
+        let active_timeline = self
+            .diary
+            .timeline_for_view(group)
+            .filter(|timeline| self.audio_header.draft.accepts_active(timeline));
+        let matches = live.active && active_timeline.is_some();
+        let state = if matches {
+            live
+        } else {
+            AudioTransportSnapshot::default()
+        };
+        let preparing = self.diary.preparing_for_view(group);
+        let timeline = if matches {
+            active_timeline
         } else {
             self.audio_header.draft.timeline()
         };
+        let empty_progress = VerificationProgress::default();
+        let progress = if matches {
+            self.diary.progress()
+        } else {
+            &empty_progress
+        };
+        if !matches {
+            self.audio_header.drag = None;
+        }
         let actions = controls(
             ui,
             timeline,
             &state,
-            self.diary.progress(),
+            progress,
             preparing,
-            self.audio_header.draft.selected().is_some() && !self.diary.is_loading(),
+            self.audio_header.draft.selected().is_some() && !preparing,
             &mut self.audio_header.drag,
         );
         if let Some(command) = actions.control {
@@ -208,6 +298,114 @@ impl super::Suite {
         }
         if actions.start {
             self.start_audio_for_view();
+        }
+        if actions.window {
+            if matches {
+                if let Err(error) = self.services.audio_player.control(AudioControl::ShowWindow) {
+                    self.status = error;
+                }
+            } else {
+                self.open_audio_for_view();
+            }
+        }
+        if state.active || self.diary.is_loading() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+    pub(super) fn compact_photo_audio(&mut self, ui: &mut egui::Ui, photo: &std::path::Path) {
+        let audio = self.comments.audio_for_photo(photo);
+        if self.viewer_audio.photo.as_deref() != Some(photo) {
+            self.viewer_audio = AudioHeader {
+                photo: Some(photo.to_owned()),
+                ..Default::default()
+            };
+        }
+        if let Some(root) = &self.root {
+            self.viewer_audio
+                .draft
+                .ensure(&audio.items, root, &audio.group);
+            self.viewer_audio
+                .year_draft
+                .ensure(&self.items, root, &audio.year);
+        }
+        let live = self.services.audio_player.transport();
+        let active = self
+            .diary
+            .timeline_for_view(&audio.group)
+            .filter(|t| self.viewer_audio.draft.accepts_active(t));
+        let matches = live.active && active.is_some();
+        let state = if matches {
+            live
+        } else {
+            AudioTransportSnapshot::default()
+        };
+        let preparing = self.diary.preparing_for_view(&audio.group);
+        let timeline = if matches {
+            active
+        } else {
+            self.viewer_audio.draft.timeline()
+        };
+        let empty = VerificationProgress::default();
+        if !matches {
+            self.viewer_audio.drag = None;
+        }
+        let actions = controls_sized(
+            ui,
+            timeline,
+            &state,
+            if matches {
+                self.diary.progress()
+            } else {
+                &empty
+            },
+            &mut self.viewer_audio.drag,
+            ControlStyle {
+                preparing,
+                can_start: self.viewer_audio.draft.selected().is_some() && !preparing,
+                can_window: self.viewer_audio.year_draft.selected().is_some(),
+                size: egui::vec2(34., 34.),
+            },
+        );
+        if let Some(command) = actions.control
+            && let Err(error) = self.services.audio_player.control(command)
+        {
+            self.status = error;
+        }
+        if actions.start
+            && let Some(path) = self.viewer_audio.draft.selected()
+            && let Some(selected) = audio.items.iter().find(|m| m.path() == path)
+            && let Err(error) = self.diary.request_embedded(
+                &audio.items,
+                selected,
+                self.services.audio_source.clone(),
+                &audio.group,
+            )
+        {
+            self.status = error;
+        }
+        if actions.window {
+            let selected = self
+                .viewer_audio
+                .draft
+                .selected()
+                .and_then(|path| audio.items.iter().find(|m| m.path() == path))
+                .or_else(|| {
+                    self.viewer_audio
+                        .year_draft
+                        .selected()
+                        .and_then(|path| self.items.iter().find(|m| m.path() == path))
+                });
+            if let Some(selected) = selected
+                && let Err(error) = self.diary.request_window(
+                    &self.items,
+                    selected,
+                    self.services.audio_source.clone(),
+                    &audio.year,
+                )
+            {
+                self.status = error;
+            }
         }
         if state.active || self.diary.is_loading() {
             ui.ctx()
@@ -222,7 +420,25 @@ impl super::Suite {
         self.audio_header.draft.ensure(&self.items, root, group);
         if let Some(path) = self.audio_header.draft.selected()
             && let Some(selected) = self.items.iter().find(|media| media.path() == path)
-            && let Err(error) = self.diary.start_embedded(
+            && let Err(error) = self.diary.request_embedded(
+                &self.items,
+                selected,
+                self.services.audio_source.clone(),
+                group,
+            )
+        {
+            self.status = error;
+        }
+    }
+    fn open_audio_for_view(&mut self) {
+        let Some(root) = &self.root else {
+            return;
+        };
+        let group = self.group.as_deref().unwrap_or("");
+        self.audio_header.draft.ensure(&self.items, root, group);
+        if let Some(path) = self.audio_header.draft.selected()
+            && let Some(selected) = self.items.iter().find(|media| media.path() == path)
+            && let Err(error) = self.diary.request_window(
                 &self.items,
                 selected,
                 self.services.audio_source.clone(),
@@ -313,6 +529,9 @@ mod tests {
                     );
                     for shape in output.shapes {
                         if let egui::Shape::Text(text) = shape.shape {
+                            if text.galley.job.text.is_empty() {
+                                continue;
+                            }
                             theme::assert_text_glyphs(&ctx, &text);
                             assert!(
                                 text.visual_bounding_rect().right() <= width + 1.,
@@ -322,6 +541,87 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+    #[test]
+    fn right_hand_window_symbol_opens_only_when_the_current_scope_has_audio() {
+        use crate::domain::diary_timeline::DiaryClip;
+        let timeline = DiaryTimeline::new(
+            "2008".into(),
+            vec![DiaryClip::from_filename("aud_20080901_120000.wav".into())],
+        )
+        .unwrap();
+        for available in [true, false] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let input = |events| egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400., 100.),
+                )),
+                events,
+                ..Default::default()
+            };
+            let output = ctx.run(input(vec![]), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    controls(
+                        ui,
+                        Some(&timeline),
+                        &AudioTransportSnapshot::default(),
+                        &VerificationProgress::default(),
+                        false,
+                        available,
+                        &mut None,
+                    );
+                });
+            });
+            let expected = theme::transport_symbol(available, false);
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Rect(rect) if rect.rect.size() == egui::vec2(13., 11.) && rect.stroke.color == expected)));
+            let icon = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.rect.size() == egui::vec2(13., 11.) => {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            assert!(icon.center().x > 350.);
+            let point = icon.center();
+            let mut opened = false;
+            let _ = ctx.run(
+                input(vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]),
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        opened = controls(
+                            ui,
+                            Some(&timeline),
+                            &AudioTransportSnapshot::default(),
+                            &VerificationProgress::default(),
+                            false,
+                            available,
+                            &mut None,
+                        )
+                        .window;
+                    });
+                },
+            );
+            assert_eq!(opened, available);
         }
     }
 }

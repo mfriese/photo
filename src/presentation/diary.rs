@@ -59,12 +59,6 @@ impl super::Suite {
         egui::CentralPanel::default().frame(theme::panel(theme::CANVAS,12)).show(ctx,|ui| {
             let kind=crate::domain::diary::AudioScope::parse(self.group.as_deref().unwrap_or("")).map(|scope|scope.kind()).unwrap_or(crate::domain::diary::AudioKind::All);
             self.page_heading(ui,&format!("{} · {year}",crate::audio_labels::kind_label(kind)));
-            ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(!ordered.is_empty()&&!self.diary.is_loading(),egui::Button::new("Jahresverlauf öffnen")).clicked(){chosen=ordered.first().copied();}
-                if self.diary.is_loading()&&ui.button("Laden abbrechen").clicked(){self.diary.cancel();}
-                ui.label(format!("{} Aufnahmen",ordered.len()));
-            });
-            if !self.diary.status().is_empty(){ui.add(egui::Label::new(self.diary.status()).wrap());}
             if ordered.is_empty(){ui.label("Noch keine Aufnahmen in diesem Bereich. Importierte Audiodateien erscheinen unter Tagebuch.");return;}
             ui.add_space(6.);
             ui.spacing_mut().item_spacing=egui::vec2(8.,4.);
@@ -117,6 +111,16 @@ impl super::Suite {
         let audio_update = self.services.audio_player.poll();
         if audio_update.is_open {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        if let Some(path) = audio_update.photo_to_record {
+            match crate::application::locate_photo(&self.items, &path) {
+                Ok(location) => {
+                    self.record_photo = Some(location.index);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    ctx.request_repaint();
+                }
+                Err(error) => self.status = error,
+            }
         }
         if let Some(path) = audio_update.photo_to_reveal {
             match crate::application::locate_photo(&self.items, &path) {

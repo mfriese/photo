@@ -217,7 +217,7 @@ Die optionale Detailansicht des Importprotokolls stellt jeden Schritt als eigene
 
 ## Audio-Diary
 
-Audio wird im bestehenden Import mitkopiert: `Jahr/audio/aud_JJJJMMTT_HHMMSS.ext`. Beim Import bleiben Quellen unverändert; nur der separate bestätigte Aufräumschritt kann sie danach in den Papierkorb verschieben. Zum Anhören ein Jahr aufklappen, „Audio“ für alle Aufnahmen oder darunter „Tagebuch“ beziehungsweise „Fotokommentare“ wählen und eine Datei anklicken. Der Jahresplayer enthält alle Aufnahmen des gewählten Audiobereichs chronologisch auf einer einzigen Hörleiste. Diese startet ausschließlich mit Dateinamen und zunächst gleichen vorläufigen Gewichten; nach der Prüfung sind die Abschnitte proportional zur echten Dauer. Der Schieber navigiert auch über Dateigrenzen hinweg; es wird keine Sammeldatei exportiert und keine Playlist dargestellt.
+Audio wird im bestehenden Import mitkopiert: `Jahr/audio/d/aud_JJJJMMTT_HHMMSS.ext`. Beim Import bleiben Quellen unverändert; nur der separate bestätigte Aufräumschritt kann sie danach in den Papierkorb verschieben. Zum Anhören ein Jahr aufklappen, „Audio“ für alle Aufnahmen oder darunter „Tagebuch“ beziehungsweise „Kommentare“ wählen und eine Datei anklicken. Der Jahresplayer enthält alle Aufnahmen des gewählten Audiobereichs chronologisch auf einer einzigen Hörleiste. Diese startet ausschließlich mit Dateinamen und zunächst gleichen vorläufigen Gewichten; nach der Prüfung sind die Abschnitte proportional zur echten Dauer. Der Schieber navigiert auch über Dateigrenzen hinweg; es wird keine Sammeldatei exportiert und keine Playlist dargestellt.
 
 Eingebettete Aufnahmezeit vor Inhalts-/Containerdatum; ohne diese Daten zuerst den vollständigen Zeitstempel im Dateinamen (z. B. `2023-12-27_22-51-32`, mit `-`, `_` oder ohne Trenner; einschließlich aud-Importnamen), zuletzt das Dateisystem-Erstellungsdatum als gekennzeichneten Fallback verwenden. Datum und Quelle im Prüflauf kontrollieren. Bei Fotos/Videos bleiben die strikten bisherigen Regeln unverändert. Audio-Kollisionen werden bytegenau verglichen. Formatliste, Einschränkungen und genaue Priorität stehen in der aktuellen Repository-README.
 
@@ -264,11 +264,11 @@ Auch die fünf zugehörigen Fotos werden zuerst nur anhand ihrer Dateinamen gefu
 
 ## Tags und Alben
 
-1. Bibliothek öffnen und links „Tags & Alben …“ wählen. Namen eingeben und „Tag anlegen“ anklicken.
+1. Bibliothek öffnen und im Menü Edit → Tags and Albums… wählen. Namen eingeben und „Tag anlegen“ anklicken.
 2. In Fotowand/Diary eine Datei rechts anklicken und „Tags bearbeiten …“ wählen; in der Großansicht alternativ „Tags …“. Häkchen setzen oder entfernen. Ein neu angelegter Tag wird in dieser Dateiansicht direkt der Datei zugewiesen.
 3. „Album“ bei einem Tag aktivieren: Die linke Navigation zeigt ihn als virtuelles Album. „Anzeigen“ filtert auch Tags, die nicht als Album markiert sind. Eine Datei darf mehreren Tags angehören.
 4. Zum Umbenennen oder Entfernen „Alle Tags verwalten“ wählen, einen Tagnamen auswählen und die passende Aktion benutzen. Tagentfernen entfernt ausschließlich die Zuordnungen und gegebenenfalls die Albumkennzeichnung.
-5. „Alle Erinnerungen“, Jahres-/Monatsauswahl oder „Filter aufheben“ beendet den Tagfilter. Suche und Videofilter gelten auch im Album. Audio erscheint als Audiokachel und öffnet beim Anklicken den normalen Jahresplayer; die Bildnavigation überspringt Audio.
+5. „Alles“ über den Jahren oder eine Jahres-/Monatsauswahl beendet den Tagfilter. Suche und Videofilter gelten auch im Album. Audio erscheint als Audiokachel und öffnet beim Anklicken den normalen Jahresplayer; die Bildnavigation überspringt Audio.
 
 Alle Tags und Albumkennzeichnungen stehen in `photosuite-tags.yaml` direkt im Bibliotheksverzeichnis. Unter `tags` steht je Tag eine YAML-Liste relativer Dateipfade (zum Beispiel `2023/08/img_20230816_153000.jpg`). Unter `albums` stehen die als Album gekennzeichneten Tagnamen als Liste. Relative Pfade sind absichtlich eindeutiger als bloße Dateinamen; absolute Pfade und `..` sind unzulässig. Die Datei ist unabhängig von `photosuite.yaml` für Programmeinstellungen.
 
@@ -302,16 +302,16 @@ Die Bildbefehle sind während Texteingabe, Dialogen und EXIF-Schreibaufträgen d
 ### Suche ohne dauerhafte Suchzeile
 **Edit → Find… (⌘F)** öffnet ein separates Suchfenster. Eingaben filtern die Fotowand direkt. Schließen oder Escape erhält den Filter; „Filter zurücksetzen“ entfernt ihn. Ein aktiver Such-/Videofilter bleibt in der einzeiligen Fußzeile sichtbar. Der Bibliothekspfad steht nur im Fenstertitel, EXIF-Schreiben unter **PhotoSuite → Settings…**, die Vorschaugröße unter **View → Thumbnail Size**.
 
-### Ein Ordner, drei Audioansichten
-Alle neuen Audioimporte werden als Tagebuch unter `Jahr/audio/aud_….ext` gespeichert. Fotokommentare mit `comment_….ext` können im selben Ordner liegen; direkte Aufnahme am Foto ist über dessen Kontextmenü oder die Großansicht verfügbar. Die Kategorien unter Audio sind Filter und erzeugen keine Unterordner. Audio mischt beide Arten chronologisch; Tagebuch und Fotokommentare spielen nur ihren Bereich. Der Suchfilter begrenzt die sichtbaren Kacheln, nicht die Hörleiste des gewählten Bereichs. Unbekannte Namen erscheinen nur in der gemeinsamen Audioansicht.
+### Getrennte Ordner, drei Audioansichten
+Alle neuen Audioimporte werden als Tagebuch unter `Jahr/audio/d/aud_….ext` gespeichert. Kommentare liegen unter `Jahr/audio/c/com_….m4a`; direkte Aufnahme am Foto ist über dessen Kontextmenü oder die Großansicht verfügbar. Die Kategorien unter Audio sind gemeinsame bzw. getrennte Wiedergabefilter für die Ordner d und c. Audio mischt beide Arten chronologisch; Tagebuch und Kommentare spielen nur ihren Bereich. Der Suchfilter begrenzt die sichtbaren Kacheln, nicht die Hörleiste des gewählten Bereichs. Unbekannte Namen erscheinen nur in der gemeinsamen Audioansicht.
 
 Bestehende `Jahr/diary`-Ordner sowie bereits angelegte Audio-Kategorieordner werden mitgelesen und nicht verändert. Bei alten Namen ohne Präfix liefert deren bisheriger Kategorieordner die Zuordnung. Explizite Präfixe gehen vor. Alte Bestände werden nicht automatisch migriert oder mit neuen Importzielen dedupliziert. Neue Kommentare beziehen die Fotozeit aus ihrer YAML-Zuordnung; Altkommentare ohne Zuordnung behalten die Namenszeit. Dauer/Abspielbarkeit werden nachgeladen.
 
 ### Jahr und Audio aufklappen
-Ein aufgeklapptes Jahr zeigt zuerst Audio und darunter direkt alle Monate auf derselben Ebene. Der Jahresklick wählt die Jahresfotowand. Audio öffnet die gemeinsame Jahres-Höransicht und klappt Tagebuch/Fotokommentare auf oder zu. Kontextfotos aus der Audiowiedergabe öffnen bei Bedarf das betreffende Jahr und markieren das Bild in der Fotowand. Keine zusätzliche Photos-Ebene.
+Ein aufgeklapptes Jahr zeigt zuerst Audio und darunter direkt alle Monate auf derselben Ebene. Der Jahresklick wählt die Jahresfotowand. Audio öffnet die gemeinsame Jahres-Höransicht und klappt Tagebuch/Kommentare auf oder zu. Kontextfotos aus der Audiowiedergabe öffnen bei Bedarf das betreffende Jahr und markieren das Bild in der Fotowand. Keine zusätzliche Photos-Ebene.
 
 ### Tagwolke, Aufnahmedaten und Audioüberschrift
-Die linke Spalte beginnt mit den Jahren. Unter ihnen zeigt Tags alle Tags als Wolke; kurze Namen teilen eine Zeile, längere werden umgebrochen beziehungsweise bei Platzmangel mit Tooltip gekürzt. Anklicken wählt einen Tag, erneutes Anklicken entfernt den Filter. Verwalten und Konfigurieren über Edit → Tags and Albums…; bestehende Kontextaktionen an einzelnen Medien bleiben verfügbar.
+Die linke Spalte beginnt mit „Alles“, danach folgen die Jahre. Unter ihnen zeigt Tags alle Tags als Wolke; kurze Namen teilen eine Zeile, längere werden umgebrochen beziehungsweise bei Platzmangel mit Tooltip gekürzt. Anklicken wählt einen Tag, erneutes Anklicken entfernt den Filter. Verwalten und Konfigurieren über Edit → Tags and Albums…; bestehende Kontextaktionen an einzelnen Medien bleiben verfügbar.
 
 Unter Fotos stehen Datum und Uhrzeit statt des Dateinamens. Für korrekt benannte Dateien sofort, für andere nach kurzer Hintergrundprüfung. Ohne gültige Metadaten wird kein Datum geraten. Name, Pfad, Datumsquelle und Fehler finden sich im Tooltip. Neben der Datums-/Monats-/Jahresüberschrift steht nur noch Play/Pause und die Audioachse. Den separaten Player öffnet Window → Audio Player; einen anderen aktuellen Audiobereich startet View → Play Audio for Current View.
 
@@ -322,7 +322,7 @@ Am Foto per Rechtsklick **Audiokommentar …**, in der Großansicht **Aufnahme �
 
 Nach Beenden **Anhören** oder den roten Kreis für eine Neuaufnahme wählen; Neuaufnahme ersetzt die bisherige ungespeicherte Aufnahme. **Speichern** veröffentlicht eine neue M4A/AAC-Datei und deren Fotozuordnung. Schließen mit ungespeicherter Aufnahme fragt nach. Beim Speichern bitte warten. Verweigerte Berechtigungen in Systemeinstellungen → Datenschutz & Sicherheit → Mikrofon korrigieren. Mikrofonänderungen gelten nur für die Sitzung; andere Anwendungen und Systemstandard werden nicht umgestellt.
 
-Beispiel: heute aufgenommener Kommentar zu einem Foto von 2008 liegt unter `2026/audio/comment_20261112_153000.m4a`. `photosuite-comments.yaml` enthält Version 1, unter `comments` eine UUID mit `audio`, `photo`, `recorded_at` (mit Zeitzone) und optional `photo_taken_at`. Alle Pfade sind relativ. In der Wiedergabe wird er zum Fotojahr/-datum einsortiert, während der echte Aufnahmestart am Foto sichtbar bleibt. Mehrere Kommentare pro Foto sind möglich. Die gesamte Bibliothek kann gemeinsam verschoben werden; einzelne extern umbenannte Medien brauchen eine korrigierte Referenz.
+Beispiel: heute aufgenommener Kommentar zu einem Foto von 2008 liegt unter `2026/audio/c/com_20261112_153000.m4a`. `photosuite-comments.yaml` enthält Version 1, unter `comments` eine UUID mit `audio`, `photo`, `recorded_at` (mit Zeitzone) und optional `photo_taken_at`. Alle Pfade sind relativ. In der Wiedergabe wird er zum Fotojahr/-datum einsortiert, während der echte Aufnahmestart am Foto sichtbar bleibt. Mehrere Kommentare pro Foto sind möglich. Die gesamte Bibliothek kann gemeinsam verschoben werden; einzelne extern umbenannte Medien brauchen eine korrigierte Referenz.
 
 Scheitert nur die YAML-Zuordnung, ist die Audiodatei bereits sicher gespeichert. **Speichern** erneut versuchen: vorhandene Zuordnungen werden neu geladen und die eigene ergänzt, ohne eine zweite Audiokopie anzulegen. Abbrechen entfernt diese veröffentlichte Datei nicht. Nach einem Absturz kann der noch ungespeicherte Verweis verloren sein; keine automatische Löschung oder Rekonstruktion. Originalfotos und importierte Quellen bleiben unverändert.
 
@@ -335,3 +335,30 @@ Häkchen unten rechts speichert und schließt die Aufnahme; X bricht ab und frag
 Zum Korrigieren einer ungespeicherten Aufnahme pausieren und kurz auf den Abschnittsabschluss warten. In der Kurve klicken/ziehen, um die helle Markierung zu setzen. Play links neben dem roten Kreis spielt ab der Markierung, ein weiterer Klick pausiert das Vorhören. Der rote Kreis nimmt ab der Markierung auf: Der Anfang bleibt, der alte Rest wird durch den neuen Abschnitt ersetzt. Am Aufnahmeende wird einfach angehängt. Stop beendet die gesamte Aufnahme. Erst das Häkchen veröffentlicht die Datei; bestehende Kommentare werden nicht bearbeitet. Bei Einfügefehler bleibt der bisherige Arbeitsstand erhalten; erneut aufnehmen oder mit Stop den alten Stand bestätigen. Beim Zusammenfügen wird AAC gegebenenfalls neu kodiert.
 
 Beim Pausieren bleibt die Kurve genau im bisherigen Ausschnitt und Maßstab stehen. Der Cursor kann im sichtbaren 32-Sekunden-Bereich gesetzt werden; die Aufnahme wird nicht nachträglich über die ganze Breite gestreckt.
+
+## Kommentar-YAMLs und Index reparieren
+Importierte Diary-Aufnahmen liegen jetzt unter `Jahr/audio/d` mit unverändertem aud_-Namensformat. Neue Kommentare heißen `Jahr/audio/c/com_JJJJMMTT_HHMMSS[_NNN].m4a`; ihre Zuordnung liegt separat unter `Jahr/audio/y/<derselbe Stamm>.yaml`.
+
+Beispiel:
+```yaml
+version: 1
+id: 12345678-1234-1234-1234-123456789abc
+audio: 2026/audio/c/com_20261113_143000.m4a
+photo: 2008/09/img_20080916_035811.jpg
+recorded_at: '2026-11-13T14:30:00+01:00'
+```
+Beide Pfade beziehen sich auf die Bibliothekswurzel, nicht auf das Verzeichnis y. Die ID ist eine GUID/UUID. Das Fotodatum steht nicht doppelt in der Einzeldatei; es wird aus Bildname oder Bildmetadaten gelesen. Die gesamte Bibliothek kann zusammen verschoben werden. Einzelne Umbenennungen müssen in der Zuordnung nachgeführt werden.
+
+Nach dem Speichern werden zuerst Audio, dann Einzel-YAML und schließlich der Gesamtindex veröffentlicht. Bei Indexfehler sind Audio und Einzel-YAML bereits erhalten; Speichern kann wiederholt werden. Unter Einstellungen → Audiokommentare kann der Gesamtindex vollständig neu aufgebaut und der Lauf abgebrochen werden. Vorhandene Einzeldateien sind maßgeblich; fehlende werden bei Bedarf aus dem lesbaren alten Index ergänzt. Einzeln eine YAML zu löschen ist daher kein sicherer Weg, einen Kommentar zu entfernen. Fehlerhafte Einzeldateien werden gemeldet und erhalten; der vorherige Index bleibt bestehen. Ein beschädigter Gesamtindex wird vor Reparatur als recovery-Datei gesichert. Ein Abbruch darf bereits ergänzte Einzel-YAMLs behalten, bewegt oder löscht aber keine Medien.
+
+Alte flache Audioordner, diary/comments-Unterordner und comment_-Dateinamen bleiben lesbar. Es gibt keine automatische Umbenennung oder Verschiebung deiner vorhandenen Audiodateien.
+
+Die Hörleiste richtet sich nach der aktuellen Baumauswahl: Jahr/Monat/Audio mischen beide Arten; erst Tagebuch oder Kommentare filtern. Ein Kommentar wird zur Fotozeit einsortiert, nicht zur späteren Audioaufnahmezeit. Wechselst du während laufender Wiedergabe in eine andere Kategorie oder ein anderes Jahr, zeigt die Leiste bereits den neuen Bereich. Play startet dann diesen Bereich; die bisherige Wiedergabe wird bei Navigation allein nicht unterbrochen.
+
+Das Fenster-Symbol rechts neben der eingebetteten Hörleiste öffnet denselben Audiobereich im Playerfenster. Die Monatsansicht enthält jetzt nur den jeweiligen Monat, keine Jahresachse mit bloßem Monatsstart. Jahr und Audio umfassen alle Aufnahmen des Jahres; Kategorieunterpunkte ihre jeweilige Art. Bei Kommentaren entscheidet die Fotozeit. Läuft bereits genau dieser Bereich, wird das Fenster an der aktuellen Position angezeigt.
+
+Im Bereichsplayer stehen die Symbolbuttons zentriert: zurück/vorwärts springen jeweils 15 Sekunden, Play wird während Wiedergabe zu Pause. Der rote Kreis neben Play öffnet einen Audiokommentar zum mittleren hervorgehobenen Bild. Während Fotosuche oder noch nicht abgeschlossenem Seek ist er deaktiviert. Das Playerfenster wird dabei ausgeblendet und die Wiedergabe pausiert; anschließend im Aufnahmedialog selbst aufnehmen. Eine bestehende ungespeicherte Aufnahme wird nicht ersetzt.
+
+Tags werden immer kleingeschrieben. Ältere Varianten wie Comment/COMMENT/comment werden beim Laden mit allen Dateizuordnungen und Albumkennzeichnungen vereinigt. Dateipfade werden dabei nicht verändert. Neue Speicherstände enthalten die normalisierten Tagnamen.
+
+Fotos mit gespeicherten Audiokommentaren erhalten automatisch den Tag comment. Speichern, Index-Neuaufbau unter Settings sowie File → Refresh gleichen diesen Tag mit den Kommentarzuordnungen ab. Andere Tags bleiben erhalten. File → Refresh scannt dafür die Einzel-YAMLs im Hintergrund; die Galerie bleibt bedienbar. Bei ungültigen Daten wird kein leerer Ersatzkatalog gespeichert. Fehlende Medienreferenzen werden zur Sicherheit erhalten; das Entfernen von Audiodateien allein löscht keine Kommentarzuordnung.

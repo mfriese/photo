@@ -3,6 +3,7 @@
 #import "audio_timeline_view.h"
 #import "audio_transport.h"
 #include <math.h>
+#import "theme.h"
 #include <string.h>
 
 static NSString *PSAudioPath(const char *path) {
@@ -27,12 +28,51 @@ int photosuite_audio_probe(const char *path, double *duration, int *audioOnly, c
     }
 }
 
+typedef NS_ENUM(NSInteger,PSAudioSymbol){PSAudioBack,PSAudioPlay,PSAudioPause,PSAudioRecord,PSAudioForward};
+static NSImage *PSAudioSymbolImage(PSAudioSymbol symbol){
+    static NSImage *images[5];if(images[symbol])return images[symbol];
+    NSImage *image=[NSImage imageWithSize:NSMakeSize(18,18) flipped:NO drawingHandler:^BOOL(NSRect rect){
+        [(symbol==PSAudioRecord?PS_THEME_RECORD_RED:PS_THEME_TEXT) setFill];
+        if(symbol==PSAudioRecord){[[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(3,3,12,12)] fill];}
+        else if(symbol==PSAudioPause){NSRectFill(NSMakeRect(4,2.5,3,13));NSRectFill(NSMakeRect(11,2.5,3,13));}
+        else if(symbol==PSAudioPlay){NSBezierPath *p=[NSBezierPath bezierPath];[p moveToPoint:NSMakePoint(5,3)];[p lineToPoint:NSMakePoint(15,9)];[p lineToPoint:NSMakePoint(5,15)];[p closePath];[p fill];}
+        else {for(int i=0;i<2;i++){CGFloat x=2+i*7;NSBezierPath *p=[NSBezierPath bezierPath];if(symbol==PSAudioBack){[p moveToPoint:NSMakePoint(x,9)];[p lineToPoint:NSMakePoint(x+7,15)];[p lineToPoint:NSMakePoint(x+7,3)];}else{[p moveToPoint:NSMakePoint(x+7,9)];[p lineToPoint:NSMakePoint(x,15)];[p lineToPoint:NSMakePoint(x,3)];}[p closePath];[p fill];}}
+        return YES;
+    }];image.template=NO;images[symbol]=image;return image;
+}
+// Match egui transport visuals, including border, hover, pressed and disabled states.
+@interface PSAudioButton : NSButton
+@property(nonatomic,strong) NSTrackingArea *hoverArea;
+@property(nonatomic) BOOL hovered;
+@end
+@implementation PSAudioButton
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];if(self.hoverArea)[self removeTrackingArea:self.hoverArea];
+    self.hoverArea=[[NSTrackingArea alloc] initWithRect:NSZeroRect options:NSTrackingMouseEnteredAndExited|NSTrackingActiveInActiveApp|NSTrackingInVisibleRect owner:self userInfo:nil];[self addTrackingArea:self.hoverArea];
+}
+- (void)mouseEntered:(NSEvent *)event {self.hovered=YES;self.needsDisplay=YES;}
+- (void)mouseExited:(NSEvent *)event {self.hovered=NO;self.needsDisplay=YES;}
+- (void)drawRect:(NSRect)dirty {
+    BOOL active=self.enabled&&self.cell.highlighted,hover=self.enabled&&self.hovered;
+    NSColor *fill=!self.enabled?PS_THEME_DISABLED_BG:active?PS_THEME_SELECTED:hover?PS_THEME_HOVER:PS_THEME_RAISED;
+    NSColor *border=!self.enabled?PS_THEME_DISABLED_BORDER:(active||hover)?PS_THEME_ACCENT:PS_THEME_BORDER;
+    NSBezierPath *path=[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,.5,.5) xRadius:5 yRadius:5];
+    [fill setFill];[path fill];[border setStroke];path.lineWidth=1;[path stroke];
+    NSRect icon=NSMakeRect(NSMidX(self.bounds)-9,NSMidY(self.bounds)-9,18,18);
+    if(self.enabled){[self.image drawInRect:icon fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];}
+    else {NSImage *muted=[NSImage imageWithSize:NSMakeSize(18,18) flipped:NO drawingHandler:^BOOL(NSRect rect){[self.image drawInRect:rect];[PS_THEME_DISABLED_TEXT setFill];NSRectFillUsingOperation(rect,NSCompositingOperationSourceIn);return YES;}];[muted drawInRect:icon];}
+}
+@end
 @interface PSAudioController : NSWindowController <NSWindowDelegate>
 @property(nonatomic,strong) PSAudioTransport *transport;
 @property(nonatomic,strong) PSAudioTimeline *timeline;
 @property(nonatomic,strong) PSContextPhotos *contextPhotos;
 @property(nonatomic,strong) NSTimer *timer;
 @property(nonatomic,strong) NSButton *playButton;
+@property(nonatomic,strong) NSButton *recordButton;
+@property(nonatomic,strong) NSStackView *controlGroup;
+@property(nonatomic) BOOL photoRecordPending;
+@property(nonatomic) unsigned long long recordedPhotoRequest;
 @property(nonatomic,strong) NSTextField *titleLabel;
 @property(nonatomic,strong) NSTextField *detailLabel;
 @property(nonatomic,strong) NSTextField *verificationLabel;
@@ -70,7 +110,7 @@ static unsigned long long PSNextPhotoSession=0;
 }
 - (void)shutdown {
     if(self.cancelled)return;
-    self.cancelled=YES;self.photoPending=NO;self.photoClickPending=NO;self.contextPhotos.onSelect=nil;
+    self.cancelled=YES;self.photoPending=NO;self.photoClickPending=NO;self.photoRecordPending=NO;self.contextPhotos.onSelect=nil;
     self.timeline.onSeek=nil;self.timeline.onToggle=nil;self.timeline.onRelativeSeek=nil;
     for(PSContextPhotoSlot *slot in self.contextPhotos.slots)slot.image=nil;
     [self.timer invalidate];self.timer=nil;[self.transport shutdown];self.timeline.clips=@[];
@@ -104,7 +144,10 @@ static unsigned long long PSNextPhotoSession=0;
         self.photoCivil=civil;self.photoRequest++;self.photoPending=YES;
         self.contextPhotos.loading=YES;self.contextPhotos.statusText=@"Fotos werden gesucht …";self.contextPhotos.needsDisplay=YES;
     }
-    self.playButton.title=self.transport.wantsPlay?@"Pause":@"Wiedergabe";
+    self.playButton.image=PSAudioSymbolImage(self.transport.wantsPlay?PSAudioPause:PSAudioPlay);
+    self.playButton.toolTip=self.transport.wantsPlay?@"Wiedergabe pausieren":@"Wiedergabe starten";
+    [self.playButton setAccessibilityLabel:self.playButton.toolTip];
+    self.recordButton.enabled=!self.contextPhotos.loading && self.contextPhotos.slots[2].image!=nil && !self.transport.loading && !self.transport.seeking && self.lastPhotoSeek==self.settledPhotoSeek;
     self.playButton.enabled=!self.transport.loading && self.transport.error.length==0;
 }
 - (void)toggle:(id)sender {
@@ -112,6 +155,13 @@ static unsigned long long PSNextPhotoSession=0;
     if(!self.transport.wantsPlay)[self.transport.player pause];
     else if(CMTimeGetSeconds(self.transport.player.currentTime)>=self.transport.duration-0.01 && [self currentIndex]+1==self.timeline.clips.count)[self seek:0];
     else [self.transport.player play];
+    [self tick:nil];
+}
+- (void)recordCurrentPhoto:(id)sender {
+    if(self.cancelled||self.contextPhotos.loading||!self.contextPhotos.slots[2].image||self.transport.loading||self.transport.seeking||self.lastPhotoSeek!=self.settledPhotoSeek)return;
+    self.recordedPhotoRequest=self.photoRequest;self.photoRecordPending=YES;
+    self.transport.wantsPlay=NO;[self.transport.player pause];[self tick:nil];
+    [self.window orderOut:nil];
 }
 - (void)nextClip {
     NSUInteger index=[self currentIndex];
@@ -154,7 +204,7 @@ static unsigned long long PSNextPhotoSession=0;
 - (void)volume:(NSSlider *)sender {self.transport.player.volume=sender.floatValue;}
 @end
 static NSTextField *PSAudioLabel(NSRect frame,CGFloat size){
-    NSTextField *label=[NSTextField labelWithString:@""];label.frame=frame;label.font=[NSFont systemFontOfSize:size];label.textColor=NSColor.labelColor;
+    NSTextField *label=[NSTextField labelWithString:@""];label.frame=frame;label.font=[NSFont systemFontOfSize:size];label.textColor=PS_THEME_TEXT;
     label.alignment=NSTextAlignmentCenter;label.lineBreakMode=NSLineBreakByTruncatingMiddle;label.autoresizingMask=NSViewWidthSizable;return label;
 }
 static NSArray<PSAudioClipViewModel *> *PSAudioReadClips(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count){
@@ -170,6 +220,7 @@ static NSArray<PSAudioClipViewModel *> *PSAudioReadClips(const char **paths,cons
 // Hiding on app deactivation prevents floating above other applications.
 static NSWindow *PSAudioCreateWindow(void) {
     NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,740,370) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+    window.backgroundColor=PS_THEME_SURFACE;
     window.level=NSFloatingWindowLevel;
     window.hidesOnDeactivate=YES;
     window.acceptsMouseMovedEvents=YES;
@@ -196,8 +247,14 @@ int photosuite_audio_open_mode(const char **paths,const char **labels,const doub
         controller.timeline=[[PSAudioTimeline alloc] initWithFrame:NSMakeRect(12,235,716,58)];controller.timeline.clips=clips;controller.timeline.autoresizingMask=NSViewWidthSizable;[view addSubview:controller.timeline];
         controller.contextPhotos=[[PSContextPhotos alloc] initWithFrame:NSMakeRect(20,65,700,160)];controller.contextPhotos.autoresizingMask=NSViewWidthSizable;[view addSubview:controller.contextPhotos];
         [controller connectControls];
-        NSArray *titles=@[@"-15 s",@"Wiedergabe",@"+15 s"];SEL selectors[]={@selector(back:),@selector(toggle:),@selector(forward:)};
-        for(NSUInteger i=0;i<3;++i){NSButton *button=[NSButton buttonWithTitle:titles[i] target:controller action:selectors[i]];button.frame=NSMakeRect(20+i*95,24,90,30);[view addSubview:button];if(i==1){controller.playButton=button;button.enabled=NO;}}
+        NSStackView *buttons=[NSStackView stackViewWithViews:@[]];buttons.orientation=NSUserInterfaceLayoutOrientationHorizontal;buttons.spacing=6;buttons.distribution=NSStackViewDistributionFillEqually;buttons.alignment=NSLayoutAttributeCenterY;
+        buttons.frame=NSMakeRect((view.bounds.size.width-154)/2,22,154,34);buttons.translatesAutoresizingMaskIntoConstraints=NO;controller.controlGroup=buttons;
+        NSArray *tips=@[@"15 Sekunden zurück",@"Wiedergabe pausieren",@"Kommentar zum mittleren Foto aufnehmen",@"15 Sekunden vorwärts"];
+        PSAudioSymbol symbols[]={PSAudioBack,PSAudioPause,PSAudioRecord,PSAudioForward};SEL selectors[]={@selector(back:),@selector(toggle:),@selector(recordCurrentPhoto:),@selector(forward:)};
+        for(NSUInteger i=0;i<4;++i){NSButton *button=[PSAudioButton buttonWithTitle:@"" target:controller action:selectors[i]];button.image=PSAudioSymbolImage(symbols[i]);button.imagePosition=NSImageOnly;button.imageScaling=NSImageScaleProportionallyDown;button.bordered=NO;button.toolTip=tips[i];[button setAccessibilityLabel:tips[i]];[buttons addArrangedSubview:button];if(i==1){controller.playButton=button;button.enabled=NO;}if(i==2){controller.recordButton=button;button.enabled=NO;}}
+        [view addSubview:buttons];
+        [NSLayoutConstraint activateConstraints:@[[buttons.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],[buttons.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-22],[buttons.widthAnchor constraintEqualToConstant:154],[buttons.heightAnchor constraintEqualToConstant:34]]];
+        for(NSView *button in buttons.arrangedSubviews){[NSLayoutConstraint activateConstraints:@[[button.widthAnchor constraintEqualToConstant:34],[button.heightAnchor constraintEqualToConstant:34]]];}
         NSSlider *volume=[NSSlider sliderWithValue:0.8 minValue:0 maxValue:1 target:controller action:@selector(volume:)];volume.frame=NSMakeRect(615,29,105,20);volume.autoresizingMask=NSViewMinXMargin;volume.toolTip=@"Lautstärke";[view addSubview:volume];
         [window center];if(showWindow){[controller showWindow:nil];[window makeKeyAndOrderFront:nil];[window makeFirstResponder:controller.timeline];}
         controller.timer=[NSTimer scheduledTimerWithTimeInterval:0.1 target:controller selector:@selector(tick:) userInfo:nil repeats:YES];
@@ -272,4 +329,11 @@ int photosuite_audio_context_click(unsigned long long *session,unsigned long lon
     if(PSAudio.clickedPhotoRequest!=PSAudio.photoRequest)return 0;
     *session=PSAudio.photoSession;*request=PSAudio.clickedPhotoRequest;*slot=(unsigned int)PSAudio.clickedPhotoSlot;
     return 1;
+}
+
+int photosuite_audio_context_record(unsigned long long *session,unsigned long long *request,unsigned int *slot){
+    if(![NSThread isMainThread]||!PSAudio||PSAudio.cancelled||!PSAudio.photoRecordPending)return 0;
+    PSAudio.photoRecordPending=NO;
+    if(PSAudio.recordedPhotoRequest!=PSAudio.photoRequest)return 0;
+    *session=PSAudio.photoSession;*request=PSAudio.recordedPhotoRequest;*slot=2;return 1;
 }

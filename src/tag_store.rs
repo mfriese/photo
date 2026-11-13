@@ -129,6 +129,8 @@ mod tests {
         let text = String::from_utf8(revision).unwrap();
         assert!(text.contains("tags:"));
         assert!(text.contains("albums:"));
+        assert!(text.contains("sommer: urlaub #1"));
+        assert!(!text.contains("Sommer: Urlaub #1"));
         assert!(text.contains("2023/12/photo.jpg"));
         assert!(!text.contains(dir.path().to_str().unwrap()));
         assert_eq!(

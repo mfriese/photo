@@ -20,7 +20,12 @@ pub struct CommentFiles {
     pub copier: Arc<dyn ImportAdapter>,
     pub dates: Arc<dyn MediaDateSource>,
 }
-pub struct YamlComments;
+pub struct YamlComments {
+    pub dates: Arc<dyn MediaDateSource>,
+    pub copier: Arc<dyn ImportAdapter>,
+    pub priority: Arc<photosuite_application::work_priority::WorkPriority>,
+}
+mod sidecars;
 fn directory(path: &Path) -> Result<(), String> {
     let m = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
     if !m.is_dir() || m.file_type().is_symlink() {
@@ -64,11 +69,17 @@ fn decode(bytes: &[u8]) -> Result<CommentCatalog, String> {
     let doc: Document =
         serde_saphyr::from_str(std::str::from_utf8(bytes).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
-    if doc.version != 1 {
+    if ![1, 2].contains(&doc.version) {
         return Err("Unbekannte Kommentarversion; Datei bleibt unverändert".into());
     }
     let mut catalog = CommentCatalog::default();
-    for (id, e) in doc.comments {
+    for (id, mut e) in doc.comments {
+        if e.photo_taken_at.is_none() {
+            e.photo_taken_at = Media::from_path(e.photo.clone().into(), String::new())
+                .as_ref()
+                .and_then(crate::domain::capture_from_filename)
+                .map(|date| date.exif_value());
+        }
         catalog.insert(Comment::new(
             id,
             LibraryFile::new(e.audio)?,
@@ -83,7 +94,7 @@ fn decode(bytes: &[u8]) -> Result<CommentCatalog, String> {
 }
 fn encode(catalog: &CommentCatalog) -> Result<Vec<u8>, String> {
     let doc = Document {
-        version: 1,
+        version: 2,
         comments: catalog
             .entries()
             .iter()
@@ -94,7 +105,18 @@ fn encode(catalog: &CommentCatalog) -> Result<Vec<u8>, String> {
                         audio: c.audio().as_str().into(),
                         photo: c.photo().as_str().into(),
                         recorded_at: c.recorded_at().iso().into(),
-                        photo_taken_at: c.photo_time().map(CaptureTime::exif_value),
+                        photo_taken_at: if Media::from_path(
+                            c.photo().as_str().into(),
+                            String::new(),
+                        )
+                        .as_ref()
+                        .and_then(crate::domain::capture_from_filename)
+                        .is_some()
+                        {
+                            None
+                        } else {
+                            c.photo_time().map(CaptureTime::exif_value)
+                        },
                     },
                 )
             })
@@ -118,7 +140,51 @@ impl CommentRepository for YamlComments {
             .map(decode)
             .transpose()?
             .unwrap_or_default();
+        let catalog = if revision.is_none() {
+            let mut catalog = catalog;
+            for comment in self.scan_sidecars(root, &AtomicBool::new(false), &|_| {})? {
+                catalog.insert(comment)?;
+            }
+            catalog
+        } else {
+            catalog
+        };
         Ok(StoredComments { catalog, revision })
+    }
+    fn write_sidecar(&self, root: &Path, comment: &Comment) -> Result<(), String> {
+        self.publish_sidecar(root, comment)
+    }
+    fn commit(
+        &self,
+        root: &Path,
+        comment: &Comment,
+        catalog: &CommentCatalog,
+        expected: Option<&[u8]>,
+    ) -> Result<Vec<u8>, String> {
+        self.publish_sidecar(root, comment)?;
+        self.save(root, catalog, expected)
+    }
+    fn recovery_base(&self, root: &Path) -> Result<RecoveryBase, String> {
+        self.read_recovery_base(root)
+    }
+    fn scan_sidecars(
+        &self,
+        root: &Path,
+        cancel: &AtomicBool,
+        progress: &dyn Fn(RebuildProgress),
+    ) -> Result<Vec<Comment>, String> {
+        self.scan_comment_sidecars(root, cancel, progress)
+    }
+    fn replace_index(
+        &self,
+        root: &Path,
+        catalog: &CommentCatalog,
+        expected: Option<&[u8]>,
+    ) -> Result<Vec<u8>, String> {
+        directory(root)?;
+        let bytes = encode(catalog)?;
+        crate::metadata_fs::atomic_write_if_current(&root.join(FILE), &bytes, expected)?;
+        Ok(bytes)
     }
     fn save(
         &self,
@@ -218,6 +284,13 @@ mod tests {
             dates: Arc::new(NoDate),
         }
     }
+    fn store() -> YamlComments {
+        YamlComments {
+            dates: Arc::new(NoDate),
+            copier: adapter().copier,
+            priority: Default::default(),
+        }
+    }
     fn target(root: &Path) -> PhotoTarget {
         fs::create_dir_all(root.join("2008/09")).unwrap();
         fs::write(root.join("2008/09/photo.jpg"), b"unchanged photo").unwrap();
@@ -257,8 +330,8 @@ mod tests {
         let mut catalog = CommentCatalog::default();
         catalog.insert(first.clone()).unwrap();
         catalog.insert(second).unwrap();
-        let bytes = YamlComments.save(library.path(), &catalog, None).unwrap();
-        let loaded = YamlComments.load(library.path()).unwrap();
+        let bytes = store().save(library.path(), &catalog, None).unwrap();
+        let loaded = store().load(library.path()).unwrap();
         assert_eq!(loaded.catalog.entries(), catalog.entries());
         assert_eq!(loaded.revision, Some(bytes.clone()));
         let text = String::from_utf8(bytes.clone()).unwrap();
@@ -271,7 +344,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            YamlComments
+            store()
                 .load(library.path())
                 .unwrap()
                 .catalog
@@ -279,13 +352,13 @@ mod tests {
                 .len(),
             2
         );
-        fs::write(library.path().join(FILE), b"version: 2\ncomments: {}\n").unwrap();
+        fs::write(library.path().join(FILE), b"version: 9\ncomments: {}\n").unwrap();
         assert!(
-            YamlComments
+            store()
                 .save(library.path(), &catalog, Some(&bytes))
                 .is_err()
         );
-        assert!(YamlComments.load(library.path()).is_err());
+        assert!(store().load(library.path()).is_err());
         assert!(library.path().join(first.audio().as_str()).is_file());
     }
     #[test]
@@ -297,9 +370,9 @@ mod tests {
             "version: 8\ncomments: {}\n",
         ] {
             fs::write(directory.path().join(FILE), bytes).unwrap();
-            assert!(YamlComments.load(directory.path()).is_err());
+            assert!(store().load(directory.path()).is_err());
             assert!(
-                YamlComments
+                store()
                     .save(directory.path(), &CommentCatalog::default(), None)
                     .is_err()
             );
@@ -317,7 +390,7 @@ mod tests {
         let external = tempfile::tempdir().unwrap();
         fs::write(external.path().join("file"), b"outside").unwrap();
         symlink(external.path().join("file"), root.path().join(FILE)).unwrap();
-        assert!(YamlComments.load(root.path()).is_err());
+        assert!(store().load(root.path()).is_err());
         assert_eq!(fs::read(external.path().join("file")).unwrap(), b"outside");
         fs::remove_file(root.path().join(FILE)).unwrap();
         symlink(external.path(), root.path().join("2008")).unwrap();
@@ -333,5 +406,223 @@ mod tests {
         };
         assert!(publish_comment(&adapter(), &target, &take).is_err());
         assert!(!root.path().join("2026").exists());
+    }
+    struct Recorder;
+    impl CommentRecorder for Recorder {
+        fn devices(&self) -> Result<Vec<InputDevice>, String> {
+            Ok(Vec::new())
+        }
+        fn start(&self, _: &str) -> Result<(), String> {
+            Err("no microphone in tests".into())
+        }
+        fn command(&self, _: CaptureCommand) -> Result<(), String> {
+            Ok(())
+        }
+        fn snapshot(&self) -> CaptureSnapshot {
+            Default::default()
+        }
+    }
+    fn drain(session: &mut CommentSession) {
+        for _ in 0..3000 {
+            session.poll();
+            if !session.busy() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("comment job did not finish");
+    }
+    #[test]
+    fn individual_yamls_recover_deleted_or_corrupt_index_and_keep_media_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let mut target = target(root.path());
+        fs::rename(
+            root.path().join(target.file.as_str()),
+            root.path().join("2008/09/img_20080916_035811.jpg"),
+        )
+        .unwrap();
+        target.file = LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap();
+        let take = CapturedTake {
+            id: "12345678-1234-1234-1234-123456789abc".into(),
+            path: source.path().join("take.m4a"),
+            recorded_at: "2026-11-13T13:00:00+01:00".into(),
+        };
+        fs::write(&take.path, b"test-audio-unchanged").unwrap();
+        let media = adapter();
+        let comment = publish_comment(&media, &target, &take).unwrap();
+        assert_eq!(
+            comment.audio().as_str(),
+            "2026/audio/c/com_20261113_130000.m4a"
+        );
+        assert_eq!(
+            comment.sidecar().as_str(),
+            "2026/audio/y/com_20261113_130000.yaml"
+        );
+        let repository = Arc::new(store());
+        let mut catalog = CommentCatalog::default();
+        catalog.insert(comment.clone()).unwrap();
+        repository
+            .commit(root.path(), &comment, &catalog, None)
+            .unwrap();
+        let yaml = fs::read_to_string(root.path().join(comment.sidecar().as_str())).unwrap();
+        assert!(yaml.contains("recorded_at:"));
+        assert!(yaml.contains(&take.id));
+        assert!(!yaml.contains("photo_taken_at"));
+        assert!(!yaml.contains(root.path().to_str().unwrap()));
+        fs::remove_file(root.path().join(FILE)).unwrap();
+        let recovered = repository.load(root.path()).unwrap();
+        assert_eq!(
+            recovered.catalog.entries()[comment.id()].photo(),
+            comment.photo()
+        );
+        assert_eq!(
+            recovered.catalog.entries()[comment.id()]
+                .photo_time()
+                .unwrap()
+                .stamp(),
+            "20080916_035811"
+        );
+        fs::write(root.path().join(FILE), b"broken: [").unwrap();
+        let mut session =
+            CommentSession::new(repository.clone(), Arc::new(Recorder), Arc::new(media));
+        session.load(root.path().into());
+        drain(&mut session);
+        assert!(!session.is_loaded());
+        // Same deferred recovery requested by File → Refresh, even with a damaged cache.
+        session.refresh_index();
+        drain(&mut session);
+        assert!(session.is_loaded());
+        assert_eq!(session.catalog().entries().len(), 1);
+        assert!(session.message().contains("neu aufgebaut"));
+        assert!(fs::read_dir(root.path()).unwrap().any(|e| {
+            e.unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("photosuite-comments-recovery-")
+        }));
+        assert_eq!(
+            fs::read(root.path().join(comment.audio().as_str())).unwrap(),
+            b"test-audio-unchanged"
+        );
+        assert_eq!(fs::read(&take.path).unwrap(), b"test-audio-unchanged");
+        assert_eq!(
+            fs::read(root.path().join(target.file.as_str())).unwrap(),
+            b"unchanged photo"
+        );
+        // Existing individual metadata overrides an outdated cache; it is never rewritten.
+        let sidecar_path = root.path().join(comment.sidecar().as_str());
+        let mut value: serde_json::Value =
+            serde_saphyr::from_str(&fs::read_to_string(&sidecar_path).unwrap()).unwrap();
+        value["photo"] = serde_json::json!("2010/01/img_20100102_030405.jpg");
+        let edited = serde_saphyr::to_string(&value).unwrap();
+        fs::write(&sidecar_path, &edited).unwrap();
+        fs::write(
+            root.path().join("2026/audio/y/._com_20261113_130000.yaml"),
+            b"AppleDouble binary",
+        )
+        .unwrap();
+        session.rebuild().unwrap();
+        drain(&mut session);
+        assert!(session.error().is_empty(), "{}", session.error());
+        assert_eq!(
+            session.catalog().entries()[comment.id()].photo().as_str(),
+            "2010/01/img_20100102_030405.jpg"
+        );
+        assert_eq!(fs::read_to_string(&sidecar_path).unwrap(), edited);
+        let previous = fs::read(root.path().join(FILE)).unwrap();
+        fs::write(
+            root.path().join(comment.sidecar().as_str()),
+            b"version: 1\nunknown: true",
+        )
+        .unwrap();
+        session.rebuild().unwrap();
+        drain(&mut session);
+        assert!(!session.error().is_empty());
+        assert_eq!(fs::read(root.path().join(FILE)).unwrap(), previous);
+    }
+    #[test]
+    fn existing_index_only_fills_missing_sidecars_during_explicit_rebuild() {
+        let root = tempfile::tempdir().unwrap();
+        let c = Comment::new(
+            "12345678-1234-1234-1234-123456789abc".into(),
+            LibraryFile::new("2023/audio/comment_20230101_120000.m4a".into()).unwrap(),
+            LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
+            RecordedAt::parse("2023-01-01T12:00:00+01:00").unwrap(),
+            None,
+        )
+        .unwrap();
+        let mut catalog = CommentCatalog::default();
+        catalog.insert(c.clone()).unwrap();
+        let bytes = encode(&catalog).unwrap();
+        fs::write(
+            root.path().join(FILE),
+            String::from_utf8(bytes)
+                .unwrap()
+                .replace("version: 2", "version: 1"),
+        )
+        .unwrap();
+        let repository = Arc::new(store());
+        let mut session =
+            CommentSession::new(repository.clone(), Arc::new(Recorder), Arc::new(adapter()));
+        session.load(root.path().into());
+        drain(&mut session);
+        session.rebuild().unwrap();
+        drain(&mut session);
+        assert!(session.error().is_empty(), "{}", session.error());
+        assert!(root.path().join(c.sidecar().as_str()).is_file());
+        assert_eq!(session.catalog().entries().len(), 1);
+        let previous = fs::read(root.path().join(FILE)).unwrap();
+        session.rebuild().unwrap();
+        session.cancel_rebuild();
+        drain(&mut session);
+        assert_eq!(fs::read(root.path().join(FILE)).unwrap(), previous);
+        // Missing individual records may be recovered from a readable index (also version 2).
+        fs::remove_file(root.path().join(c.sidecar().as_str())).unwrap();
+        session.rebuild().unwrap();
+        drain(&mut session);
+        assert!(session.error().is_empty());
+        assert_eq!(session.catalog().entries().len(), 1);
+        assert!(root.path().join(c.sidecar().as_str()).is_file());
+        fs::write(root.path().join(FILE), b"external edit").unwrap();
+        assert!(
+            repository
+                .replace_index(root.path(), &catalog, Some(&previous))
+                .is_err()
+        );
+        assert_eq!(fs::read(root.path().join(FILE)).unwrap(), b"external edit");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_collisions_symlinked_metadata_folders_and_external_updates_are_preserved() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let external = tempfile::tempdir().unwrap();
+        let c = Comment::new(
+            "12345678-1234-1234-1234-123456789abc".into(),
+            LibraryFile::new("2026/audio/c/com_20261113_130000.m4a".into()).unwrap(),
+            LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+            RecordedAt::parse("2026-11-13T13:00:00+01:00").unwrap(),
+            None,
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join("2026/audio")).unwrap();
+        symlink(external.path(), root.path().join("2026/audio/y")).unwrap();
+        assert!(store().write_sidecar(root.path(), &c).is_err());
+        assert!(
+            store()
+                .scan_sidecars(root.path(), &AtomicBool::new(false), &|_| {})
+                .is_err()
+        );
+        assert_eq!(fs::read_dir(external.path()).unwrap().count(), 0);
+        fs::remove_file(root.path().join("2026/audio/y")).unwrap();
+        store().write_sidecar(root.path(), &c).unwrap();
+        let path = root.path().join(c.sidecar().as_str());
+        let bytes = fs::read(&path).unwrap();
+        store().write_sidecar(root.path(), &c).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        fs::write(&path, b"foreign data").unwrap();
+        assert!(store().write_sidecar(root.path(), &c).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"foreign data");
     }
 }

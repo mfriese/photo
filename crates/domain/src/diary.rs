@@ -56,8 +56,17 @@ impl<'a> AudioScope<'a> {
         } else if folder.eq_ignore_ascii_case("audio") {
             match parts.next() {
                 None => AudioKind::All,
-                Some(name) if name.eq_ignore_ascii_case("diary") => AudioKind::Diary,
-                Some(name) if name.eq_ignore_ascii_case("comments") => AudioKind::Comments,
+                Some(name)
+                    if (name.eq_ignore_ascii_case("diary") || name.eq_ignore_ascii_case("d")) =>
+                {
+                    AudioKind::Diary
+                }
+                Some(name)
+                    if (name.eq_ignore_ascii_case("comments")
+                        || name.eq_ignore_ascii_case("c")) =>
+                {
+                    AudioKind::Comments
+                }
                 _ => return None,
             }
         } else {
@@ -91,6 +100,59 @@ impl<'a> AudioScope<'a> {
         .into_owned()
     }
 }
+/// The selected tree view, distinct from a physical audio folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioViewScope<'a> {
+    audio: AudioScope<'a>,
+    month: Option<&'a str>,
+}
+impl<'a> AudioViewScope<'a> {
+    pub fn parse(group: &'a str) -> Option<Self> {
+        if let Some(audio) = AudioScope::parse(group) {
+            return Some(Self { audio, month: None });
+        }
+        let mut parts = group.split(std::path::MAIN_SEPARATOR);
+        let year = parts.next()?;
+        let month = parts.next();
+        if parts.next().is_some() {
+            return None;
+        }
+        if month
+            .is_some_and(|m| m.len() != 2 || !m.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)))
+        {
+            return None;
+        }
+        Some(Self {
+            audio: AudioScope::for_year(year, AudioKind::All)?,
+            month,
+        })
+    }
+    pub fn year(self) -> &'a str {
+        self.audio.year()
+    }
+    pub fn kind(self) -> AudioKind {
+        self.audio.kind()
+    }
+    pub fn month(self) -> Option<&'a str> {
+        self.month
+    }
+    pub fn group(self) -> String {
+        self.month
+            .map(|month| {
+                Path::new(self.year())
+                    .join(month)
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_else(|| self.audio.group())
+    }
+    pub fn includes(self, media: &crate::Media) -> bool {
+        self.audio.includes(media)
+            && self.month.is_none_or(|month| {
+                crate::capture_from_filename(media).is_some_and(|date| date.month() == month)
+            })
+    }
+}
 pub fn audio_year(group: &str) -> Option<&str> {
     AudioScope::parse(group).map(AudioScope::year)
 }
@@ -102,9 +164,23 @@ pub fn audio_kind(media: &crate::Media) -> Option<AudioKind> {
     }
     let scope = AudioScope::parse(media.group())?;
     let name = media.path().file_stem()?.to_str()?;
+    if scope.kind != AudioKind::All
+        && media
+            .group()
+            .split(std::path::MAIN_SEPARATOR)
+            .next_back()
+            .is_some_and(|folder| {
+                folder.eq_ignore_ascii_case("d") || folder.eq_ignore_ascii_case("c")
+            })
+    {
+        return Some(scope.kind);
+    }
     if name
-        .get(..8)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("comment_"))
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("com_"))
+        || name
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("comment_"))
     {
         Some(AudioKind::Comments)
     } else if name
@@ -179,6 +255,60 @@ mod scope_tests {
             "2023/audio/comments/other",
         ] {
             assert!(AudioScope::parse(invalid).is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod dedicated_audio_tests {
+    use super::*;
+    #[test]
+    fn short_folders_and_new_prefix_preserve_legacy_category_views() {
+        for (folder, name, kind) in [
+            ("2026/audio/d", "aud_20261113_120000.mp4", AudioKind::Diary),
+            (
+                "2026/audio/c",
+                "com_20261113_130000.m4a",
+                AudioKind::Comments,
+            ),
+            ("2026/audio/d", "old.wav", AudioKind::Diary),
+        ] {
+            let m = crate::Media::from_library_path(Path::new(folder).join(name), folder.into())
+                .unwrap();
+            assert!(m.is_audio());
+            assert_eq!(audio_kind(&m), Some(kind));
+            assert!(AudioScope::parse("2026/audio").unwrap().includes(&m));
+            assert_eq!(AudioScope::parse(folder).unwrap().kind(), kind);
+        }
+        assert!(AudioScope::parse("2026/audio/y").is_none());
+        assert_eq!(
+            crate::audio_date::date_from_filename("com_20261113_130000_002")
+                .unwrap()
+                .stamp(),
+            "20261113_130000"
+        );
+    }
+}
+
+#[cfg(test)]
+mod month_scope_tests {
+    use super::*;
+    #[test]
+    fn view_months_are_validated_and_do_not_change_physical_audio_detection() {
+        assert!(AudioScope::parse("2008/09").is_none());
+        assert!(audio_year("2008/09").is_none());
+        let scope = AudioViewScope::parse("2008/09").unwrap();
+        assert_eq!(scope.month(), Some("09"));
+        assert_eq!(scope.kind(), AudioKind::All);
+        assert_eq!(scope.group(), "2008/09");
+        for invalid in [
+            "2008/00",
+            "2008/13",
+            "2008/9",
+            "2008/audio/unknown",
+            "2008/09/extra",
+        ] {
+            assert!(AudioViewScope::parse(invalid).is_none());
         }
     }
 }

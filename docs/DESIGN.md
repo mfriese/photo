@@ -72,7 +72,7 @@ Window → Audio Player zeigt denselben laufenden Player ohne Neustart. Das Schl
 Die Hauptaktionen liegen ausschließlich in nativen muda-Menüs: PhotoSuite, File, Edit, View, Window, Help. Keine zusätzliche egui-Menüleiste. Keine dauerhafte Kopfzeile im Fenster. Edit → Find… öffnet einen schmalen Suchdialog mit Textfeld und „Filter zurücksetzen“; der Filter bleibt beim Schließen erhalten. Vorschaugröße und EXIF-Einstellung über Menüs/Settings erreichen. Bibliothekspfad nur im Fenstertitel; Filter-/Schreibstatus in der Fußzeile. Keine doppelte App-Logo-/Buttonleiste. Native Häkchen spiegeln Einstellungen, nicht verfügbare Aktionen sind deaktiviert. Englische Standardbezeichnungen in der nativen Menüleiste; Galeriebeschriftungen bleiben deutsch. Screenshots bleiben auf ausdrücklichen Nutzerwunsch zurückgestellt.
 
 ## Audio-Navigation
-Unter jedem aufgeklappten Jahr zuerst der zunächst eingeklappte Eintrag „Audio“, darunter direkt die Monate auf derselben Ebene. Keine Photos-Zwischenebene. Der Jahresklick wählt die Jahresfotowand. Audio wählt die kombinierte Audioansicht; darunter ausschließlich „Tagebuch“ und „Fotokommentare“ als virtuelle Filter. Keine zusätzlichen Kategorieordner auf der Platte erzeugen. Kachelraster, Zoomstufen, proportionale Hörleiste und kompakte Layouts beibehalten; Bereichstitel in Audioansicht und separatem Player zeigen die aktive Kategorie.
+Unter jedem aufgeklappten Jahr zuerst der zunächst eingeklappte Eintrag „Audio“, darunter direkt die Monate auf derselben Ebene. Keine Photos-Zwischenebene. Der Jahresklick wählt die Jahresfotowand. Audio wählt die kombinierte Audioansicht; darunter ausschließlich „Tagebuch“ und „Kommentare“ als virtuelle Filter. Keine zusätzlichen Kategorieordner auf der Platte erzeugen. Kachelraster, Zoomstufen, proportionale Hörleiste und kompakte Layouts beibehalten; Bereichstitel in Audioansicht und separatem Player zeigen die aktive Kategorie.
 
 Galeriekacheln verwenden 12-Punkte-Beschriftungen in zwei 16-Punkte-Zeilen, mit 2 Punkten Abstand innerhalb der Kachel. Unbekannte Datumsangaben sichtbar benennen. Inline-Audio zeigt einen 28×22-Punkte-Play/Pause-Button und eine die Restbreite füllende Spur; Datum/Fortschritt bleiben im Tooltip. Keine Zeile unter der Seitenüberschrift für den Audioplayer reservieren.
 
@@ -94,3 +94,17 @@ Aufnahme-Fußbereich mit proportionalem Foto und zwei gleich hohen quadratischen
 Kommentaraufnahme: Play/Pause-Vorhören als gezeichneter 34-Punkte-Button links vor Aufnahme/Pause und Stop. Die Kurve erhält eine helle Abspielmarkierung mit Griff; bei Pause/Fertig bleibt der sichtbare Ausschnitt unverändert und kann per Klicken/Ziehen positioniert werden. Status zeigt Position/Gesamtdauer. Während Aufnahme kein Seek, weiterhin langsame 32-Sekunden-Darstellung. Keine zusätzliche Anhören-Textzeile.
 
 Bei Aufnahme/Pause keine aufblitzenden Vorbereitungstexte oder zusätzliche Meldungszeile. Übergangsphasen zeigen nur die Dauer im festen Statusbereich; stabile Aufnahme-/Pausenbeschriftung und echte Fehler bleiben erhalten.
+
+Die Einstellungen enthalten eine Gruppe Audiokommentare mit Neuaufbau-Aktion, Fortschritt, Abbrechen und Ergebnis/Fehler. Die Aktion ist während einer ungespeicherten Aufnahme oder eines anderen Kommentarauftrags gesperrt. Status meldet geprüfte YAMLs; kein Vollscan auf dem UI-Thread und keine zusätzliche permanente Galeriezeile.
+
+Die kompakte Hörleiste zeigt den aktuellen Baumbereich, auch während anderswo Audio läuft. Fremder Transportzustand wird nicht auf die neue Leiste übertragen. Kategoriename in Baum/Player/Tooltips: Kommentare.
+
+Jede Kopf-Hörleiste: Play/Pause links, proportionale Spur, rechts ein kompakter gezeichneter Fenster-Symbolbutton mit Tooltip. Dieselbe feste Höhe, keine zusätzliche Textzeile. Alten Jahresverlauf-öffnen-Textbutton und Aufnahmen-/Normalstatuszeile im Audioraster entfernen. Monatsleiste und Player zeigen die tatsächliche Monatsmenge.
+
+Native Playerfußzeile: vier gleich große Symbolbuttons als feste, horizontal zentrierte Gruppe (40 Punkte Breite, 6 Punkte Abstand), Lautstärke weiterhin rechts. Gezeichnete transporttypische Symbole statt wechselnder Buttontexte; roter kleiner Kreis für Kommentaraufnahme. Zugängliche Labels und Tooltips erhalten die Bedeutung. Play/Pause-Bildwechsel verändert keine Geometrie.
+
+Playerfußzeile: native Gruppe mit bottomAnchor-Inset −22 innerhalb des Inhaltsbereichs positionieren. Alle Buttonbounds vollständig sichtbar halten, auch bei minimaler Fensterbreite.
+
+- Die native Wiedergabesteuerung verwendet wie der Aufnahmedialog quadratische 34-Punkte-Buttons, helle Symbole und denselben roten Aufnahmekreis.
+
+Transportflächen verwenden die zentrale Palette in src/theme.rs: 34-Punkte-Quadrate im Aufnahme-/Bereichsplayer, ein Punkt Rahmen und Radius fünf; identische normale, Hover-, Klick- und deaktivierte Farben. Native Farben werden generiert. Headercontrols bleiben kompakt, ohne Audio sind Symbol, Rahmen und Leiste eindeutig abgedunkelt. Alles steht über den Jahren; Tagwolke enthält normalisierte kleine Namen.

@@ -58,3 +58,6 @@ char *photosuite_comment_snapshot(void *recorder);
 
 // Queue a cursor update in a paused/finalized own-temp take.
 void photosuite_comment_seek(void *recorder,double seconds);
+
+// Main-thread photo-record intent. IDs bind it to the displayed center photo; no microphone access.
+int photosuite_audio_context_record(unsigned long long *session,unsigned long long *request,unsigned int *slot);

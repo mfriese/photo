@@ -17,7 +17,7 @@ pub fn publish_comment(
     for suffix in 0..10000 {
         let (path, comment) =
             comment_candidate(target, take, &recorded, photo_time.clone(), suffix)?;
-        if store.exists(&path)? {
+        if store.exists(&path)? || store.exists(&target.root.join(comment.sidecar().as_str()))? {
             continue;
         }
         store.copy_verified(&take.path, &path)?;
