@@ -1,6 +1,6 @@
-use crate::import::{self, Event, ImportAdapter};
+use crate::import::{self, Event};
 use eframe::egui;
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 #[derive(Default)]
 pub struct ImportPanel {
     cleanup: crate::import_cleanup_ui::SourceCleanupDialog,
@@ -10,6 +10,9 @@ pub struct ImportPanel {
     target: Option<PathBuf>,
     session: photosuite_application::import_session::ImportSession,
     detailed_log: bool,
+    tags: std::collections::BTreeSet<String>,
+    new_tag: String,
+    include_identical: bool,
     start_error: Option<String>,
 }
 impl ImportPanel {
@@ -18,19 +21,22 @@ impl ImportPanel {
     }
     pub fn open(&mut self, library: Option<PathBuf>) {
         self.visible = true;
-        if !self.session.running() && self.target.is_none() {
+        if !self.session.running() {
             self.target = library;
         }
     }
     pub fn show(
         &mut self,
         ctx: &egui::Context,
-        adapter: Arc<dyn ImportAdapter>,
-        repository: Arc<dyn crate::ports::MediaRepository>,
-        duplicates: Arc<dyn photosuite_application::duplicates::DuplicateImages>,
-        opener: Arc<dyn crate::ports::MediaOpener>,
-        cleanup_port: Arc<dyn photosuite_application::import_cleanup::CleanupPort>,
+        services: &crate::application::Services,
+        library: Option<&std::path::Path>,
+        tag_choices: Vec<String>,
     ) -> Option<PathBuf> {
+        let adapter = services.importer.clone();
+        let repository = services.repository.clone();
+        let duplicates = services.duplicates.clone();
+        let opener = services.opener.clone();
+        let cleanup_port = services.import_cleanup.clone();
         self.cleanup.show(ctx, cleanup_port.clone());
         let mut refresh = None;
         if !self.visible && self.duplicate_review.running() {
@@ -45,6 +51,9 @@ impl ImportPanel {
         if self.session.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
+        if !self.session.running() {
+            self.target = library.map(std::path::Path::to_path_buf);
+        }
         egui::Window::new("Importieren · Schritt für Schritt")
             .open(&mut self.visible)
             .default_size([700., 600.])
@@ -53,7 +62,8 @@ impl ImportPanel {
             .vscroll(true)
             .show(ctx, |ui| {
                 crate::options_ui::spacing(ui);
-                ui.label("Dateien in die Bibliothek kopieren und nach Aufnahmedatum benennen.");
+                ui.label("Dateien in die geöffnete Bibliothek kopieren und nach Aufnahmedatum benennen.");
+                if self.target.is_none(){ui.label("Zum Importieren zuerst eine Bibliothek öffnen.");}
                 ui.add_enabled_ui(!self.session.running() && !self.duplicate_review.running() && !self.cleanup.busy(), |ui| {
                     crate::options_ui::section(ui, "Quelle", |ui| {
                         if ui.button("Quellverzeichnis wählen …").clicked()
@@ -62,18 +72,25 @@ impl ImportPanel {
                         ui.add(egui::Label::new(&text).truncate()).on_hover_text(text);
                         ui.small("Beim Import bleiben Quelldateien unverändert.");
                     });
-                    crate::options_ui::section(ui, "Zielbibliothek", |ui| {
-                        if ui.button("Zielbibliothek wählen …").clicked()
-                            && let Some(path) = rfd::FileDialog::new().pick_folder() { self.target = Some(path); }
-                        let text = self.target.as_ref().map(|p| p.display().to_string()).unwrap_or("Keine Bibliothek gewählt".into());
-                        ui.add(egui::Label::new(&text).truncate()).on_hover_text(text);
-                        ui.small("Fotos/Video: Jahr/Monat/img_… · Audio: Jahr/audio/aud_…");
+                    crate::options_ui::section(ui,"Tags für diesen Import",|ui|{
+                        if !tag_choices.is_empty(){
+                            let choices=&tag_choices;
+                            ui.horizontal_wrapped(|ui|{for tag in choices {if ui.selectable_label(self.tags.contains(tag),tag).clicked() && !self.tags.remove(tag){self.tags.insert(tag.clone());}}});
+                        }
+                        ui.horizontal_wrapped(|ui|{
+                            let input=ui.add(egui::TextEdit::singleline(&mut self.new_tag).hint_text("Neuer Tag, z. B. scan").desired_width(180.));
+                            if ui.button("Hinzufügen").clicked() || (input.lost_focus() && ui.input(|i|i.key_pressed(egui::Key::Enter))){
+                                match crate::domain::tags::normalize_tag_name(&self.new_tag){Ok(tag)=>{self.tags.insert(tag);self.new_tag.clear();self.start_error=None;},Err(e)=>self.start_error=Some(e)}
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui|{for tag in self.tags.clone(){if ui.add(egui::Button::new(&tag).selected(true)).on_hover_text("Import-Tag entfernen").clicked(){self.tags.remove(&tag);}}});
+                        ui.checkbox(&mut self.include_identical,"Tags auch byteidentischen, übersprungenen Zieldateien zuweisen").on_hover_text("Vorhandene Tags bleiben erhalten. Videokollisionen ohne Inhaltsprüfung werden nicht umgetaggt.");
                     });
                     ui.horizontal_wrapped(|ui| {
                         let ready = self.source.is_some() && self.target.is_some();
                         for (title, preview) in [("1. Prüflauf", true), ("2. Import starten", false)] {
                             if ui.add_enabled(ready, egui::Button::new(title)).clicked() {
-                                self.start_error=self.session.start(adapter.clone(),self.source.clone().unwrap(),self.target.clone().unwrap(),preview).err();
+                                self.start_error=self.session.start_tagged(adapter.clone(),self.source.clone().unwrap(),self.target.clone().unwrap(),preview,(!self.tags.is_empty()).then(||import::TaggingOptions {repository:services.organization.clone(),tags:self.tags.iter().cloned().collect(),include_identical:self.include_identical})).err();
                             }
                         }
                     });
@@ -157,6 +174,12 @@ fn compact_line(event: &Event, root: Option<&std::path::Path>) -> Option<String>
     if let Some(target) = destination {
         line.push_str(&format!(" → {target}"));
     }
+    if !report.tags.is_empty() {
+        line.push_str(&format!(" · Tags: {}", report.tags.join(", ")));
+    }
+    if let Some(error) = &report.tag_error {
+        line.push_str(&format!(" · Tagfehler: {error}"));
+    }
     if let import::FileDecision::Failed(error) = &report.decision {
         line.push_str(&format!(" · {error}"));
     }
@@ -231,7 +254,9 @@ fn show_compact_log(
             for index in rows {
                 let event = reports[index];
                 let report = event.file_report.as_ref().unwrap();
-                let color = if matches!(report.decision, import::FileDecision::Failed(_)) {
+                let color = if report.tag_error.is_some()
+                    || matches!(report.decision, import::FileDecision::Failed(_))
+                {
                     egui::Color32::LIGHT_RED
                 } else {
                     crate::theme::TEXT
@@ -264,6 +289,8 @@ mod tests {
                 .unwrap(),
             ),
             decision: import::FileDecision::Planned,
+            tags: Vec::new(),
+            tag_error: None,
         };
         let events = vec![
             Event {

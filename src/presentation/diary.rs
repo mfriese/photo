@@ -42,7 +42,11 @@ impl super::Suite {
         if self.diary_catalog.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        let mut ordered = visible.to_vec();
+        let mut chosen = None;
+        egui::CentralPanel::default().frame(theme::panel(theme::CANVAS,12)).show(ctx,|ui| {
+            let kind=crate::domain::diary::AudioScope::parse(self.group.as_deref().unwrap_or("")).map(|scope|scope.kind()).unwrap_or(crate::domain::diary::AudioKind::All);
+            self.page_heading(ui,&format!("{} · {year}",crate::audio_labels::kind_label(kind)));
+        let mut ordered=self.tag_cloud(ui,visible);
         ordered.sort_by(|&a, &b| {
             let date = |i: usize| {
                 self.diary_catalog
@@ -55,10 +59,7 @@ impl super::Suite {
                 .cmp(date(b).unwrap_or("99999999_999999"))
                 .then(self.items[a].path().cmp(self.items[b].path()))
         });
-        let mut chosen = None;
-        egui::CentralPanel::default().frame(theme::panel(theme::CANVAS,12)).show(ctx,|ui| {
-            let kind=crate::domain::diary::AudioScope::parse(self.group.as_deref().unwrap_or("")).map(|scope|scope.kind()).unwrap_or(crate::domain::diary::AudioKind::All);
-            self.page_heading(ui,&format!("{} · {year}",crate::audio_labels::kind_label(kind)));
+
             if ordered.is_empty(){ui.label("Noch keine Aufnahmen in diesem Bereich. Importierte Audiodateien erscheinen unter Tagebuch.");return;}
             ui.add_space(6.);
             ui.spacing_mut().item_spacing=egui::vec2(8.,4.);

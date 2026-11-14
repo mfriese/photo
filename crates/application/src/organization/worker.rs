@@ -6,6 +6,10 @@ use std::{
     thread,
 };
 pub(super) enum Request {
+    Rebuild {
+        root: PathBuf,
+        generation: u64,
+    },
     Load {
         root: PathBuf,
         generation: u64,
@@ -30,7 +34,8 @@ pub(super) enum Event {
 }
 #[derive(Default)]
 struct Mailbox {
-    load: Option<Request>,
+    load: Option<(Request, Arc<std::sync::atomic::AtomicBool>)>,
+    active_read: Option<Arc<std::sync::atomic::AtomicBool>>,
     save: Option<Request>,
     stopping: bool,
 }
@@ -38,6 +43,8 @@ struct Loaded {
     root: PathBuf,
     generation: u64,
     version: Option<Vec<u8>>,
+    catalog: TagCatalog,
+    seeded: bool,
 }
 pub(super) struct Worker {
     inbox: Arc<(Mutex<Mailbox>, Condvar)>,
@@ -51,27 +58,42 @@ impl Worker {
         let handle = thread::spawn(move || {
             let mut loaded: Option<Loaded> = None;
             loop {
-                let request = {
+                let (request, cancel) = {
                     let (lock, wake) = &*shared;
                     let mut mailbox = lock.lock().unwrap();
                     while mailbox.save.is_none() && mailbox.load.is_none() && !mailbox.stopping {
                         mailbox = wake.wait(mailbox).unwrap();
                     }
                     if let Some(save) = mailbox.save.take() {
-                        save
+                        (save, Arc::new(std::sync::atomic::AtomicBool::new(false)))
                     } else if mailbox.stopping {
                         break;
                     } else {
-                        mailbox.load.take().unwrap()
+                        let (request, cancel) = mailbox.load.take().unwrap();
+                        mailbox.active_read = Some(cancel.clone());
+                        (request, cancel)
                     }
                 };
+                let reading = !matches!(&request, Request::Save { .. });
+                let rebuild = matches!(&request, Request::Rebuild { .. });
                 match request {
-                    Request::Load { root, generation } => {
-                        let result = repository.load(&root).map(|stored| {
+                    Request::Load { root, generation } | Request::Rebuild { root, generation } => {
+                        let result = if rebuild {
+                            super::index::rebuild_cancel(repository.as_ref(), &root, &cancel)
+                        } else {
+                            super::index::load_with_backfill_cancel(
+                                repository.as_ref(),
+                                &root,
+                                &cancel,
+                            )
+                        }
+                        .map(|stored| {
                             loaded = Some(Loaded {
                                 root,
                                 generation,
                                 version: stored.revision,
+                                catalog: stored.catalog.clone(),
+                                seeded: true,
                             });
                             stored.catalog
                         });
@@ -90,9 +112,20 @@ impl Worker {
                             Some(active)
                                 if active.root == root && active.generation == generation =>
                             {
-                                repository
-                                    .save(&root, &catalog, active.version.as_deref())
-                                    .map(|new| active.version = Some(new))
+                                super::index::save_cancel(
+                                    repository.as_ref(),
+                                    &root,
+                                    &active.catalog,
+                                    &catalog,
+                                    active.version.as_deref(),
+                                    !active.seeded,
+                                    &std::sync::atomic::AtomicBool::new(false),
+                                )
+                                .map(|new| {
+                                    active.version = Some(new);
+                                    active.catalog = (*catalog).clone();
+                                    active.seeded = true;
+                                })
                             }
                             _ => Err("Tag-Bibliothek ist nicht geladen".into()),
                         };
@@ -103,6 +136,10 @@ impl Worker {
                         });
                     }
                 }
+                if reading {
+                    let (lock, _) = &*shared;
+                    lock.lock().unwrap().active_read = None;
+                }
             }
         });
         (
@@ -112,6 +149,17 @@ impl Worker {
             },
             receiver,
         )
+    }
+    pub fn cancel_read(&self) -> Result<(), String> {
+        let (lock, _) = &*self.inbox;
+        let mailbox = lock.lock().map_err(|_| "Tag-Dienst wurde unterbrochen")?;
+        if let Some(active) = &mailbox.active_read {
+            active.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Some((_, queued)) = &mailbox.load {
+            queued.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(())
     }
     pub fn submit(&self, request: Request) -> Result<(), String> {
         if self
@@ -127,7 +175,15 @@ impl Worker {
             return Err("Tag-Dienst beendet".into());
         }
         match &request {
-            Request::Load { .. } => mailbox.load = Some(request),
+            Request::Load { .. } | Request::Rebuild { .. } => {
+                if let Some(active) = &mailbox.active_read {
+                    active.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                if let Some((_, queued)) = &mailbox.load {
+                    queued.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                mailbox.load = Some((request, Arc::new(std::sync::atomic::AtomicBool::new(false))));
+            }
             Request::Save { .. } => mailbox.save = Some(request),
         };
         wake.notify_one();
@@ -138,6 +194,9 @@ impl Drop for Worker {
     fn drop(&mut self) {
         let (lock, wake) = &*self.inbox;
         if let Ok(mut mailbox) = lock.lock() {
+            if let Some(active) = &mailbox.active_read {
+                active.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             mailbox.stopping = true;
             mailbox.load = None;
             wake.notify_one();

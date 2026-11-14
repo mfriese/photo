@@ -223,7 +223,7 @@ mod tests {
         .unwrap();
         let settings = store_at(local.path().join("prefs.plist"));
         assert!(settings.load_library(root.path()).unwrap().is_some());
-        let tags = crate::tag_store::YamlTags;
+        let tags = crate::tag_store::YamlTags::default();
         let loaded = tags.load(root.path()).unwrap();
         assert!(loaded.catalog.tags().is_empty());
         let comments = crate::comments_fs::YamlComments {
@@ -290,7 +290,7 @@ mod tests {
                 })
                 .is_err()
         );
-        let tags = crate::tag_store::YamlTags;
+        let tags = crate::tag_store::YamlTags::default();
         assert!(tags.load(root.path()).is_err());
         assert!(tags.save(root.path(), &Default::default(), None).is_err());
         let comments = crate::comments_fs::YamlComments {

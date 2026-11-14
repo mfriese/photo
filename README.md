@@ -84,18 +84,18 @@ Vorhandene `de.photosuite.PhotoSuite.settings.plist` und das frühere App-Domain
 
 Eine Datei über **Rechtsklick → „Tags bearbeiten …“** markieren: das funktioniert in Fotowand und Diary-Raster. In der Großansicht gibt es zusätzlich **„Tags …“** oberhalb des Bildes. Häkchen ordnen die Datei einem Tag zu oder entfernen nur diese Zuordnung. In der Verwaltung zeigt **„Anzeigen“** auch nicht als Album markierte Tags als Filter. „Alle Erinnerungen“, ein Jahr/Monat oder „Filter aufheben“ führt zurück zur normalen Navigation.
 
-Der vollständige Katalog liegt als **`yaml/tags.yaml` unterhalb des Hauptverzeichnisses der Bibliothek**:
+Der schnelle, rekonstruierbare Gesamtindex liegt unter **`yaml/tags.yaml`**. Maßgeblich sind die Tags in den einzelnen Medien-YAMLs; Tagdefinitionen und Albumflags stehen zusätzlich in `yaml/tag-definitions.yaml`. Der Index sieht beispielsweise so aus:
 
 ```yaml
 version: 1
 tags:
-  Urlaub:
+  urlaub:
     - 2023/08/img_20230816_153000.jpg
     - 2023/08/img_20230816_153500.mp4
-  Familie:
+  familie:
     - 2023/08/img_20230816_153000.jpg
 albums:
-  - Urlaub
+  - urlaub
 ```
 
 Relative Pfade unterscheiden gleichnamige Dateien verschiedener Jahre/Monate und erlauben, die Bibliothek als Ganzes zu verschieben. Alle Zuordnungen werden einmal im Hintergrund geladen und vollständig im Speicher gehalten; Albumfilter lesen keine Dateien oder EXIF nach. Für noch nicht geladene Albumjahre wird die Bibliotheksladung priorisiert. Speichern läuft im Hintergrund; wartende Zwischenstände werden zum neuesten vollständigen Katalog zusammengefasst. Fehler erscheinen im Dialog und in der Fußzeile; während ungespeicherter Tagänderungen wird ein Bibliothekswechsel verhindert. Mit „Erneut speichern“ oder bewusstem „Nicht gespeicherte Änderungen verwerfen“ lässt sich der Zustand auflösen. Beim normalen Beenden wird der neueste angenommene Stand gespeichert.
@@ -295,7 +295,7 @@ yaml/2008/09/img_20080916_035811.jpg.yaml
 2026/audio/comments/com_20261113_143000.m4a
 2027/audio/comments/com_20270102_100000.m4a
 ```
-Ein Foto-YAML (Version 2) enthält alle zugehörigen Kommentare als GUID → Audiopfad. Aufnahmedatum und Uhrzeit stehen ausschließlich im Audiodateinamen. Kommentare bleiben in der Baumauswahl und Jahreswiedergabe im tatsächlichen Aufnahmejahr; es gibt kein Umsortieren zum Fotojahr.
+Ein Medien-YAML (Version 3) enthält die Tags und beim Foto alle zugehörigen Kommentare als GUID → Audiopfad. Tatsächliche Aufnahmezeit und Foto-Bezugszeit werden aus den Mediennamen abgeleitet. Kommentare erscheinen zur Foto-Bezugszeit in der Wiedergabe, während die Audiodatei physisch im tatsächlichen Aufnahmejahr bleibt.
 
 `yaml/comments-index.yaml` ist der ableitbare Startindex (Version 3, nach Fotos gruppiert). Speichern aktualisiert erst das Foto-YAML revisionsgeprüft, dann den Index. **File → Refresh** und der Neuaufbau unter Settings lesen ausschließlich die neuen Foto-YAMLs. Keine Kompatibilität/Migration für die bisherigen audio-benannten YAMLs oder alten Zuordnungen. Veraltete Index-Versionen werden automatisch als Cache verworfen und aus den neuen Quellen rekonstruiert; ohne neue Quellen bleibt der neue Index leer. Rohe alte Indexbytes werden vor Austausch gesichert. Defekte neue Quellen oder Abbruch lassen den bestehenden Index erhalten. Medien bleiben unverändert.
 
@@ -335,6 +335,28 @@ Beim Öffnen und erneuten Einblenden des Players, Clipwechsel und Seek werden di
 ### Zentrale YAML-Ablage
 Alle bibliotheksbezogenen YAML-Dateien liegen ausschließlich unter `yaml/`: `yaml/settings.yaml`, `yaml/tags.yaml`, `yaml/comments-index.yaml`. Dateibezogene Quellen spiegeln den gesamten Medienpfad mit angehängtem `.yaml`, etwa `1980/09/img_19800916_035811.jpg` → `yaml/1980/09/img_19800916_035811.jpg.yaml`. Interne Foto-/Audioverweise bleiben relativ zur Bibliothekswurzel, nicht zum YAML-Verzeichnis. Audio bleibt unter Aufnahmejahr/audio/diary beziehungsweise audio/comments.
 
-Kein Einlesen, Migrieren oder automatisches Entfernen alter Ablageorte. Den zuletzt geöffneten Bibliothekspfad weiterhin lokal in macOS-Preferences halten. Leser erzeugen keine Verzeichnisse; Schreiboperationen legen nötige YAML-Unterordner nach Prüfung an. Gemeinsame Verzeichnisprüfung in metadata_fs; Symlinks und nicht reguläre Vorfahren ablehnen. Medienbaum und Medienscans lassen den reservierten yaml-Zweig aus. Kommentar-Neuaufbau liest ausschließlich Foto-YAMLs unter yaml/<Jahr>, überspringt Konfigurationen/Index/Recovery-Dateien und traversiert keine Medienzweige. Beschädigte Quellen ersetzen keinen gültigen Index; Sicherungen eines beschädigten Index bleiben ebenfalls unter yaml/.
+Kein Einlesen, Migrieren oder automatisches Entfernen alter Ablageorte. Den zuletzt geöffneten Bibliothekspfad weiterhin lokal in macOS-Preferences halten. Leser erzeugen keine Verzeichnisse; Schreiboperationen legen nötige YAML-Unterordner nach Prüfung an. Gemeinsame Verzeichnisprüfung in metadata_fs; Symlinks und nicht reguläre Vorfahren ablehnen. Medienbaum und Medienscans lassen den reservierten yaml-Zweig aus. Der gemeinsame Metadatenscan liest Medien-YAMLs unter yaml/; der Kommentar-Neuaufbau verwendet daraus nur Foto-Kommentarzuordnungen, überspringt Konfigurationen/Index/Recovery-Dateien und traversiert keine Medienzweige. Beschädigte Quellen ersetzen keinen gültigen Index; Sicherungen eines beschädigten Index bleiben ebenfalls unter yaml/.
 
 Die kanonischen Audioordner heißen `Jahr/audio/diary` und `Jahr/audio/comments`. Dateinamen bleiben `aud_JJJJMMTT_HHMMSS.ext` beziehungsweise `com_JJJJMMTT_HHMMSS[_NNN].m4a`. Import, Aufnahme, YAML-Verweise und Wiedergabe verwenden diese ausgeschriebenen Namen. Keine automatische Umbenennung bestehender Benutzerdateien oder Migration aus den ehemaligen Kurzordnern. YAML bleibt unverändert zentral unter yaml/.
+
+## Import-Tags und Tagfilter im Raster
+File → Import… übernimmt ausschließlich die geöffnete Bibliothek als Ziel. Ohne geöffnete Bibliothek sind Importmenü, Prüflauf und Importstart gesperrt; es gibt keine Zielauswahl. Im Dialog vorhandene Tags wählen oder neue anlegen (z. B. scan und dia). Alle Tagidentitäten werden zentral kleingeschrieben. Tags gelten für den gesamten Lauf; der Prüflauf zeigt sie und verändert keine Dateien. Optional Tags auch byteidentischen, übersprungenen Zieldateien hinzufügen; Videonamenskollisionen ohne Inhaltsvergleich sind ausgeschlossen. Bestehende Tags werden vereinigt, nicht ersetzt. Nach einem Dateikopierfehler keine Tagzuordnung. Ein nachträglicher Tagfehler erhält die verifizierte Kopie und wird separat im kompakten Protokoll gezeigt. Erfolgreiche Einzel-YAMLs bleiben auch bei Abbruch/Indexfehler erhalten.
+
+Über Foto-/Video- und Audiorastern stehen Tags, Reset und die Tags nebeneinander in einer kompakten umbrechenden Zeile. Reset bleibt immer sichtbar, ist ohne Auswahl deaktiviert und genauso hoch wie die Tagbuttons. Keine Auswahl zeigt alle Medien einschließlich ungetaggter; ein gewählter Tag filtert darauf, mehrere Tags bilden eine ODER-Auswahl. Auswahl mit Theme-Farbe, Rahmen und gezeichnetem Häkchen kenntlich machen. Wieder anklicken wählt ab; Reset hebt die Auswahl auf. Wolke aus sämtlichen Medien des aktuellen Zeitraums ermitteln, unabhängig vom eigenen Tagfilter und der Textsuche; gewählte Filter dürfen ihre übrigen Optionen nicht verstecken. Beim Jahres-/Monats-/Bibliothekswechsel Auswahl aufheben. Tagliste nach Katalogversion, Zeitraum und Medienbestand cachen; Filter nur mit vorbereiteten RAM-Mengen, ohne Datei-/EXIF-Zugriffe. Audiowiedergabe behält den gewählten zeitlichen Bereich, unabhängig vom Raster-Tagfilter.
+
+## Medien-YAMLs als maßgebliche Tagquelle
+`yaml/<vollständiger Medienpfad>.yaml` enthält Version 3 mit file, tags und comments. Vollständige Medienendung bleibt erhalten: `yaml/1980/09/img_19800916_035811.jpg.yaml`. Kommentare und Tags teilen denselben revisionsgesicherten Datensatz. Tag-Schreiber müssen comments erhalten, Kommentar-Schreiber tags erhalten. Foto, Video und Audio unterstützen; auch Medien ohne Kommentar erhalten beim Taggen eine Einzel-YAML. Bestehende zentrale Tagzuordnungen einmal im Hintergrund nachpflegen; vorhandene ausdrückliche Einzeldatei-Tags haben Vorrang. Keine Mediendateien oder EXIF-Tags verändern.
+
+`yaml/tags.yaml` und `yaml/comments-index.yaml` sind abgeleitete Startindizes. `yaml/tag-definitions.yaml` erhält die kleinen Tagdefinitionen, leere Tags und Albumflags unabhängig von Dateizuordnungen. Speichern: betroffene Einzeldateien revisionsgeprüft aktualisieren, Definitionen speichern, danach Gesamtindex. Wiederholungen desselben Speicherstands sind idempotent; Konflikte und beschädigte Quellen sichtbar behandeln. Mehrere Einzel-YAMLs bilden keine dateisystemweite Transaktion: Bei Unterbrechung können bereits gespeicherte Quellen weiter sein als der Index. File → Refresh beziehungsweise Edit → Tags and Albums… → Aus Einzeldateien neu aufbauen stellt den tatsächlich gespeicherten Stand wieder her. Beschädigte Indizes vor ausdrücklichem Neuaufbau als recovery-Datei erhalten; defekte Quellen oder Abbruch ersetzen keinen Index. Keine pauschale Löschung oder stilles Ersetzen fremder Änderungen.
+
+Architektur: Fachliche Normalisierung und ODER-Mitgliedschaft in TagCatalog/LibraryFile; Tag-Nachpflege, Speichern, Import-Tagbatch und Neuaufbau in application/organization/index. Importorchestrierung und strukturierte Tagfehler in application/import. Repository-Ports liefern technische Einzeldatei-/Indexprimitive. Gemeinsamer Codec und gestreamter Dateiscanner ausschließlich in media_records_fs, injizierte Dateiadapter in tag_store/comments_fs. Scan pro Einzeldatei auf 1 MiB begrenzen; kein vollständiges Archiv roher YAML-Bytes im RAM. Höchstens ein Tagworker mit neuestem Folgeauftrag; Lade-/Neuaufbauaufträge bei Wechsel/Abbruch stoppen, bestätigte Speicherstände beim normalen Beenden weiterhin vollständig sichern. Audio-Priorität für Metadatenscans beachten, Wartende beim Beenden abbrechen. Fehlergrenzen: Gesamtindex maximal 32 MiB, keine systemweite Sperre zwischen App-Instanzen; unvermeidbare laufende OS-Aufrufe bleiben nicht sofort abbrechbar.
+
+Beispiel einer gemeinsamen Medien-YAML:
+```yaml
+version: 3
+file: 1980/09/img_19800916_035811.jpg
+tags:
+  - dia
+  - scan
+comments: {}
+```

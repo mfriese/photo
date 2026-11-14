@@ -40,6 +40,21 @@ impl ImportSession {
         target: PathBuf,
         preview: bool,
     ) -> Result<(), String> {
+        self.start_tagged(adapter, source, target, preview, None)
+    }
+    pub fn start_tagged(
+        &mut self,
+        adapter: Arc<dyn ImportAdapter>,
+        source: PathBuf,
+        target: PathBuf,
+        preview: bool,
+        tagging: Option<import::TaggingOptions>,
+    ) -> Result<(), String> {
+        if let Some(options) = &tagging {
+            for name in &options.tags {
+                crate::domain::tags::normalize_tag_name(name)?;
+            }
+        }
         if self.running() {
             return Err("Ein Import läuft bereits".into());
         }
@@ -52,7 +67,9 @@ impl ImportSession {
         self.target = Some(target.clone());
         self.source = Some(source.clone());
         self.preview = preview;
-        self.job = Some(import::start(adapter, source, target, preview));
+        self.job = Some(import::start_tagged(
+            adapter, source, target, preview, tagging,
+        ));
         Ok(())
     }
     pub fn can_cleanup(&self) -> bool {
@@ -97,7 +114,10 @@ impl ImportSession {
                         self.total = event.total;
                     }
                     if let Some(report) = &event.file_report
-                        && report.decision == FileDecision::Copied
+                        && (report.decision == FileDecision::Copied
+                            || (!self.preview
+                                && !report.tags.is_empty()
+                                && report.tag_error.is_none()))
                     {
                         self.copied = true;
                     }

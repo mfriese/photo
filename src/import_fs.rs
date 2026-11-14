@@ -376,6 +376,98 @@ mod tests {
         );
     }
     #[test]
+    fn tagged_import_preview_duplicates_and_tag_failure_preserve_verified_copies() {
+        use photosuite_application::organization::CatalogRepository;
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        photo(&source.path().join("scan.jpg"), 10);
+        let original = fs::read(source.path().join("scan.jpg")).unwrap();
+        let run_tagged = |preview, tags: Vec<String>, include_identical| {
+            let job = import::start_tagged(
+                Arc::new(adapter()),
+                source.path().into(),
+                target.path().into(),
+                preview,
+                Some(import::TaggingOptions {
+                    repository: Arc::new(crate::tag_store::YamlTags::default()),
+                    tags,
+                    include_identical,
+                }),
+            );
+            let mut events = Vec::new();
+            loop {
+                let event = job
+                    .events
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .unwrap();
+                let done = event.is_terminal();
+                events.push(event);
+                if done {
+                    break;
+                }
+            }
+            events
+        };
+        let plan = run_tagged(true, vec!["SCAN".into(), "dia".into()], false);
+        assert!(plan.iter().any(|e| {
+            e.file_report
+                .as_ref()
+                .is_some_and(|r| r.tags == ["scan", "dia"])
+        }));
+        assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+        let imported = run_tagged(false, vec!["SCAN".into(), "dia".into()], false);
+        let report = imported
+            .iter()
+            .find_map(|e| e.file_report.as_ref())
+            .unwrap();
+        assert_eq!(report.decision, import::FileDecision::Copied);
+        assert!(report.tag_error.is_none());
+        let relative = report
+            .target
+            .as_ref()
+            .unwrap()
+            .strip_prefix(target.path())
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let repo = crate::tag_store::YamlTags::default();
+        let stored = repo.load(target.path()).unwrap();
+        assert!(stored.catalog.contains("scan", relative));
+        assert!(stored.catalog.contains("dia", relative));
+        run_tagged(false, vec!["archive".into()], false);
+        assert!(
+            !repo
+                .load(target.path())
+                .unwrap()
+                .catalog
+                .contains("archive", relative)
+        );
+        run_tagged(false, vec!["archive".into()], true);
+        assert!(
+            repo.load(target.path())
+                .unwrap()
+                .catalog
+                .contains("archive", relative)
+        );
+        // A failed metadata write must leave both the copied medium and source intact.
+        photo(&source.path().join("scan.jpg"), 60);
+        let changed = fs::read(source.path().join("scan.jpg")).unwrap();
+        let damaged = target
+            .path()
+            .join("yaml/2008/09/img_20080916_035811_001.jpg.yaml");
+        fs::write(&damaged, b"bad: [").unwrap();
+        let failed = run_tagged(false, vec!["scan".into()], false);
+        let report = failed.iter().find_map(|e| e.file_report.as_ref()).unwrap();
+        assert_eq!(report.decision, import::FileDecision::Copied);
+        assert!(report.tag_error.is_some());
+        assert_eq!(fs::read(report.target.as_ref().unwrap()).unwrap(), changed);
+        assert_eq!(fs::read(source.path().join("scan.jpg")).unwrap(), changed);
+        assert_eq!(
+            fs::read(target.path().join("2008/09/img_20080916_035811.jpg")).unwrap(),
+            original
+        );
+    }
+    #[test]
     fn gallery_metadata_port_reads_real_exif_without_modifying_the_photo() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("holiday.jpg");

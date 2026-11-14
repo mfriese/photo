@@ -20,6 +20,7 @@ mod import_fs;
 mod import_ui;
 mod infrastructure;
 mod library_preferences_fs;
+mod media_records_fs;
 mod metadata_fs;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod muda_menu;
@@ -88,7 +89,9 @@ fn main() -> eframe::Result {
         }),
         recorder: std::sync::Arc::new(comment_recorder::NativeCommentRecorder::new()),
         media_dates: importer.clone(),
-        organization: std::sync::Arc::new(tag_store::YamlTags),
+        organization: std::sync::Arc::new(tag_store::YamlTags {
+            priority: priority.clone(),
+        }),
         work_priority: priority.clone(),
         audio_source: audio_source.clone(),
         audio_player: std::sync::Arc::new(audio_player::NativeAudioPlayer::new(

@@ -370,6 +370,8 @@ mod tests {
                     source: format!("source/{i}.wav").into(),
                     target: Some(format!("library/{i}.wav").into()),
                     captured: None,
+                    tags: Vec::new(),
+                    tag_error: None,
                     decision: decision.clone(),
                 })
                 .collect(),

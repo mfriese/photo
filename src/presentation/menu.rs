@@ -14,7 +14,7 @@ fn shortcut(key: &str, shift: bool) -> Option<Shortcut> {
     })
 }
 impl Suite {
-    fn menu_entries(&self, ctx: &egui::Context) -> Vec<Entry> {
+    pub(super) fn menu_entries(&self, ctx: &egui::Context) -> Vec<Entry> {
         let blocked = self.comments.is_open()
             || self.options_open
             || self.import_panel.visible
@@ -42,7 +42,7 @@ impl Suite {
             },
             Entry {
                 action: Action::Import,
-                enabled: !blocked,
+                enabled: self.root.is_some() && !blocked,
                 checked: None,
                 shortcut: shortcut("I", true),
             },
@@ -212,6 +212,7 @@ impl Suite {
                     self.load(root.clone());
                     if self.root.as_ref() == Some(&root) {
                         self.comments.refresh_index();
+                        self.organization.request_rebuild();
                     }
                 }
             }

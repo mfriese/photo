@@ -43,7 +43,7 @@ impl DuplicateReview {
             self.choice_group = Some(report.group.name.clone());
         }
         crate::options_ui::section(ui, "Kollisionsduplikate prüfen", |ui| {
-            ui.label("Prüft Bildgruppen mit gleichem Zeitstempel und beliebigen Namensanhängen in der Zielbibliothek.");
+            ui.label("Prüft Bildgruppen mit gleichem Zeitstempel und beliebigen Namensanhängen in der geöffneten Bibliothek.");
             if !self.running() {
                 if ui
                     .add_enabled(

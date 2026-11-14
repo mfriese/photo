@@ -2,9 +2,17 @@
 use crate::domain::tags::LibraryFile;
 use eframe::egui;
 use photosuite_application::organization::{Action, Change, OrganizationSession};
+pub(super) struct CloudCache {
+    pub version: (u64, u64),
+    pub count: usize,
+    pub tags: Vec<String>,
+}
 #[derive(Default)]
 pub(super) struct TagView {
     pub open: bool,
+    pub cloud_cache: Option<CloudCache>,
+    pub filters: std::collections::BTreeSet<String>,
+    pub cloud_scope: Option<(Option<std::path::PathBuf>, Option<String>, Option<String>)>,
     pub active: Option<String>,
     pub file: Option<LibraryFile>,
     selected: Option<String>,
@@ -28,16 +36,18 @@ impl TagView {
         let mut actions = Vec::new();
         let mut retry = false;
         let mut discard = false;
+        let mut rebuild = false;
+        let mut cancel_loading = false;
         egui::Window::new("Tags und Alben").open(&mut self.open).default_width(520.)
             .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
                 crate::options_ui::spacing(ui);
                 ui.label("Tags ordnen Dateien zu. Ein als Album markierter Tag erscheint links.");
-                ui.small("Originaldateien bleiben unverändert. Automatisch in yaml/tags.yaml speichern.");
+                ui.small("Originaldateien bleiben unverändert. Tags in Medien-YAMLs speichern; yaml/tags.yaml ist der schnelle Index.");
                 if let Some(file)=&self.file{
                     ui.add(egui::Label::new(file.as_str()).truncate()).on_hover_text(file.as_str());
                     if ui.small_button("Alle Tags verwalten").clicked(){self.file=None;}
                 }
-                if session.loading(){ui.horizontal(|ui|{ui.spinner();ui.label("Tags werden geladen …");});}
+                if session.loading(){ui.horizontal(|ui|{ui.spinner();ui.label("Tags werden geladen …");if ui.small_button("Abbrechen").clicked(){cancel_loading=true;}});}
                 if session.saving(){ui.label("Änderungen werden gespeichert …");}
                 let rows:Vec<_>=session.catalog().map(|c|c.tags().iter().map(|(name,files)|
                     (name.clone(),files.len(),c.albums().contains(name),self.file.as_ref().is_some_and(|file|files.contains(file))))
@@ -71,11 +81,18 @@ impl TagView {
                 if !self.error.is_empty(){ui.colored_label(egui::Color32::LIGHT_RED,&self.error);}
                 if !session.error().is_empty(){ui.colored_label(egui::Color32::LIGHT_RED,session.error());}
                 ui.horizontal_wrapped(|ui|{
+                    if ui.add_enabled(session.root().is_some() && !session.loading() && !session.saving() && !session.dirty(),egui::Button::new("Aus Einzeldateien neu aufbauen")).clicked(){rebuild=true;}
                     if session.dirty() && ui.add_enabled(!session.saving(),egui::Button::new("Erneut speichern")).clicked(){retry=true;}
                     let label=if session.dirty(){"Nicht gespeicherte Änderungen verwerfen"}else{"Datei neu laden"};
                     if ui.add_enabled(session.root().is_some() && !session.saving(),egui::Button::new(label)).clicked(){discard=true;}
                 });
             });
+        if cancel_loading && let Err(error) = session.cancel_loading() {
+            self.error = error;
+        }
+        if rebuild && let Err(error) = session.rebuild() {
+            self.error = error;
+        }
         for action in actions {
             match session.apply(action) {
                 Ok(change) => {

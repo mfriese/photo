@@ -1883,3 +1883,176 @@ fn unselected_all_has_the_same_framed_background_and_type_size_as_years() {
         assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(r) if r.rect.contains_rect(text.visual_bounding_rect()) && r.fill==crate::theme::RAISED)));
     }
 }
+
+#[test]
+fn period_tag_cloud_is_inline_keeps_reset_and_filters_with_or() {
+    use photosuite_application::organization::Action;
+    fn input(events: Vec<egui::Event>, width: f32) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 400.),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+    fn click(pos: egui::Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+    fn draw(
+        suite: &mut Suite,
+        ctx: &egui::Context,
+        events: Vec<egui::Event>,
+        width: f32,
+    ) -> Vec<(String, egui::Rect)> {
+        let output = ctx.run(input(events, width), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let candidates = suite.unfiltered_visible();
+                suite.tag_cloud(ui, &candidates);
+            });
+        });
+        output
+            .shapes
+            .into_iter()
+            .filter_map(|shape| match shape.shape {
+                egui::Shape::Text(t) => {
+                    Some((t.galley.job.text.trim().into(), t.visual_bounding_rect()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+    for width in [220., 360., 800.] {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        ctx.style_mut(|s| s.animation_time = 0.);
+        let mut suite = test_suite();
+        suite.root = Some("/Fotos".into());
+        suite.group = Some("2023/12".into());
+        suite.videos_only = false;
+        suite.organization.open("/Fotos".into()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while suite.organization.loading() {
+            suite.organization.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        suite.items = ["a.jpg", "b.jpg", "c.jpg"]
+            .iter()
+            .map(|n| {
+                Media::from_path(
+                    std::path::Path::new("/Fotos/2023/12").join(n),
+                    "2023/12".into(),
+                )
+                .unwrap()
+            })
+            .collect();
+        for (tag, index) in [("scan", 0), ("dia", 1)] {
+            suite
+                .organization
+                .apply(Action::Create {
+                    name: tag.into(),
+                    file: Some(suite.organization.file(suite.items[index].path()).unwrap()),
+                })
+                .unwrap();
+        }
+        let labels = draw(&mut suite, &ctx, vec![], width);
+        let rect = |label: &str| labels.iter().find(|(s, _)| s == label).unwrap().1;
+        assert!((rect("Tags").center().y - rect("Reset").center().y).abs() < 2.);
+        assert!((rect("Reset").center().y - rect("dia").center().y).abs() < 2.);
+        assert!(rect("dia").left() > rect("Reset").right());
+        assert!(suite.tag_view.filters.is_empty());
+        assert_eq!(suite.visible(), vec![0, 1, 2]);
+        draw(&mut suite, &ctx, click(rect("Reset").center()), width);
+        assert!(suite.tag_view.filters.is_empty());
+        draw(&mut suite, &ctx, click(rect("scan").center()), width);
+        assert_eq!(suite.visible(), vec![0]);
+        let labels = draw(&mut suite, &ctx, vec![], width);
+        assert!(labels.iter().any(|(s, _)| s == "dia"));
+        let dia = labels.iter().find(|(s, _)| s == "dia").unwrap().1.center();
+        draw(&mut suite, &ctx, click(dia), width);
+        assert_eq!(suite.visible(), vec![0, 1]);
+        let labels = draw(&mut suite, &ctx, vec![], width);
+        let reset = labels
+            .iter()
+            .find(|(s, _)| s == "Reset")
+            .unwrap()
+            .1
+            .center();
+        draw(&mut suite, &ctx, click(reset), width);
+        assert_eq!(suite.visible(), vec![0, 1, 2]);
+        assert!(suite.tag_view.filters.is_empty());
+        suite
+            .organization
+            .apply(Action::Create {
+                name: "z".repeat(100),
+                file: Some(suite.organization.file(suite.items[0].path()).unwrap()),
+            })
+            .unwrap();
+        let labels = draw(&mut suite, &ctx, vec![], width);
+        assert!(
+            labels
+                .iter()
+                .any(|(name, rect)| name.starts_with("zzz") && rect.height() <= 22.)
+        );
+    }
+}
+#[test]
+fn import_requires_an_open_library_and_has_no_target_picker() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut suite = test_suite();
+    assert!(
+        !suite
+            .menu_entries(&ctx)
+            .iter()
+            .find(|e| e.action == crate::desktop_menu::Action::Import)
+            .unwrap()
+            .enabled
+    );
+    suite.import_panel.open(None);
+    let mut labels = Vec::new();
+    for _ in 0..2 {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 700.),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                suite.import_panel.show(ctx, &suite.services, None, vec![]);
+            },
+        );
+        labels = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+    }
+    assert!(
+        labels
+            .iter()
+            .any(|s| s.contains("zuerst eine Bibliothek öffnen"))
+    );
+    assert!(!labels.iter().any(|s| s.contains("Zielbibliothek")));
+}

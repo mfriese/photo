@@ -11,8 +11,61 @@ pub struct StoredCatalog {
     pub catalog: TagCatalog,
     pub revision: Option<Vec<u8>>,
 }
+pub struct FileTags {
+    pub file: LibraryFile,
+    pub tags: Option<std::collections::BTreeSet<String>>,
+    pub revision: Option<Vec<u8>>,
+}
 pub trait CatalogRepository: Send + Sync + 'static {
     fn load(&self, root: &Path) -> Result<StoredCatalog, String>;
+    fn supports_file_records(&self) -> bool {
+        false
+    }
+    fn read_file_tags(&self, _root: &Path, _file: &LibraryFile) -> Result<FileTags, String> {
+        Err("Einzeldateien nicht verfügbar".into())
+    }
+    fn write_file_tags(
+        &self,
+        _root: &Path,
+        _file: &LibraryFile,
+        _tags: &std::collections::BTreeSet<String>,
+        _expected: Option<&[u8]>,
+    ) -> Result<(), String> {
+        Err("Einzeldateien nicht verfügbar".into())
+    }
+    fn scan_file_tags(
+        &self,
+        _root: &Path,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<FileTags>, String> {
+        Err("Einzeldateien nicht verfügbar".into())
+    }
+    fn load_definitions(&self, _root: &Path) -> Result<StoredCatalog, String> {
+        Ok(StoredCatalog {
+            catalog: Default::default(),
+            revision: None,
+        })
+    }
+    fn save_definitions(
+        &self,
+        _root: &Path,
+        _catalog: &TagCatalog,
+        _expected: Option<&[u8]>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+    fn index_revision(&self, root: &Path) -> Result<Option<Vec<u8>>, String> {
+        self.load(root).map(|s| s.revision)
+    }
+    fn replace_index(
+        &self,
+        root: &Path,
+        catalog: &TagCatalog,
+        expected: Option<&[u8]>,
+    ) -> Result<Vec<u8>, String> {
+        self.save(root, catalog, expected)
+    }
+
     /// Compare the current file with the revision before replacement; never touch media.
     fn save(
         &self,
@@ -41,6 +94,7 @@ pub enum Action {
         enabled: bool,
     },
 }
+pub mod index;
 mod worker;
 use worker::{Event, Request, Worker};
 #[derive(Debug, PartialEq, Eq)]
@@ -64,6 +118,7 @@ pub struct OrganizationSession {
     automatic_audio: std::collections::BTreeMap<LibraryFile, crate::domain::diary::AudioKind>,
     automatic_complete: bool,
     loading: bool,
+    rebuild_pending: bool,
     saving: bool,
     error: String,
 }
@@ -83,6 +138,7 @@ impl OrganizationSession {
             automatic_audio: Default::default(),
             automatic_complete: false,
             loading: false,
+            rebuild_pending: false,
             saving: false,
             error: String::new(),
         }
@@ -96,6 +152,7 @@ impl OrganizationSession {
             root: root.clone(),
             generation,
         })?;
+        self.rebuild_pending = false;
         self.automatic_pending = false;
         self.automatic_comments = None;
         self.automatic_audio.clear();
@@ -112,6 +169,9 @@ impl OrganizationSession {
     }
     pub fn catalog(&self) -> Option<&TagCatalog> {
         self.catalog.as_deref()
+    }
+    pub fn version(&self) -> (u64, u64) {
+        (self.generation, self.revision)
     }
     pub fn root(&self) -> Option<&Path> {
         self.root.as_deref()
@@ -284,6 +344,28 @@ impl OrganizationSession {
         self.saving = true;
         Ok(())
     }
+    pub fn cancel_loading(&self) -> Result<(), String> {
+        self.worker.cancel_read()
+    }
+    pub fn request_rebuild(&mut self) {
+        self.rebuild_pending = true;
+    }
+    pub fn rebuild(&mut self) -> Result<(), String> {
+        if self.loading || self.saving || self.dirty() {
+            return Err("Bitte Tag-Laden oder Speichern zuerst abschließen".into());
+        }
+        let root = self.root.clone().ok_or("Keine Bibliothek geöffnet")?;
+        self.generation += 1;
+        self.worker.submit(Request::Rebuild {
+            root,
+            generation: self.generation,
+        })?;
+        self.loading = true;
+        self.catalog = None;
+        self.automatic_pending = true;
+        self.error.clear();
+        Ok(())
+    }
     pub fn discard(&mut self) -> Result<(), String> {
         if self.saving() {
             return Err("Bitte laufenden Speichervorgang abwarten".into());
@@ -347,6 +429,12 @@ impl OrganizationSession {
                 _ => {}
             }
         }
+        if self.rebuild_pending && !self.loading && !self.saving && !self.dirty() {
+            self.rebuild_pending = false;
+            if let Err(error) = self.rebuild() {
+                self.error = error;
+            }
+        }
         if let Err(error) = self.reconcile_pending_comments() {
             self.error = format!("Kommentar-Tags nicht abgeglichen: {error}");
         }
@@ -357,6 +445,49 @@ impl Drop for OrganizationSession {
         self.receiver.take();
     }
 }
+/// RAM-only OR selection; an empty selection preserves all candidates, including untagged media.
+pub fn filter_any(
+    items: &[Media],
+    root: &Path,
+    catalog: &TagCatalog,
+    candidates: &[usize],
+    selected: &std::collections::BTreeSet<String>,
+) -> Vec<usize> {
+    let Some(files) = catalog.selected_files(selected) else {
+        return candidates.to_vec();
+    };
+    candidates
+        .iter()
+        .copied()
+        .filter(|&index| {
+            items
+                .get(index)
+                .and_then(|m| m.path().strip_prefix(root).ok())
+                .and_then(|p| p.to_str())
+                .is_some_and(|file| files.contains(file))
+        })
+        .collect()
+}
+pub fn available_tags(
+    items: &[Media],
+    root: &Path,
+    catalog: &TagCatalog,
+    candidates: &[usize],
+) -> Vec<String> {
+    let files: std::collections::HashSet<&str> = candidates
+        .iter()
+        .filter_map(|&i| items.get(i))
+        .filter_map(|m| m.path().strip_prefix(root).ok())
+        .filter_map(|p| p.to_str())
+        .collect();
+    catalog
+        .tags()
+        .iter()
+        .filter(|(_, members)| members.iter().any(|file| files.contains(file.as_str())))
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 pub fn visible(
     items: &[Media],
     query: &str,
@@ -831,5 +962,120 @@ mod tests {
                 })
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod period_filter_tests {
+    use super::*;
+    #[test]
+    fn cloud_uses_or_and_keeps_untagged_media_when_no_tag_is_selected() {
+        let items: Vec<_> = ["a.jpg", "b.jpg", "c.jpg"]
+            .iter()
+            .map(|n| {
+                Media::from_path(Path::new("/library/2023/12").join(n), "2023/12".into()).unwrap()
+            })
+            .collect();
+        let mut catalog = TagCatalog::default();
+        catalog.create("scan").unwrap();
+        catalog.create("dia").unwrap();
+        catalog
+            .assign(
+                "scan",
+                LibraryFile::new("2023/12/a.jpg".into()).unwrap(),
+                true,
+            )
+            .unwrap();
+        catalog
+            .assign(
+                "dia",
+                LibraryFile::new("2023/12/b.jpg".into()).unwrap(),
+                true,
+            )
+            .unwrap();
+        let root = Path::new("/library");
+        let selected = Default::default();
+        assert_eq!(
+            filter_any(&items, root, &catalog, &[0, 1, 2], &selected),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            filter_any(&items, root, &catalog, &[0, 1, 2], &["SCAN".into()].into()),
+            vec![0]
+        );
+        assert_eq!(
+            filter_any(
+                &items,
+                root,
+                &catalog,
+                &[0, 1, 2],
+                &["scan".into(), "dia".into()].into()
+            ),
+            vec![0, 1]
+        );
+        assert_eq!(
+            available_tags(&items, root, &catalog, &[0, 1, 2]),
+            vec!["dia", "scan"]
+        );
+        assert_eq!(
+            available_tags(&items, root, &catalog, &[2]),
+            Vec::<String>::new()
+        );
+    }
+}
+
+#[cfg(test)]
+mod rebuild_shutdown_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Waiting {
+        priority: Arc<crate::work_priority::WorkPriority>,
+        entered: AtomicBool,
+    }
+    impl CatalogRepository for Waiting {
+        fn load(&self, _: &Path) -> Result<StoredCatalog, String> {
+            Ok(StoredCatalog {
+                catalog: Default::default(),
+                revision: None,
+            })
+        }
+        fn save(&self, _: &Path, _: &TagCatalog, _: Option<&[u8]>) -> Result<Vec<u8>, String> {
+            unreachable!()
+        }
+        fn supports_file_records(&self) -> bool {
+            true
+        }
+        fn scan_file_tags(&self, _: &Path, cancel: &AtomicBool) -> Result<Vec<FileTags>, String> {
+            self.entered.store(true, Ordering::Relaxed);
+            if !self.priority.wait_background(cancel) {
+                return Err("cancelled".into());
+            }
+            Ok(Vec::new())
+        }
+    }
+    #[test]
+    fn shutdown_cancels_a_rebuild_waiting_for_audio_without_dropping_accepted_saves() {
+        let priority = Arc::new(crate::work_priority::WorkPriority::default());
+        let lease = priority.audio();
+        let repo = Arc::new(Waiting {
+            priority,
+            entered: AtomicBool::new(false),
+        });
+        let mut session = OrganizationSession::new(repo.clone());
+        session.open("library".into()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !repo.entered.load(Ordering::Relaxed) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            drop(session);
+            tx.send(()).unwrap();
+        });
+        let result = rx.recv_timeout(std::time::Duration::from_secs(1));
+        drop(lease);
+        worker.join().unwrap();
+        assert!(result.is_ok());
     }
 }

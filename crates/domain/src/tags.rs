@@ -23,6 +23,17 @@ impl LibraryFile {
         }
         Ok(Self(value))
     }
+    pub fn metadata_path(&self) -> Result<String, String> {
+        if !crate::Media::from_path(self.0.clone().into(), String::new()).is_some()
+            || Path::new(&self.0)
+                .components()
+                .next()
+                .is_some_and(|p| p.as_os_str() == "yaml")
+        {
+            return Err("Metadaten benötigen einen relativen Medienpfad".into());
+        }
+        Ok(format!("yaml/{}.yaml", self.0))
+    }
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -128,6 +139,33 @@ impl TagCatalog {
             catalog.set_album(&album, true)?;
         }
         Ok(catalog)
+    }
+    pub fn definitions(&self) -> Self {
+        Self {
+            tags: self
+                .tags
+                .keys()
+                .map(|name| (name.clone(), BTreeSet::new()))
+                .collect(),
+            albums: self.albums.clone(),
+        }
+    }
+    pub fn files(&self) -> BTreeSet<LibraryFile> {
+        self.tags.values().flatten().cloned().collect()
+    }
+    /// A prepared OR projection. None means no restriction, including untagged files.
+    pub fn selected_files(&self, selected: &BTreeSet<String>) -> Option<BTreeSet<&str>> {
+        (!selected.is_empty()).then(|| {
+            selected
+                .iter()
+                .filter_map(|tag| self.files_for(tag))
+                .flatten()
+                .map(LibraryFile::as_str)
+                .collect()
+        })
+    }
+    pub fn matches_any(&self, file: &LibraryFile, selected: &BTreeSet<String>) -> bool {
+        selected.is_empty() || selected.iter().any(|tag| self.contains(tag, file.as_str()))
     }
     pub fn tags(&self) -> &BTreeMap<String, BTreeSet<LibraryFile>> {
         &self.tags

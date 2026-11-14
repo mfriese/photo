@@ -7,6 +7,7 @@ mod diary;
 mod icons;
 mod library;
 mod menu;
+mod tag_cloud;
 mod tags;
 mod viewer;
 mod wall;
@@ -303,6 +304,34 @@ impl Suite {
         }
     }
     fn visible(&self) -> Vec<usize> {
+        let base = self.unfiltered_visible();
+        if self.tag_view.filters.is_empty() {
+            return base;
+        }
+        match (self.organization.root(), self.organization.catalog()) {
+            (Some(root), Some(catalog)) => photosuite_application::organization::filter_any(
+                &self.items,
+                root,
+                catalog,
+                &base,
+                &self.tag_view.filters,
+            ),
+            _ => base,
+        }
+    }
+    fn prepare_tag_cloud(&mut self) {
+        let scope = (
+            self.root.clone(),
+            self.group.clone(),
+            self.tag_view.active.clone(),
+        );
+        if self.tag_view.cloud_scope.as_ref() != Some(&scope) {
+            self.tag_view.filters.clear();
+            self.tag_view.cloud_cache = None;
+            self.tag_view.cloud_scope = Some(scope);
+        }
+    }
+    fn unfiltered_visible(&self) -> Vec<usize> {
         if let Some(tag) = &self.tag_view.active {
             return match (self.organization.root(), self.organization.catalog()) {
                 (Some(root), Some(catalog)) => photosuite_application::organization::visible(
@@ -450,6 +479,7 @@ impl eframe::App for Suite {
         self.search_dialog(ctx);
         self.status_bar(ctx);
         self.library_sidebar(ctx);
+        self.prepare_tag_cloud();
         let visible = self.visible();
         self.photo_wall(ctx, &visible);
         let viewer_visible = self.viewer_items(&visible);
@@ -474,14 +504,15 @@ impl eframe::App for Suite {
         self.settings(ctx);
         self.help(ctx);
         self.poll_menu(ctx);
-        if let Some(path) = self.import_panel.show(
-            ctx,
-            self.services.importer.clone(),
-            self.services.repository.clone(),
-            self.services.duplicates.clone(),
-            self.services.opener.clone(),
-            self.services.import_cleanup.clone(),
-        ) {
+        let tag_choices = self
+            .organization
+            .catalog()
+            .map(|c| c.tags().keys().cloned().collect())
+            .unwrap_or_default();
+        if let Some(path) =
+            self.import_panel
+                .show(ctx, &self.services, self.root.as_deref(), tag_choices)
+        {
             self.refresh_after_import(path);
         }
     }

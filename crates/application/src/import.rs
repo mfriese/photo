@@ -52,6 +52,8 @@ pub struct FileReport {
     pub target: Option<PathBuf>,
     pub captured: Option<CaptureTime>,
     pub decision: FileDecision,
+    pub tags: Vec<String>,
+    pub tag_error: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub struct ImportSummary {
@@ -60,6 +62,7 @@ pub struct ImportSummary {
     pub failed: usize,
     pub preview: bool,
     pub aborted: bool,
+    pub tag_index_error: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub enum ImportOutcome {
@@ -76,7 +79,7 @@ impl ImportOutcome {
         match self {
             Self::Failed(error) => format!("Import nicht möglich: {error}"),
             Self::Completed(s) => format!(
-                "{}: {} {}, {} übersprungen, {} Fehler{}",
+                "{}: {} {}, {} übersprungen, {} Fehler{}{}",
                 if s.aborted {
                     "Abgebrochen"
                 } else {
@@ -90,7 +93,8 @@ impl ImportOutcome {
                     " · Prüflauf verändert keine Dateien; Import prüft erneut"
                 } else {
                     ""
-                }
+                },
+                s.tag_index_error.as_ref().map(|e|format!(" · Tagindex: {e}; Einzel-YAMLs bleiben erhalten. Tags aus Einzeldateien neu aufbauen.")).unwrap_or_default()
             ),
         }
     }
@@ -109,6 +113,21 @@ pub fn start(
     source: PathBuf,
     target: PathBuf,
     preview: bool,
+) -> Job {
+    start_tagged(adapter, source, target, preview, None)
+}
+#[derive(Clone)]
+pub struct TaggingOptions {
+    pub repository: Arc<dyn crate::organization::CatalogRepository>,
+    pub tags: Vec<String>,
+    pub include_identical: bool,
+}
+pub fn start_tagged(
+    adapter: Arc<dyn ImportAdapter>,
+    source: PathBuf,
+    target: PathBuf,
+    preview: bool,
+    tagging: Option<TaggingOptions>,
 ) -> Job {
     let (tx, events) = mpsc::sync_channel(128);
     let cancel = Arc::new(AtomicBool::new(false));
@@ -135,6 +154,37 @@ pub fn start(
         );
         let result = (|| {
             adapter.validate(&source, &target)?;
+            let names = tagging
+                .as_ref()
+                .map(|t| {
+                    t.tags
+                        .iter()
+                        .map(|n| crate::domain::tags::normalize_tag_name(n))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
+            if !names.is_empty() {
+                emit(
+                    0,
+                    0,
+                    format!(
+                        "{}Tags: {}",
+                        if preview { "Geplante " } else { "Import-" },
+                        names.join(", ")
+                    ),
+                );
+            }
+            let mut tag_batch = if !preview && !names.is_empty() {
+                Some(crate::organization::index::ImportTags::new_with_cancel(
+                    tagging.as_ref().unwrap().repository.clone(),
+                    target.clone(),
+                    &names,
+                    &stop,
+                )?)
+            } else {
+                None
+            };
             emit(
                 0,
                 0,
@@ -157,6 +207,8 @@ pub fn start(
                 log(format!("Quelle: {}", media.path().display()));
                 let mut report = FileReport {
                     source: media.path().into(),
+                    tags: Vec::new(),
+                    tag_error: None,
                     target: None,
                     captured: None,
                     decision: if preview {
@@ -242,6 +294,29 @@ pub fn start(
                     };
                     log(format!("Nicht importiert: {e}"));
                 }
+                let tag_eligible = matches!(
+                    report.decision,
+                    FileDecision::Copied | FileDecision::Planned
+                ) || (tagging.as_ref().is_some_and(|t| t.include_identical)
+                    && report.decision == FileDecision::SkippedIdentical);
+                if tag_eligible && !names.is_empty() {
+                    report.tags = names.clone();
+                    if let (Some(batch), Some(destination)) = (&mut tag_batch, &report.target) {
+                        match batch.assign(destination) {
+                            Ok(()) => log(format!(
+                                "Tags in Einzel-YAML gespeichert: {}",
+                                names.join(", ")
+                            )),
+                            Err(error) => {
+                                failed += 1;
+                                report.tag_error = Some(error.clone());
+                                log(format!(
+                                    "Datei erhalten; Tags konnten nicht gespeichert werden: {error}"
+                                ));
+                            }
+                        }
+                    }
+                }
                 let _ = tx.send(Event {
                     file: i + 1,
                     total,
@@ -250,16 +325,39 @@ pub fn start(
                     file_report: Some(report),
                 });
             }
+            let mut tag_index_error = None;
+            if let Some(batch) = &mut tag_batch
+                && let Err(error) = batch.finish()
+            {
+                failed += 1;
+                tag_index_error = Some(error.clone());
+                emit(
+                    0,
+                    total,
+                    format!(
+                        "Tag-Einzeldateien bleiben erhalten; Tagindex nicht aktualisiert: {error}. Tags aus Einzeldateien neu aufbauen."
+                    ),
+                );
+            }
             Ok::<_, String>(ImportSummary {
                 copied,
                 skipped,
                 failed,
                 preview,
                 aborted: stop.load(Ordering::Relaxed),
+                tag_index_error,
             })
         })();
         let outcome = match result {
             Ok(summary) => ImportOutcome::Completed(summary),
+            Err(_) if stop.load(Ordering::Relaxed) => ImportOutcome::Completed(ImportSummary {
+                copied: 0,
+                skipped: 0,
+                failed: 0,
+                preview,
+                aborted: true,
+                tag_index_error: None,
+            }),
             Err(error) => ImportOutcome::Failed(error),
         };
         let _ = tx.send(Event {

@@ -5,36 +5,10 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 const SIDECAR_MAX: u64 = 1024 * 1024;
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PhotoSidecar {
-    version: u32,
-    photo: String,
-    comments: std::collections::BTreeMap<String, String>,
-}
+use crate::media_records_fs::{Record as PhotoSidecar, parse};
 fn checked_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    if !crate::metadata_fs::check_file(path)? {
-        return Err(format!("Foto-YAML fehlt: {}", path.display()));
-    }
-    let mut bytes = Vec::new();
-    fs::File::open(path)
-        .map_err(|e| e.to_string())?
-        .take(SIDECAR_MAX + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > SIDECAR_MAX {
-        return Err("Foto-Kommentar-YAML überschreitet 1 MiB".into());
-    }
-    Ok(bytes)
-}
-fn parse(bytes: &[u8]) -> Result<PhotoSidecar, String> {
-    let entry: PhotoSidecar =
-        serde_saphyr::from_str(std::str::from_utf8(bytes).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    if entry.version != 2 {
-        return Err("Foto-Kommentar-YAML benötigt Version 2; keine Altformat-Unterstützung".into());
-    }
-    Ok(entry)
+    crate::media_records_fs::read(path)?
+        .ok_or_else(|| format!("Foto-YAML fehlt: {}", path.display()))
 }
 fn safe_reference(root: &Path, relative: &LibraryFile) -> Result<bool, String> {
     let path = root.join(relative.as_str());
@@ -71,19 +45,6 @@ fn safe_reference(root: &Path, relative: &LibraryFile) -> Result<bool, String> {
     }
     Ok(present)
 }
-// Do not traverse photo/video/diary trees to rebuild a metadata-only index.
-fn source_branch(source: &Path, path: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(source) else {
-        return false;
-    };
-    let mut parts = relative.components();
-    parts.next().is_none_or(|part| {
-        part.as_os_str().to_str().is_some_and(|year| {
-            crate::domain::diary::AudioScope::for_year(year, crate::domain::diary::AudioKind::All)
-                .is_some()
-        })
-    })
-}
 impl YamlComments {
     pub(super) fn update_photo_record(
         &self,
@@ -104,11 +65,7 @@ impl YamlComments {
         let mut entry = if let Some(bytes) = &previous {
             parse(bytes)?
         } else {
-            PhotoSidecar {
-                version: 2,
-                photo: comment.photo().as_str().into(),
-                comments: Default::default(),
-            }
+            PhotoSidecar::new(comment.photo())
         };
         if entry.photo != comment.photo().as_str() {
             return Err("Foto-YAML gehört zu einem anderen Bild".into());
@@ -125,6 +82,7 @@ impl YamlComments {
             return Ok(catalog);
         }
         entry.comments = normalized;
+        entry.version = 3;
         let bytes = serde_saphyr::to_string(&entry)
             .map_err(|e| e.to_string())?
             .into_bytes();
@@ -180,53 +138,19 @@ impl YamlComments {
         directory(root)?;
         let mut catalog = CommentCatalog::default();
         let mut checked = 0;
-        let marker = crate::metadata_fs::library_path(root, "yaml/.scan", false)?;
-        let source = marker.parent().ok_or("Metadatenverzeichnis fehlt")?;
-        if !source.try_exists().map_err(|e| e.to_string())? {
-            return Ok(Vec::new());
-        }
-        for entry in walkdir::WalkDir::new(source)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| source_branch(source, entry.path()))
-        {
+        crate::media_records_fs::visit(root, cancel, &self.priority, |photo, record, _| {
             if cancel.load(Ordering::Relaxed) || !self.priority.wait_background(cancel) {
                 return Err("Neuaufbau abgebrochen; Gesamtdatei unverändert".into());
             }
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            if path
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with("._"))
+            if !Media::from_path(photo.as_str().into(), String::new()).is_some_and(|m| m.is_photo())
             {
-                continue;
+                return Ok(());
             }
-            let relative = path.strip_prefix(source).map_err(|e| e.to_string())?;
-            if relative.components().count() <= 1 && !entry.file_type().is_dir() {
-                return Err(format!(
-                    "Metadaten-Vorfahre ist kein reguläres Verzeichnis: {}",
-                    path.display()
-                ));
+            if record.comments.is_empty() {
+                return Ok(());
             }
-            if entry.file_type().is_symlink() {
-                return Err(format!(
-                    "Symbolischer Foto-Metadatenpfad: {}",
-                    path.display()
-                ));
-            }
-            if !entry.file_type().is_file() || path.extension().is_none_or(|e| e != "yaml") {
-                continue;
-            }
-            // Only image-named records are part of this schema; audio-named records are not read.
-            let Some(name) = path.file_stem().and_then(|n| n.to_str()) else {
-                continue;
-            };
-            if !Media::from_path(name.into(), String::new()).is_some_and(|m| m.is_photo()) {
-                continue;
-            }
-            let record =
-                parse(&checked_bytes(path)?).map_err(|e| format!("{}: {e}", path.display()))?;
-            let photo = LibraryFile::new(record.photo.clone())?;
+            let path = root.join(photo.metadata_path()?);
+
             if root.join(Comment::metadata_path(&photo)?.as_str()) != path {
                 return Err(format!(
                     "Foto-YAML liegt am falschen Ort: {}",
@@ -252,7 +176,8 @@ impl YamlComments {
                 checked,
                 phase: format!("{checked} Foto-Kommentar-YAMLs geprüft"),
             });
-        }
+            Ok(())
+        })?;
         Ok(catalog.entries().values().cloned().collect())
     }
 }

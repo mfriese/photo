@@ -19,6 +19,7 @@ impl Suite {
         }
 
         if self.comments.take_changed() {
+            self.tag_view.cloud_cache = None;
             if let Some((root, catalog)) = self.comments.authoritative_catalog() {
                 self.organization.reconcile_comments(root, catalog);
             }

@@ -113,13 +113,7 @@ impl Comment {
                 crate::diary::AudioScope::for_year(year, crate::diary::AudioKind::All).is_some()
             })
             .ok_or("Foto muss in einem gültigen Bibliotheksjahr liegen")?;
-        let mut target = Path::new("yaml").join(path);
-        let name = target
-            .file_name()
-            .ok_or("Foto ohne Dateiname")?
-            .to_string_lossy();
-        target.set_file_name(format!("{name}.yaml"));
-        LibraryFile::new(target.to_string_lossy().into_owned())
+        LibraryFile::new(photo.metadata_path()?)
     }
     /// Logical playback time, distinct from the real recording timestamp and storage year.
     pub fn reference_time(&self) -> Option<CaptureTime> {

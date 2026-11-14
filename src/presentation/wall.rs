@@ -62,6 +62,7 @@ impl super::Suite {
                     }
                 });
                 self.page_heading(ui, &title);
+                let visible = self.tag_cloud(ui, visible);
                 ui.add_space(4.);
                 if visible.is_empty() && !self.collection.is_loading() {
                     ui.add_space(16.);
