@@ -72,11 +72,11 @@ Es gibt noch keinen veröffentlichten Homebrew-Cask und keinen Mac-App-Store-Dow
 4. Unter **View** Vorschaugröße, quadratischen Beschnitt und Seitenleiste einstellen.
 5. **PhotoSuite → Settings…** beziehungsweise **⌘,** öffnet die Preferences. Beim nächsten Start wird die letzte Bibliothek automatisch wieder geöffnet, sofern diese Option aktiviert bleibt.
 
-Die Einstellungen liegen als lesbare **`photosuite.yaml` direkt im Hauptverzeichnis der jeweiligen Bibliothek**. Gespeichert werden Vorschaugröße und -form, Seitenleiste, Videofilter, EXIF-Schreibmodus, Startoption und Tastenkürzel. Beim Bibliothekswechsel werden deren eigene Werte geladen. Nur der zuletzt geöffnete Bibliothekspfad bleibt lokal unter `~/Library/Preferences/de.photosuite.PhotoSuite.library.plist`. Er steht nicht in der YAML-Datei und reist nicht mit der Sammlung mit.
+Die Einstellungen liegen als lesbare **`yaml/settings.yaml` unterhalb des Hauptverzeichnisses der jeweiligen Bibliothek**. Gespeichert werden Vorschaugröße und -form, Seitenleiste, Videofilter, EXIF-Schreibmodus, Startoption und Tastenkürzel. Beim Bibliothekswechsel werden deren eigene Werte geladen. Nur der zuletzt geöffnete Bibliothekspfad bleibt lokal unter `~/Library/Preferences/de.photosuite.PhotoSuite.library.plist`. Er steht nicht in der YAML-Datei und reist nicht mit der Sammlung mit.
 
 Vorhandene `de.photosuite.PhotoSuite.settings.plist` und das frühere App-Domain bleiben als Migrationsquellen erhalten. Fehlt einer Bibliothek die YAML-Datei, werden bisherige Einstellungen übernommen und beim Laden/Speichern im neuen Format abgelegt. Einstellungen werden im Hintergrund geschrieben; schnelle Bibliothekswechsel erhalten auch noch ausstehende Änderungen der vorherigen Bibliothek. Schreibfehler erscheinen in Fußzeile und Einstellungsdialog. Defekte, unbekannte oder verlinkte Einstellungsdateien werden nicht überschrieben. Auf schreibgeschützten Bibliotheken gelten Änderungen nur in der Sitzung. Medien bleiben unverändert; die Verwaltungsdatei ist die ausdrückliche Ausnahme zum Nur-Lesen-Modus.
 
-„Originale: Nur Lesen“ in der Fußzeile bezieht sich auf die Mediendateien. `photosuite.yaml` wird als Verwaltungsdatei auch in diesem Modus gespeichert.
+„Originale: Nur Lesen“ in der Fußzeile bezieht sich auf die Mediendateien. `yaml/settings.yaml` wird als Verwaltungsdatei auch in diesem Modus gespeichert.
 
 ## Tags und virtuelle Alben
 
@@ -84,7 +84,7 @@ Vorhandene `de.photosuite.PhotoSuite.settings.plist` und das frühere App-Domain
 
 Eine Datei über **Rechtsklick → „Tags bearbeiten …“** markieren: das funktioniert in Fotowand und Diary-Raster. In der Großansicht gibt es zusätzlich **„Tags …“** oberhalb des Bildes. Häkchen ordnen die Datei einem Tag zu oder entfernen nur diese Zuordnung. In der Verwaltung zeigt **„Anzeigen“** auch nicht als Album markierte Tags als Filter. „Alle Erinnerungen“, ein Jahr/Monat oder „Filter aufheben“ führt zurück zur normalen Navigation.
 
-Der vollständige Katalog liegt als **`photosuite-tags.yaml` im Hauptverzeichnis der Bibliothek**:
+Der vollständige Katalog liegt als **`yaml/tags.yaml` unterhalb des Hauptverzeichnisses der Bibliothek**:
 
 ```yaml
 version: 1
@@ -247,7 +247,7 @@ Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: Play/Pause 
 **Window → Audio Player** zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.
 
 ### Getrennte Ablage, gemeinsame Audioansichten
-Neue Tagebuchimporte landen direkt unter **`Jahr/audio/d/aud_JJJJMMTT_HHMMSS.ext`**. Kommentare liegen unter **`Jahr/audio/c/com_JJJJMMTT_HHMMSS.m4a`**, ihre einzelnen Zuordnungsdateien unter **`Jahr/audio/y`**. **Audio** öffnet alle Aufnahmen; darunter gibt es die virtuellen Filter **Tagebuch** und **Kommentare**; die physische Trennung ist für die gemeinsame Wiedergabe transparent. Ein Klick auf Audio wählt die gemeinsame Ansicht. Jahres-/Monats-Hörleisten spielen alle Kategorien; Kategorieansichten spielen nur ihre Art. Die Abschnitte werden weiterhin im Hintergrund auf ihre echte Dauer korrigiert.
+Neue Tagebuchimporte landen direkt unter **`Jahr/audio/d/aud_JJJJMMTT_HHMMSS.ext`**. Kommentare liegen unter **`Jahr/audio/c/com_JJJJMMTT_HHMMSS.m4a`**, ihre einzelnen Zuordnungsdateien unter **`yaml/Jahr`**. Die obere Hörleiste öffnet die gemeinsame Wiedergabe; im Player gibt es die Filter **Tagebuch**, **Kommentare** und **Beide**. Die physische Trennung ist für die gemeinsame Wiedergabe transparent. Jahres-/Monats-Hörleisten spielen alle Kategorien; Kategorieansichten spielen nur ihre Art. Die Abschnitte werden weiterhin im Hintergrund auf ihre echte Dauer korrigiert.
 
 Unbekannte Audionamen bleiben in der kombinierten Playeransicht sichtbar. Audiokommentare werden nach dem Bezugsdatum ihres verknüpften Fotos eingeordnet; das tatsächliche Aufnahmedatum bleibt getrennt erhalten. Alte `Jahr/diary`-Ordner und bereits vorhandene Kategorieunterordner bleiben ohne Umbenennen/Verschieben lesbar. Neue Importe bleiben Tagebuchaufnahmen; Audiokommentare lassen sich direkt am Foto aufnehmen; es gibt keine automatische Migration. Die Kollisionsprüfung bezieht sich auf das jeweilige Importziel; ältere Bestände werden nicht automatisch zusammengeführt oder dedupliziert.
 
@@ -267,7 +267,7 @@ Fotos und Videos zeigen zugeordnete Tags als kompakte dunkle Badges unten im Bil
 ### Audiokommentar zu einem Foto
 Rechtsklick auf ein Foto → **Audiokommentar …**, oder **Aufnahme …** in der Großansicht. Mikrofon wählen, **Aufnehmen**, optional pausieren, **Aufnahme beenden**, probehören und speichern. Das Mikrofon wird erst nach deinem Klick aktiviert. Laufende Audiowiedergabe pausiert beim Aufnahmestart.
 
-Neue Kommentare liegen als M4A/AAC im Audioordner des tatsächlichen Aufnahmejahrs. Die einzelne YAML unter `Jahr/audio/y` verknüpft den Kommentar über bibliotheksrelative Pfade mit dem Foto und enthält den tatsächlichen Aufnahmestart mit Zeitzone. `photosuite-comments.yaml` ist ein rekonstruierbarer Startindex. Im Jahresplayer erscheinen sie zur Fotozeit, auch wenn das Foto viele Jahre älter ist. Fotos bleiben unverändert. Kommentare sind am Foto erneut anhörbar.
+Neue Kommentare liegen als M4A/AAC im Audioordner des tatsächlichen Aufnahmejahrs. Die einzelne Foto-YAML unter `yaml/Jahr` mit gespiegeltem Foto-Unterpfad verknüpft alle Kommentare über bibliotheksrelative Pfade mit dem Foto. Zeitangaben werden aus den Mediennamen abgeleitet und nicht zusätzlich im YAML gespeichert. `yaml/comments-index.yaml` ist ein rekonstruierbarer Startindex. Im Jahresplayer erscheinen sie zur Fotozeit, auch wenn das Foto viele Jahre älter ist. Fotos bleiben unverändert. Kommentare sind am Foto erneut anhörbar.
 
 Erster Entwurf für macOS: maximal eine Stunde je Aufnahme, Gerätewahl nur für die Sitzung. Pegel/Audiokurve zeigen die Amplitudenhüllkurve. Bei Speicherfehlern bleiben veröffentlichte Audiodateien erhalten; Zuordnung kann erneut gespeichert werden. Nach einem Absturz sind temporäre oder noch unzugeordnete Aufnahmen möglich. Einzelne extern umbenannte Bilder werden nicht automatisch neu zugeordnet. Transkription ist noch nicht enthalten. Automatisierte Tests greifen nicht auf dein Mikrofon zu; eine Aufnahme mit realem Eingabegerät wurde nicht manuell geprüft. Screenshots folgen wie vereinbart später.
 
@@ -291,13 +291,13 @@ Aufnahme und Pause blenden keine kurzzeitigen Vorbereitungstexte mehr ein; Fehle
 ### Foto-Kommentarablage
 ```text
 2008/09/img_20080916_035811.jpg
-2008/audio/y/09/img_20080916_035811.jpg.yaml
+yaml/2008/09/img_20080916_035811.jpg.yaml
 2026/audio/c/com_20261113_143000.m4a
 2027/audio/c/com_20270102_100000.m4a
 ```
 Ein Foto-YAML (Version 2) enthält alle zugehörigen Kommentare als GUID → Audiopfad. Aufnahmedatum und Uhrzeit stehen ausschließlich im Audiodateinamen. Kommentare bleiben in der Baumauswahl und Jahreswiedergabe im tatsächlichen Aufnahmejahr; es gibt kein Umsortieren zum Fotojahr.
 
-`photosuite-comments.yaml` ist der ableitbare Startindex (Version 3, nach Fotos gruppiert). Speichern aktualisiert erst das Foto-YAML revisionsgeprüft, dann den Index. **File → Refresh** und der Neuaufbau unter Settings lesen ausschließlich die neuen Foto-YAMLs. Keine Kompatibilität/Migration für die bisherigen audio-benannten YAMLs oder alten Zuordnungen. Veraltete Index-Versionen werden automatisch als Cache verworfen und aus den neuen Quellen rekonstruiert; ohne neue Quellen bleibt der neue Index leer. Rohe alte Indexbytes werden vor Austausch gesichert. Defekte neue Quellen oder Abbruch lassen den bestehenden Index erhalten. Medien bleiben unverändert.
+`yaml/comments-index.yaml` ist der ableitbare Startindex (Version 3, nach Fotos gruppiert). Speichern aktualisiert erst das Foto-YAML revisionsgeprüft, dann den Index. **File → Refresh** und der Neuaufbau unter Settings lesen ausschließlich die neuen Foto-YAMLs. Keine Kompatibilität/Migration für die bisherigen audio-benannten YAMLs oder alten Zuordnungen. Veraltete Index-Versionen werden automatisch als Cache verworfen und aus den neuen Quellen rekonstruiert; ohne neue Quellen bleibt der neue Index leer. Rohe alte Indexbytes werden vor Austausch gesichert. Defekte neue Quellen oder Abbruch lassen den bestehenden Index erhalten. Medien bleiben unverändert.
 
 Die Hörleiste folgt der Auswahl im Jahresbaum. Jahr, Monat und **Audio** zeigen Tagebuch und Kommentare gemeinsam in zeitlicher Reihenfolge. Nur **Tagebuch** bzw. **Kommentare** filtern die Leiste. Kommentare stehen bei ihrem eigenen Aufnahmedatum und ihrer Aufnahmezeit. Laufendes Audio bleibt bei Navigation erhalten; Play in einem anderen Audiobereich startet die neue Auswahl.
 
@@ -331,3 +331,8 @@ Der geöffnete Player folgt der Navigation in der Fotowand. Sein Kopf zeigt Jahr
 
 ### Kontextfotos auch vor Play
 Beim Öffnen und erneuten Einblenden des Players, Clipwechsel und Seek werden die fünf Kontextfotos zur bereiten Bezugsposition geladen, auch bei Pause und vor der ersten Wiedergabe. Die Audio-Bereitschaft und tatsächlicher Wiedergabestart sind getrennte Zustände: Bereitstehen gibt die Hintergrundpriorität für Fotos frei; gründliche Audio-Metadatenprüfung wartet weiterhin auf tatsächliche Wiedergabe. Keine sekündlichen Neuanfragen. Unbekannte Bezugszeiten und leere Filter entfernen alte Fotos und deaktivieren deren Aktionen. Zwischen Zeitraum-/Kategorienzeile und genauer Datumszeile liegen mindestens zwölf Punkte Abstand. Native Regressionen prüfen Öffnen ohne Play, Seek, verspätete Ergebnisse, unbekannte Zeiten, leere Auswahl und Geometrie.
+
+### Zentrale YAML-Ablage
+Alle bibliotheksbezogenen YAML-Dateien liegen ausschließlich unter `yaml/`: `yaml/settings.yaml`, `yaml/tags.yaml`, `yaml/comments-index.yaml`. Dateibezogene Quellen spiegeln den gesamten Medienpfad mit angehängtem `.yaml`, etwa `1980/09/img_19800916_035811.jpg` → `yaml/1980/09/img_19800916_035811.jpg.yaml`. Interne Foto-/Audioverweise bleiben relativ zur Bibliothekswurzel, nicht zum YAML-Verzeichnis. Audio bleibt unter Aufnahmejahr/audio/d beziehungsweise audio/c.
+
+Kein Einlesen, Migrieren oder automatisches Entfernen alter Ablageorte. Den zuletzt geöffneten Bibliothekspfad weiterhin lokal in macOS-Preferences halten. Leser erzeugen keine Verzeichnisse; Schreiboperationen legen nötige YAML-Unterordner nach Prüfung an. Gemeinsame Verzeichnisprüfung in metadata_fs; Symlinks und nicht reguläre Vorfahren ablehnen. Medienbaum und Medienscans lassen den reservierten yaml-Zweig aus. Kommentar-Neuaufbau liest ausschließlich Foto-YAMLs unter yaml/<Jahr>, überspringt Konfigurationen/Index/Recovery-Dateien und traversiert keine Medienzweige. Beschädigte Quellen ersetzen keinen gültigen Index; Sicherungen eines beschädigten Index bleiben ebenfalls unter yaml/.

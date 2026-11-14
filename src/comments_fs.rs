@@ -11,7 +11,7 @@ use std::{
     path::Path,
     sync::{Arc, atomic::AtomicBool},
 };
-const FILE: &str = "photosuite-comments.yaml";
+const FILE: &str = "yaml/comments-index.yaml";
 const MAX: u64 = 32 * 1024 * 1024;
 pub struct CommentFiles {
     pub audio: Arc<dyn AudioSource>,
@@ -30,7 +30,7 @@ fn directory(path: &Path) -> Result<(), String> {
 }
 fn read(root: &Path) -> Result<Option<Vec<u8>>, String> {
     directory(root)?;
-    let path = root.join(FILE);
+    let path = crate::metadata_fs::library_path(root, FILE, false)?;
     if !crate::metadata_fs::check_file(&path)? {
         return Ok(None);
     }
@@ -145,7 +145,8 @@ impl CommentRepository for YamlComments {
     ) -> Result<Vec<u8>, String> {
         directory(root)?;
         let bytes = encode(catalog)?;
-        crate::metadata_fs::atomic_write_if_current(&root.join(FILE), &bytes, expected)?;
+        let path = crate::metadata_fs::library_path(root, FILE, true)?;
+        crate::metadata_fs::atomic_write_if_current(&path, &bytes, expected)?;
         Ok(bytes)
     }
     fn save(
@@ -157,7 +158,7 @@ impl CommentRepository for YamlComments {
         let current = read(root)?;
         if current.as_deref() != expected {
             return Err(
-                "photosuite-comments.yaml wurde extern geändert; bitte Speichern erneut versuchen"
+                "yaml/comments-index.yaml wurde extern geändert; bitte Speichern erneut versuchen"
                     .into(),
             );
         }
@@ -165,7 +166,8 @@ impl CommentRepository for YamlComments {
             decode(&bytes)?;
         }
         let bytes = encode(catalog)?;
-        crate::metadata_fs::atomic_write_if_current(&root.join(FILE), &bytes, expected)?;
+        let path = crate::metadata_fs::library_path(root, FILE, true)?;
+        crate::metadata_fs::atomic_write_if_current(&path, &bytes, expected)?;
         Ok(bytes)
     }
 }
@@ -284,7 +286,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn symlinked_source_ancestors_abort_rebuild_without_erasing_cached_references() {
-        for ancestor in ["2008", "2008/audio", "2008/audio/y"] {
+        for ancestor in ["yaml/2008", "yaml/2008/09"] {
             let root = tempfile::tempdir().unwrap();
             let source = tempfile::tempdir().unwrap();
             let outside = tempfile::tempdir().unwrap();
@@ -348,14 +350,14 @@ mod tests {
                 .unwrap()
                 .contains("photos:")
         );
-        let recovery = fs::read_dir(root.path())
+        let recovery = fs::read_dir(root.path().join("yaml"))
             .unwrap()
             .map(|e| e.unwrap().path())
             .find(|p| {
                 p.file_name()
                     .unwrap()
                     .to_string_lossy()
-                    .starts_with("photosuite-comments-recovery-")
+                    .starts_with("comments-index-recovery-")
             })
             .unwrap();
         assert_eq!(fs::read(recovery).unwrap(), old);
@@ -432,7 +434,7 @@ mod tests {
                 format!("audio-{n}").as_bytes()
             );
         }
-        let sidecar = library.path().join("2008/audio/y/09/photo.jpg.yaml");
+        let sidecar = library.path().join("yaml/2008/09/photo.jpg.yaml");
         let text = fs::read_to_string(&sidecar).unwrap();
         assert!(text.contains("2025/audio/c/com_") && text.contains("2026/audio/c/com_"));
         assert!(!text.contains("recorded_at") && !text.contains("photo_taken_at"));
@@ -506,6 +508,7 @@ mod tests {
                 .entries()
                 .is_empty()
         );
+        fs::create_dir_all(root.path().join("yaml")).unwrap();
         fs::write(root.path().join(FILE), b"version: 2\ncomments: {}\n").unwrap();
         let rebuilt = load_catalog(&repo, root.path(), &AtomicBool::new(false)).unwrap();
         assert!(rebuilt.catalog.entries().is_empty());
@@ -514,13 +517,17 @@ mod tests {
                 .unwrap()
                 .contains("version: 3")
         );
-        assert!(fs::read_dir(root.path()).unwrap().any(|entry| {
-            entry
+        assert!(
+            fs::read_dir(root.path().join("yaml"))
                 .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with("photosuite-comments-recovery-")
-        }));
+                .any(|entry| {
+                    entry
+                        .unwrap()
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("comments-index-recovery-")
+                })
+        );
     }
     #[test]
     fn invalid_photo_metadata_and_external_index_changes_are_preserved() {

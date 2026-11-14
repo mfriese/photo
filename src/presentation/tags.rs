@@ -32,7 +32,7 @@ impl TagView {
             .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
                 crate::options_ui::spacing(ui);
                 ui.label("Tags ordnen Dateien zu. Ein als Album markierter Tag erscheint links.");
-                ui.small("Originaldateien bleiben unverändert. Automatisch in photosuite-tags.yaml speichern.");
+                ui.small("Originaldateien bleiben unverändert. Automatisch in yaml/tags.yaml speichern.");
                 if let Some(file)=&self.file{
                     ui.add(egui::Label::new(file.as_str()).truncate()).on_hover_text(file.as_str());
                     if ui.small_button("Alle Tags verwalten").clicked(){self.file=None;}

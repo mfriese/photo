@@ -15,6 +15,13 @@ impl MediaRepository for FileSystemRepository {
         let mut directories = Vec::new();
         for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.eq_ignore_ascii_case("yaml"))
+            {
+                continue;
+            }
             if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
                 directories.push(
                     entry
@@ -32,6 +39,9 @@ impl MediaRepository for FileSystemRepository {
         partition: &str,
         cancel: &std::sync::atomic::AtomicBool,
     ) -> (Vec<Media>, usize) {
+        if partition.eq_ignore_ascii_case("yaml") {
+            return (Vec::new(), 0);
+        }
         if !partition.is_empty()
             && (Path::new(partition).components().count() != 1
                 || !matches!(
@@ -81,6 +91,14 @@ impl FileSystemRepository {
         for entry in walkdir::WalkDir::new(directory)
             .follow_links(false)
             .max_depth(depth)
+            .into_iter()
+            .filter_entry(|entry| {
+                !(entry.path().parent() == Some(root)
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.eq_ignore_ascii_case("yaml")))
+            })
         {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
@@ -147,6 +165,12 @@ mod tests {
             )
             .unwrap();
         }
+        std::fs::create_dir_all(directory.path().join("yaml/1980/09")).unwrap();
+        std::fs::write(
+            directory.path().join("yaml/1980/09/accidental.jpg"),
+            b"metadata-only-tree",
+        )
+        .unwrap();
         std::fs::create_dir(directory.path().join("2022")).unwrap(); // Empty year remains selectable.
         std::fs::write(directory.path().join("root.jpg"), b"root-original").unwrap();
         std::os::unix::fs::symlink(
@@ -163,6 +187,22 @@ mod tests {
         let mut years = repository.partitions(directory.path()).unwrap().unwrap();
         years.sort();
         assert_eq!(years, ["2022", "2023", "2024", "2025"]);
+        let (all, errors) = repository.scan(directory.path());
+        assert_eq!(errors, 0);
+        assert!(
+            !all.iter()
+                .any(|m| m.path().starts_with(directory.path().join("yaml")))
+        );
+        assert!(
+            repository
+                .scan_partition(
+                    directory.path(),
+                    "yaml",
+                    &std::sync::atomic::AtomicBool::new(false)
+                )
+                .0
+                .is_empty()
+        );
         let cancel = std::sync::atomic::AtomicBool::new(false);
         let (items, errors) = repository.scan_partition(directory.path(), "2024", &cancel);
         assert_eq!(errors, 0);

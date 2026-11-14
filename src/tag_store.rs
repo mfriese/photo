@@ -2,7 +2,7 @@
 use crate::domain::tags::TagCatalog;
 use photosuite_application::organization::{CatalogRepository, StoredCatalog};
 use std::{collections::BTreeMap, fs, io::Read, path::Path};
-const FILE: &str = "photosuite-tags.yaml";
+const FILE: &str = "yaml/tags.yaml";
 const MAX: u64 = 32 * 1024 * 1024;
 pub struct YamlTags;
 fn read(root: &Path) -> Result<Option<Vec<u8>>, String> {
@@ -10,7 +10,7 @@ fn read(root: &Path) -> Result<Option<Vec<u8>>, String> {
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err("Tag-Bibliothek ist kein reguläres Verzeichnis".into());
     }
-    let path = root.join(FILE);
+    let path = crate::metadata_fs::library_path(root, FILE, false)?;
     if !crate::metadata_fs::check_file(&path)? {
         return Ok(None);
     }
@@ -89,13 +89,14 @@ impl CatalogRepository for YamlTags {
     ) -> Result<Vec<u8>, String> {
         let current = read(root)?;
         if current.as_deref() != expected {
-            return Err("photosuite-tags.yaml wurde außerhalb dieser Sitzung verändert; kein Überschreiben. Änderungen verwerfen und Datei neu laden.".into());
+            return Err("yaml/tags.yaml wurde außerhalb dieser Sitzung verändert; kein Überschreiben. Änderungen verwerfen und Datei neu laden.".into());
         }
         if let Some(bytes) = current.as_deref() {
             decode(bytes)?;
         }
         let bytes = encode(catalog)?;
-        crate::metadata_fs::atomic_write_if_current(&root.join(FILE), &bytes, expected)
+        let path = crate::metadata_fs::library_path(root, FILE, true)?;
+        crate::metadata_fs::atomic_write_if_current(&path, &bytes, expected)
             .map_err(|e| format!("{}: {e}", root.join(FILE).display()))?;
         Ok(bytes)
     }
@@ -142,6 +143,7 @@ mod tests {
     #[test]
     fn malformed_unknown_conflicting_and_external_updates_are_never_overwritten() {
         let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("yaml")).unwrap();
         for text in [
             "tags: [",
             "version: 2\ntags: {}\n",
@@ -177,6 +179,7 @@ mod tests {
     fn symlinks_and_read_only_libraries_do_not_modify_other_files() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("yaml")).unwrap();
         let outside = tempfile::NamedTempFile::new().unwrap();
         fs::write(outside.path(), b"outside").unwrap();
         std::os::unix::fs::symlink(outside.path(), dir.path().join(FILE)).unwrap();
@@ -188,10 +191,10 @@ mod tests {
         );
         assert_eq!(fs::read(outside.path()).unwrap(), b"outside");
         fs::remove_file(dir.path().join(FILE)).unwrap();
-        let old = fs::metadata(dir.path()).unwrap().permissions();
-        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        let old = fs::metadata(dir.path().join("yaml")).unwrap().permissions();
+        fs::set_permissions(dir.path().join("yaml"), fs::Permissions::from_mode(0o555)).unwrap();
         let result = YamlTags.save(dir.path(), &TagCatalog::default(), None);
-        fs::set_permissions(dir.path(), old).unwrap();
+        fs::set_permissions(dir.path().join("yaml"), old).unwrap();
         assert!(result.is_err());
         assert!(!dir.path().join(FILE).exists());
     }

@@ -42,7 +42,7 @@ pub fn show(
     egui::Window::new("Einstellungen").open(open).default_width(480.)
         .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
             spacing(ui);
-            if p.library_scope.is_some() { ui.label("Änderungen werden in photosuite.yaml in der Bibliothek gespeichert."); }
+            if p.library_scope.is_some() { ui.label("Änderungen werden in yaml/settings.yaml in der Bibliothek gespeichert."); }
             else { ui.label("Ohne geladene Bibliothek gelten Einstellungen nur für diese Sitzung."); }
             ui.small("Der zuletzt geöffnete Bibliothekspfad bleibt lokal auf diesem Mac.");
             section(ui,"Darstellung",|ui|{
@@ -62,7 +62,7 @@ pub fn show(
             });
             section(ui,"Bedienung",|ui|{if ui.button("Befehle & Tastenkürzel …").clicked(){*bindings=true;}});
             section(ui,"Audiokommentare",|ui|{
-                ui.label("Einzelne YAML-Dateien unter Jahr/audio/y sind die dauerhafte Quelle der Zuordnungen.");
+                ui.label("Einzelne YAML-Dateien unter yaml/Jahr/Monat sind die dauerhafte Quelle der Zuordnungen.");
                 ui.small("Der Neuaufbau durchsucht die Bibliothek und ersetzt den Gesamtindex erst nach vollständiger Prüfung. Medien bleiben unverändert.");
                 if ui.add_enabled(comments.available,egui::Button::new("Kommentarindex vollständig neu aufbauen")).clicked(){action=Some(CommentIndexAction::Rebuild);}
                 if comments.rebuilding {ui.spinner();if ui.button("Neuaufbau abbrechen").clicked(){action=Some(CommentIndexAction::Cancel);}}

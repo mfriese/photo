@@ -6,7 +6,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
-const SETTINGS: &str = "photosuite.yaml";
+const SETTINGS: &str = "yaml/settings.yaml";
 const MAX_SETTINGS: u64 = 64 * 1024;
 pub struct LibraryPreferences {
     legacy: std::sync::Arc<dyn PreferencesStore>,
@@ -75,7 +75,7 @@ fn regular_root(root: &Path) -> Result<(), String> {
 }
 fn read_yaml(root: &Path) -> Result<Option<Preferences>, String> {
     regular_root(root)?;
-    let path = root.join(SETTINGS);
+    let path = crate::metadata_fs::library_path(root, SETTINGS, false)?;
     if !check_file(&path)? {
         return Ok(None);
     }
@@ -86,14 +86,14 @@ fn read_yaml(root: &Path) -> Result<Option<Preferences>, String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() as u64 > MAX_SETTINGS {
-        return Err("photosuite.yaml ist größer als 64 KiB; Datei bleibt unverändert".into());
+        return Err("yaml/settings.yaml ist größer als 64 KiB; Datei bleibt unverändert".into());
     }
     let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
     let value: serde_json::Value =
-        serde_saphyr::from_str(text).map_err(|e| format!("photosuite.yaml: {e}"))?;
+        serde_saphyr::from_str(text).map_err(|e| format!("yaml/settings.yaml: {e}"))?;
     let object = value
         .as_object()
-        .ok_or("photosuite.yaml muss eine Key-Value-Liste sein")?;
+        .ok_or("yaml/settings.yaml muss eine Key-Value-Liste sein")?;
     if object.get("version").and_then(|v| v.as_u64()) != Some(1) {
         return Err("Unbekannte YAML-Einstellungsversion; Datei bleibt unverändert".into());
     }
@@ -163,7 +163,8 @@ impl PreferencesStore for LibraryPreferences {
             if text.len() as u64 > MAX_SETTINGS {
                 return Err("Einstellungen überschreiten die Grenze von 64 KiB".into());
             }
-            atomic_write(&root.join(SETTINGS), text.as_bytes())
+            let path = crate::metadata_fs::library_path(root, SETTINGS, true)?;
+            atomic_write(&path, text.as_bytes())
                 .map_err(|e| format!("{}: {e}", root.join(SETTINGS).display()))
         } else {
             self.local()?;
@@ -199,6 +200,123 @@ mod tests {
         )
     }
     use photosuite_application::preferences::Shortcut;
+    #[test]
+    fn all_catalogs_use_yaml_and_ignore_old_locations_without_creating_on_read() {
+        use photosuite_application::{
+            comments::{CommentCache, CommentRepository},
+            organization::CatalogRepository,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        for name in [
+            "photosuite.yaml",
+            "photosuite-tags.yaml",
+            "photosuite-comments.yaml",
+        ] {
+            fs::write(root.path().join(name), b"old-invalid: [").unwrap();
+        }
+        fs::create_dir_all(root.path().join("1980/audio/y/09")).unwrap();
+        fs::write(
+            root.path().join("1980/audio/y/09/photo.jpg.yaml"),
+            b"old-invalid: [",
+        )
+        .unwrap();
+        let settings = store_at(local.path().join("prefs.plist"));
+        assert!(settings.load_library(root.path()).unwrap().is_some());
+        let tags = crate::tag_store::YamlTags;
+        let loaded = tags.load(root.path()).unwrap();
+        assert!(loaded.catalog.tags().is_empty());
+        let comments = crate::comments_fs::YamlComments {
+            priority: Default::default(),
+        };
+        assert!(matches!(
+            comments.read_cache(root.path()).unwrap(),
+            CommentCache::Missing
+        ));
+        assert!(
+            comments
+                .scan_photo_records(
+                    root.path(),
+                    &std::sync::atomic::AtomicBool::new(false),
+                    &|_| {}
+                )
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!root.path().join("yaml").exists());
+        settings
+            .save(&Preferences {
+                library_scope: Some(root.path().into()),
+                ..Default::default()
+            })
+            .unwrap();
+        tags.save(root.path(), &loaded.catalog, None).unwrap();
+        comments
+            .replace_index(
+                root.path(),
+                &crate::domain::comments::CommentCatalog::default(),
+                None,
+            )
+            .unwrap();
+        for name in ["settings.yaml", "tags.yaml", "comments-index.yaml"] {
+            assert!(root.path().join("yaml").join(name).is_file());
+        }
+        for name in [
+            "photosuite.yaml",
+            "photosuite-tags.yaml",
+            "photosuite-comments.yaml",
+        ] {
+            assert_eq!(fs::read(root.path().join(name)).unwrap(), b"old-invalid: [");
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn every_yaml_store_rejects_a_symlinked_shared_directory() {
+        use photosuite_application::{
+            comments::CommentRepository, organization::CatalogRepository,
+        };
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("settings.yaml"), b"outside").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("yaml")).unwrap();
+        let settings = store_at(local.path().join("prefs.plist"));
+        assert!(settings.load_library(root.path()).is_err());
+        assert!(
+            settings
+                .save(&Preferences {
+                    library_scope: Some(root.path().into()),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        let tags = crate::tag_store::YamlTags;
+        assert!(tags.load(root.path()).is_err());
+        assert!(tags.save(root.path(), &Default::default(), None).is_err());
+        let comments = crate::comments_fs::YamlComments {
+            priority: Default::default(),
+        };
+        assert!(comments.read_cache(root.path()).is_err());
+        assert!(
+            comments
+                .replace_index(root.path(), &Default::default(), None)
+                .is_err()
+        );
+        assert!(
+            comments
+                .scan_photo_records(
+                    root.path(),
+                    &std::sync::atomic::AtomicBool::new(false),
+                    &|_| {}
+                )
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(outside.path().join("settings.yaml")).unwrap(),
+            b"outside"
+        );
+        assert_eq!(fs::read_dir(outside.path()).unwrap().count(), 1);
+    }
     #[test]
     fn explicit_startup_path_uses_its_settings_even_if_remembered_library_is_missing() {
         let directory = tempfile::tempdir().unwrap();
@@ -326,6 +444,7 @@ mod tests {
         let store = store_at(directory.path().join("prefs.plist"));
         let root = directory.path().join("library");
         fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("yaml")).unwrap();
         let location = Preferences {
             last_library: Some(root.clone()),
             ..Default::default()
@@ -380,6 +499,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("library");
         fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("yaml")).unwrap();
         let store = store_at(directory.path().join("prefs.plist"));
         let outside = directory.path().join("outside.yaml");
         fs::write(&outside, b"outside").unwrap();

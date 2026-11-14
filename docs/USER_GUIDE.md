@@ -135,7 +135,7 @@ reopen_library: true
 shortcuts: {}
 ```
 
-Die Datei heißt **`photosuite.yaml`**. Vorschaugröße (0–4), Darstellung, Videofilter, EXIF-Schreibmodus, Startoption und Tastenkürzel gehören damit zur jeweiligen Sammlung. Angepasste Tastenkürzel werden als verschachtelte Key-Value-Einträge gespeichert; die App schreibt eine gut lesbare YAML-Datei. Manuelle Änderungen bei geschlossener App vornehmen: Kommentare/Formatierung können beim nächsten Speichern vereinheitlicht werden. Unbekannte Schlüssel oder Versionen, ungültige Typen sowie Dateien über 64 KiB werden gemeldet und nicht überschrieben. Die Datei enthält keinen absoluten Bibliothekspfad.
+Die Datei heißt **`yaml/settings.yaml`**. Vorschaugröße (0–4), Darstellung, Videofilter, EXIF-Schreibmodus, Startoption und Tastenkürzel gehören damit zur jeweiligen Sammlung. Angepasste Tastenkürzel werden als verschachtelte Key-Value-Einträge gespeichert; die App schreibt eine gut lesbare YAML-Datei. Manuelle Änderungen bei geschlossener App vornehmen: Kommentare/Formatierung können beim nächsten Speichern vereinheitlicht werden. Unbekannte Schlüssel oder Versionen, ungültige Typen sowie Dateien über 64 KiB werden gemeldet und nicht überschrieben. Die Datei enthält keinen absoluten Bibliothekspfad.
 
 Nur die zuletzt gewählte Bibliothek bleibt lokal:
 
@@ -143,7 +143,7 @@ Nur die zuletzt gewählte Bibliothek bleibt lokal:
 ~/Library/Preferences/de.photosuite.PhotoSuite.library.plist
 ```
 
-Vorhandene `de.photosuite.PhotoSuite.settings.plist` bzw. `de.photosuite.PhotoSuite.plist` bleiben unverändert als Migrationsquellen erhalten. Fehlt `photosuite.yaml`, dienen die bisherigen Werte als Ausgangspunkt. Nach erfolgreichem Laden werden Änderungen im Hintergrund über eine synchronisierte temporäre Datei und Rename gespeichert, auch auf exFAT. Beim normalen Beenden werden ausstehende Schreibaufträge abgearbeitet. Ein Bibliothekswechsel erhält den letzten Stand der vorherigen Bibliothek und lädt neue Werte im Hintergrund; veraltete Ergebnisse werden nicht übernommen.
+Vorhandene `de.photosuite.PhotoSuite.settings.plist` bzw. `de.photosuite.PhotoSuite.plist` bleiben unverändert als Migrationsquellen erhalten. Fehlt `yaml/settings.yaml`, dienen die bisherigen Werte als Ausgangspunkt. Nach erfolgreichem Laden werden Änderungen im Hintergrund über eine synchronisierte temporäre Datei und Rename gespeichert, auch auf exFAT. Beim normalen Beenden werden ausstehende Schreibaufträge abgearbeitet. Ein Bibliothekswechsel erhält den letzten Stand der vorherigen Bibliothek und lädt neue Werte im Hintergrund; veraltete Ergebnisse werden nicht übernommen.
 
 Die Startoption „Letzte Bibliothek wieder öffnen“ wird aus der YAML-Datei der zuletzt gemerkten Bibliothek gelesen. Ein beim Start angegebener Pfad hat Vorrang. Ist die Bibliothek nicht verfügbar, bleibt der lokal gespeicherte Pfad erhalten und ein Fehler wird angezeigt. Ohne geladene Bibliothek gelten neue Anzeigeänderungen nur für die Sitzung. Bei schreibgeschützter Bibliothek bleiben Änderungen ebenfalls vorläufig und ein Speicherfehler erscheint in Fußzeile und Optionsdialog. Die Anwendung legt kein nicht vorhandenes Bibliotheksverzeichnis an. Defekte Einstellungen werden erhalten; zum Reparieren die Datei bei geschlossener App korrigieren oder bewusst umbenennen.
 
@@ -223,7 +223,7 @@ Eingebettete Aufnahmezeit vor Inhalts-/Containerdatum; ohne diese Daten zuerst d
 
 Das Importprotokoll ist standardmäßig kompakt: ein Ergebnis pro Datei, vollständige Pfade und Datumsquelle im Tooltip. „Alle Schritte anzeigen“ öffnet das detaillierte, mehrzeilige Protokoll. „Protokoll kopieren“ kopiert jeweils die gewählte Ansicht.
 
-Diary zeigt jetzt Kacheln statt einer Dateinamenliste. Die gewählte Vorschaugröße steuert 10/8/6/5/4 Spalten auf ausreichend breiten Fenstern. Unter dem Audiosymbol stehen Datum und Uhrzeit; vollständiger Dateiname und Datumsquelle erscheinen im Tooltip. Der Player zeigt das laufende Aufnahmedatum und die Aufnahmeuhrzeit, einschließlich des Fortschritts innerhalb der aktuellen Datei. Vorhandene Preferences dienen als Migrationsquelle für `photosuite.yaml` in der jeweiligen Bibliothek; alte Preferences-Dateien bleiben erhalten. Importe in andere Ziele ändern die ausgewählte Fotobibliothek nicht mehr.
+Diary zeigt jetzt Kacheln statt einer Dateinamenliste. Die gewählte Vorschaugröße steuert 10/8/6/5/4 Spalten auf ausreichend breiten Fenstern. Unter dem Audiosymbol stehen Datum und Uhrzeit; vollständiger Dateiname und Datumsquelle erscheinen im Tooltip. Der Player zeigt das laufende Aufnahmedatum und die Aufnahmeuhrzeit, einschließlich des Fortschritts innerhalb der aktuellen Datei. Vorhandene Preferences dienen als Migrationsquelle für `yaml/settings.yaml` in der jeweiligen Bibliothek; alte Preferences-Dateien bleiben erhalten. Importe in andere Ziele ändern die ausgewählte Fotobibliothek nicht mehr.
 
 ### Fotos zum Gehörten
 
@@ -270,7 +270,7 @@ Auch die fünf zugehörigen Fotos werden zuerst nur anhand ihrer Dateinamen gefu
 4. Zum Umbenennen oder Entfernen „Alle Tags verwalten“ wählen, einen Tagnamen auswählen und die passende Aktion benutzen. Tagentfernen entfernt ausschließlich die Zuordnungen und gegebenenfalls die Albumkennzeichnung.
 5. „Alles“ über den Jahren oder eine Jahres-/Monatsauswahl beendet den Tagfilter. Suche und Videofilter gelten auch im Album. Audio erscheint als Audiokachel und öffnet beim Anklicken den normalen Jahresplayer; die Bildnavigation überspringt Audio.
 
-Alle Tags und Albumkennzeichnungen stehen in `photosuite-tags.yaml` direkt im Bibliotheksverzeichnis. Unter `tags` steht je Tag eine YAML-Liste relativer Dateipfade (zum Beispiel `2023/08/img_20230816_153000.jpg`). Unter `albums` stehen die als Album gekennzeichneten Tagnamen als Liste. Relative Pfade sind absichtlich eindeutiger als bloße Dateinamen; absolute Pfade und `..` sind unzulässig. Die Datei ist unabhängig von `photosuite.yaml` für Programmeinstellungen.
+Alle Tags und Albumkennzeichnungen stehen in `yaml/tags.yaml` direkt im Bibliotheksverzeichnis. Unter `tags` steht je Tag eine YAML-Liste relativer Dateipfade (zum Beispiel `2023/08/img_20230816_153000.jpg`). Unter `albums` stehen die als Album gekennzeichneten Tagnamen als Liste. Relative Pfade sind absichtlich eindeutiger als bloße Dateinamen; absolute Pfade und `..` sind unzulässig. Die Datei ist unabhängig von `yaml/settings.yaml` für Programmeinstellungen.
 
 Der vollständige Katalog bleibt im Speicher, bis die Bibliothek gewechselt oder die Datei ausdrücklich neu geladen wird. Filterung benötigt keine Bild-/Metadatenzugriffe. Änderungen werden sofort im Speicher wirksam und anschließend seriell im Hintergrund gespeichert; wartende Zwischenstände werden jeweils durch den neuesten vollständigen Stand ersetzt. Auf Speichervorgänge achten: Schreibschutz oder externe YAML-Änderungen führen zu einem sichtbaren Fehler, die lokale Änderung bleibt vorläufig. Ein Bibliothekswechsel wird bis zur Speicherung oder bewusstem Verwerfen verhindert. „Erneut speichern“ versucht es erneut; bei einem echten externen Konflikt zunächst die Datei/Änderungen prüfen, dann gegebenenfalls lokale Änderungen verwerfen und neu laden. Bei Beenden trotz Speicherfehler gehen nur ungespeicherte Sitzungsänderungen verloren. Bereits veröffentlichte Daten bleiben erhalten.
 
@@ -322,7 +322,7 @@ Am Foto per Rechtsklick **Audiokommentar …**, in der Großansicht **Aufnahme �
 
 Nach Beenden **Anhören** oder den roten Kreis für eine Neuaufnahme wählen; Neuaufnahme ersetzt die bisherige ungespeicherte Aufnahme. **Speichern** veröffentlicht eine neue M4A/AAC-Datei und deren Fotozuordnung. Schließen mit ungespeicherter Aufnahme fragt nach. Beim Speichern bitte warten. Verweigerte Berechtigungen in Systemeinstellungen → Datenschutz & Sicherheit → Mikrofon korrigieren. Mikrofonänderungen gelten nur für die Sitzung; andere Anwendungen und Systemstandard werden nicht umgestellt.
 
-Ein heute aufgenommener Kommentar zu einem Foto von 2008 bleibt beispielsweise unter 2026/audio/c/com_20261113_143000.m4a und erscheint im Jahr 2026. Seine Referenz steht im Foto-Datensatz unter 2008/audio/y; Details siehe unten.
+Ein 2026 aufgenommener Kommentar zu einem Foto von 2008 bleibt physisch unter 2026/audio/c/com_20261113_143000.m4a und erscheint zur Foto-Bezugszeit im Player für 2008. Seine Referenz steht im Foto-Datensatz unter yaml/2008 mit gespiegeltem Foto-Unterpfad; Details siehe unten.
 
 Scheitert nur die YAML-Zuordnung, ist die Audiodatei bereits sicher gespeichert. **Speichern** erneut versuchen: vorhandene Zuordnungen werden neu geladen und die eigene ergänzt, ohne eine zweite Audiokopie anzulegen. Abbrechen entfernt diese veröffentlichte Datei nicht. Nach einem Absturz kann der noch ungespeicherte Verweis verloren sein; keine automatische Löschung oder Rekonstruktion. Originalfotos und importierte Quellen bleiben unverändert.
 
@@ -337,7 +337,7 @@ Zum Korrigieren einer ungespeicherten Aufnahme pausieren und kurz auf den Abschn
 Beim Pausieren bleibt die Kurve genau im bisherigen Ausschnitt und Maßstab stehen. Der Cursor kann im sichtbaren 32-Sekunden-Bereich gesetzt werden; die Aufnahme wird nicht nachträglich über die ganze Breite gestreckt.
 
 ## Foto-Kommentar-YAMLs und Index neu aufbauen
-Audio-Dateien bleiben unter Aufnahmejahr/audio/c/com_JJJJMMTT_HHMMSS[_NNN].m4a. Zum Foto 2008/09/img_20080916_035811.jpg gehört genau ein Datensatz unter 2008/audio/y/09/img_20080916_035811.jpg.yaml:
+Audio-Dateien bleiben unter Aufnahmejahr/audio/c/com_JJJJMMTT_HHMMSS[_NNN].m4a. Zum Foto 2008/09/img_20080916_035811.jpg gehört genau ein Datensatz unter yaml/2008/09/img_20080916_035811.jpg.yaml:
 
 ```yaml
 version: 2
@@ -348,7 +348,7 @@ comments:
 ```
 Die Schlüssel sind GUIDs; alle Pfade beziehen sich auf die Bibliothekswurzel. Datum und Uhrzeit werden aus dem Audiobasename gelesen und nicht nochmals gespeichert. Kommentare werden im Aufnahmejahr und -monat angezeigt, unabhängig vom Fotojahr. Die Großansicht kann alle verknüpften Kommentare aus mehreren Jahren abspielen. Ein neuer Rücksprung vom Kommentar zum Foto gehört nicht zu dieser Änderung.
 
-photosuite-comments.yaml (Version 3) ist nur der nach Bildern gruppierte Startindex. Speichern aktualisiert den Foto-Datensatz und danach den Index. File → Refresh und Settings → Audiokommentare → Kommentarindex vollständig neu aufbauen lesen ausschließlich diese neuen Foto-YAMLs. Keine Altformat-Unterstützung, Migration oder Rückgewinnung aus dem bisherigen Index. Veraltete Index-Versionen werden beim Laden automatisch durch einen Neuaufbau aus den neuen Quellen ersetzt; ohne neue Foto-YAMLs ist der neue Katalog leer. Die alten rohen Indexbytes bleiben als recovery-Datei erhalten. Alte audio-benannte YAMLs werden nicht mehr verwendet, aber auch nicht gelöscht.
+yaml/comments-index.yaml (Version 3) ist nur der nach Bildern gruppierte Startindex. Speichern aktualisiert den Foto-Datensatz und danach den Index. File → Refresh und Settings → Audiokommentare → Kommentarindex vollständig neu aufbauen lesen ausschließlich diese neuen Foto-YAMLs. Keine Altformat-Unterstützung, Migration oder Rückgewinnung aus dem bisherigen Index. Veraltete Index-Versionen werden beim Laden automatisch durch einen Neuaufbau aus den neuen Quellen ersetzt; ohne neue Foto-YAMLs ist der neue Katalog leer. Die alten rohen Indexbytes bleiben als recovery-Datei erhalten. Alte audio-benannte YAMLs werden nicht mehr verwendet, aber auch nicht gelöscht.
 
 Bei fehlerhaften neuen Quellen oder Abbruch bleibt der Index unverändert. Nach Veröffentlichung des Foto-YAMLs ist die Zuordnung ohne Gesamtindex rekonstruierbar. Wird ein Foto-Datensatz entfernt, stellt der Neuaufbau ihn nicht aus dem Cache wieder her. Audiodateien werden dadurch nicht gelöscht oder verschoben.
 
@@ -384,3 +384,8 @@ Der geöffnete Player folgt der Navigation in der Fotowand. Sein Kopf zeigt Jahr
 
 ### Kontextfotos auch vor Play
 Beim Öffnen und erneuten Einblenden des Players, Clipwechsel und Seek werden die fünf Kontextfotos zur bereiten Bezugsposition geladen, auch bei Pause und vor der ersten Wiedergabe. Die Audio-Bereitschaft und tatsächlicher Wiedergabestart sind getrennte Zustände: Bereitstehen gibt die Hintergrundpriorität für Fotos frei; gründliche Audio-Metadatenprüfung wartet weiterhin auf tatsächliche Wiedergabe. Keine sekündlichen Neuanfragen. Unbekannte Bezugszeiten und leere Filter entfernen alte Fotos und deaktivieren deren Aktionen. Zwischen Zeitraum-/Kategorienzeile und genauer Datumszeile liegen mindestens zwölf Punkte Abstand. Native Regressionen prüfen Öffnen ohne Play, Seek, verspätete Ergebnisse, unbekannte Zeiten, leere Auswahl und Geometrie.
+
+### Zentrale YAML-Ablage
+Alle bibliotheksbezogenen YAML-Dateien liegen ausschließlich unter `yaml/`: `yaml/settings.yaml`, `yaml/tags.yaml`, `yaml/comments-index.yaml`. Dateibezogene Quellen spiegeln den gesamten Medienpfad mit angehängtem `.yaml`, etwa `1980/09/img_19800916_035811.jpg` → `yaml/1980/09/img_19800916_035811.jpg.yaml`. Interne Foto-/Audioverweise bleiben relativ zur Bibliothekswurzel, nicht zum YAML-Verzeichnis. Audio bleibt unter Aufnahmejahr/audio/d beziehungsweise audio/c.
+
+Kein Einlesen, Migrieren oder automatisches Entfernen alter Ablageorte. Den zuletzt geöffneten Bibliothekspfad weiterhin lokal in macOS-Preferences halten. Leser erzeugen keine Verzeichnisse; Schreiboperationen legen nötige YAML-Unterordner nach Prüfung an. Gemeinsame Verzeichnisprüfung in metadata_fs; Symlinks und nicht reguläre Vorfahren ablehnen. Medienbaum und Medienscans lassen den reservierten yaml-Zweig aus. Kommentar-Neuaufbau liest ausschließlich Foto-YAMLs unter yaml/<Jahr>, überspringt Konfigurationen/Index/Recovery-Dateien und traversiert keine Medienzweige. Beschädigte Quellen ersetzen keinen gültigen Index; Sicherungen eines beschädigten Index bleiben ebenfalls unter yaml/.

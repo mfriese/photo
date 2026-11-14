@@ -96,24 +96,20 @@ impl Comment {
             recorded_at,
         })
     }
-    /// Mirror the image path under its year's audio/y folder, keeping its extension.
+    /// Mirror the full library-relative image path under yaml, keeping its extension.
     pub fn metadata_path(photo: &LibraryFile) -> Result<LibraryFile, String> {
         if !Media::from_path(photo.as_str().into(), String::new()).is_some_and(|m| m.is_photo()) {
             return Err("Foto-Metadaten benötigen einen Bildverweis".into());
         }
         let path = Path::new(photo.as_str());
-        let mut parts = path.components();
-        let year = parts
+        path.components()
             .next()
             .and_then(|c| c.as_os_str().to_str())
             .filter(|year| {
                 crate::diary::AudioScope::for_year(year, crate::diary::AudioKind::All).is_some()
             })
             .ok_or("Foto muss in einem gültigen Bibliotheksjahr liegen")?;
-        let mut target = Path::new(year)
-            .join("audio")
-            .join("y")
-            .join(parts.as_path());
+        let mut target = Path::new("yaml").join(path);
         let name = target
             .file_name()
             .ok_or("Foto ohne Dateiname")?
@@ -225,6 +221,17 @@ mod tests {
             LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
         )
         .unwrap()
+    }
+    #[test]
+    fn metadata_mirrors_the_entire_media_path_and_preserves_the_image_extension() {
+        for extension in ["jpg", "png"] {
+            let photo =
+                LibraryFile::new(format!("1980/09/img_19800916_035811.{extension}")).unwrap();
+            assert_eq!(
+                Comment::metadata_path(&photo).unwrap().as_str(),
+                format!("yaml/1980/09/img_19800916_035811.{extension}.yaml")
+            );
+        }
     }
     #[test]
     fn comment_recording_year_folder_and_media_identity_cannot_disagree() {
