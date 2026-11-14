@@ -7,6 +7,12 @@ pub enum PhotoImportLayout {
     YearMonth,
     Scans,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateSource {
+    Metadata,
+    FileName,
+    FileSystem,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureTime {
     stamp: String,
@@ -14,6 +20,7 @@ pub struct CaptureTime {
     year: String,
     month: String,
     origin: String,
+    source: DateSource,
 }
 impl CaptureTime {
     pub fn parse(value: &str, origin: &str) -> Result<Self, String> {
@@ -29,6 +36,7 @@ impl CaptureTime {
             year: date.format("%Y").to_string(),
             month: date.format("%m").to_string(),
             origin: origin.into(),
+            source: DateSource::Metadata,
         })
     }
     pub fn parse_audio(value: &str, origin: &str) -> Result<Self, String> {
@@ -54,6 +62,16 @@ impl CaptureTime {
     }
     pub fn stamp(&self) -> &str {
         &self.stamp
+    }
+    pub fn source(&self) -> DateSource {
+        self.source
+    }
+    pub fn with_source(mut self, source: DateSource) -> Self {
+        self.source = source;
+        self
+    }
+    pub fn is_fallback(&self) -> bool {
+        self.source != DateSource::Metadata
     }
     pub fn origin(&self) -> &str {
         &self.origin
@@ -136,6 +154,7 @@ impl CaptureTime {
             &shifted.format("%Y:%m:%d %H:%M:%S").to_string(),
             &self.origin,
         )
+        .map(|date| date.with_source(self.source))
     }
     pub fn target(&self, root: &Path, media: &Media, suffix: usize) -> PathBuf {
         self.target_with_layout(root, media, suffix, PhotoImportLayout::YearMonth)

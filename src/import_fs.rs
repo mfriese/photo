@@ -199,6 +199,17 @@ impl ImportAdapter for FileImportAdapter {
             "EXIF DateTimeOriginal",
         )
     }
+    fn verify_audio(&self, media: &Media) -> Result<(), String> {
+        let probe = self.audio.probe(media.path())?;
+        if probe.audio_only {
+            Ok(())
+        } else {
+            Err("Keine reine Audioaufnahme".into())
+        }
+    }
+    fn file_dates(&self, media: &Media) -> Result<crate::domain::import_date::FileDates, String> {
+        crate::file_dates_fs::read(media.path())
+    }
     fn exists(&self, path: &Path) -> Result<bool, String> {
         for dir in [path.parent(), path.parent().and_then(Path::parent)]
             .into_iter()
@@ -793,21 +804,61 @@ mod tests {
         assert_eq!(fs::read(path).unwrap(), original);
     }
     #[test]
-    fn missing_exif_does_not_use_filesystem_date() {
-        let src = tempfile::tempdir().unwrap();
-        let dst = tempfile::tempdir().unwrap();
-        image::RgbImage::new(2, 2)
-            .save(src.path().join("no-date.jpg"))
+    fn missing_exif_import_uses_oldest_filesystem_date_for_both_layouts_and_warns() {
+        let source = tempfile::tempdir().unwrap();
+        let path = source.path().join("no-date.jpg");
+        image::RgbImage::new(2, 2).save(&path).unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
             .unwrap();
-        let events = run(src.path(), dst.path(), false);
-        assert!(
-            events
-                .last()
-                .unwrap()
-                .message
-                .contains("0 kopiert, 0 übersprungen, 1 Fehler")
-        );
-        assert_eq!(fs::read_dir(dst.path()).unwrap().count(), 0);
+        let original = fs::read(&path).unwrap();
+        let expected = crate::file_dates_fs::read(&path).unwrap().oldest().unwrap();
+        assert!(expected.is_fallback());
+        for layout in [
+            import::PhotoImportLayout::YearMonth,
+            import::PhotoImportLayout::Scans,
+        ] {
+            let target = tempfile::tempdir().unwrap();
+            let job = import::start_with_options(
+                Arc::new(adapter()),
+                source.path().into(),
+                target.path().into(),
+                import::ImportOptions {
+                    photo_layout: layout,
+                    ..Default::default()
+                },
+            );
+            let mut events = vec![];
+            loop {
+                let event = job
+                    .events
+                    .recv_timeout(std::time::Duration::from_secs(20))
+                    .unwrap();
+                let done = event.is_terminal();
+                events.push(event);
+                if done {
+                    break;
+                }
+            }
+            let report = events.iter().find_map(|e| e.file_report.as_ref()).unwrap();
+            assert_eq!(report.decision, import::FileDecision::Copied);
+            assert_eq!(report.level(), import::LogLevel::Warning);
+            assert_eq!(report.captured.as_ref().unwrap().stamp(), expected.stamp());
+            let media = Media::from_path(path.clone(), String::new()).unwrap();
+            let destination = expected.target_with_layout(target.path(), &media, 0, layout);
+            assert_eq!(report.target.as_ref().unwrap(), &destination);
+            assert_eq!(fs::read(destination).unwrap(), original);
+            assert_eq!(
+                import::log_levels(&events).last(),
+                Some(&import::LogLevel::Warning)
+            );
+        }
+        assert_eq!(fs::read(&path).unwrap(), original);
+        assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), modified);
     }
     #[test]
     fn video_name_collision_skips_even_different_contents() {

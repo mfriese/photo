@@ -370,6 +370,7 @@ mod tests {
                     captured: None,
                     tags: Vec::new(),
                     tag_error: None,
+                    collision_renamed: false,
                     decision: decision.clone(),
                 })
                 .collect(),

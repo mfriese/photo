@@ -13,6 +13,7 @@ mod desktop_menu;
 mod duplicates_fs;
 mod duplicates_ui;
 mod exiftool;
+mod file_dates_fs;
 mod image_loader;
 mod import_cleanup_fs;
 mod import_cleanup_ui;

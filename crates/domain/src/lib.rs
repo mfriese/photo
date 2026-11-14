@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 mod capture_time;
-pub use capture_time::{CaptureTime, PhotoImportLayout};
+pub use capture_time::{CaptureTime, DateSource, PhotoImportLayout};
 pub mod audio_edit;
 pub mod commands;
 pub mod comments;
@@ -215,3 +215,5 @@ pub fn capture_from_filename(media: &Media) -> Option<CaptureTime> {
         })
     })
 }
+
+pub mod import_date;

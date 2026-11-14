@@ -6,6 +6,9 @@ pub const RAISED: Color32 = Color32::from_rgb(36, 42, 52);
 pub const BORDER: Color32 = Color32::from_rgb(49, 57, 70);
 pub const TEXT: Color32 = Color32::from_rgb(242, 245, 250);
 pub const MUTED: Color32 = Color32::from_rgb(214, 222, 233);
+pub const IMPORT_SUCCESS: Color32 = Color32::from_rgb(125, 211, 151);
+pub const IMPORT_WARNING: Color32 = Color32::from_rgb(255, 215, 95);
+pub const IMPORT_ERROR: Color32 = Color32::from_rgb(255, 145, 145);
 pub const DANGER: Color32 = Color32::from_rgb(255, 125, 125);
 pub const RECORD_RED: Color32 = Color32::from_rgb(255, 100, 105);
 pub const LEVEL_GREEN: Color32 = Color32::from_rgb(125, 211, 151);
@@ -195,6 +198,15 @@ pub fn paint_image(ui: &mut egui::Ui, image: egui::Image<'_>, rect: egui::Rect) 
     }
 }
 
+pub fn import_log_color(level: photosuite_application::import::LogLevel) -> Color32 {
+    use photosuite_application::import::LogLevel;
+    match level {
+        LogLevel::Neutral => TEXT,
+        LogLevel::Success => IMPORT_SUCCESS,
+        LogLevel::Warning => IMPORT_WARNING,
+        LogLevel::Error => IMPORT_ERROR,
+    }
+}
 pub fn sidebar_heading(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(18.).strong().color(TEXT));
 }
@@ -237,6 +249,9 @@ mod tests {
             (MUTED, SURFACE),
             (MUTED, RAISED),
             (ACCENT, SURFACE),
+            (IMPORT_SUCCESS, SURFACE),
+            (IMPORT_WARNING, SURFACE),
+            (IMPORT_ERROR, SURFACE),
         ] {
             let ratio = (luminance(foreground) + 0.05) / (luminance(background) + 0.05);
             assert!(ratio >= 7.0, "Insufficient text contrast: {ratio}");

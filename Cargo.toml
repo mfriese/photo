@@ -40,3 +40,6 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 [[example]]
 name = "native-menu-check"
 path = "examples/native_menu_check.rs"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

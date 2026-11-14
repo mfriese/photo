@@ -113,8 +113,13 @@ impl ImportPanel {
                     if self.session.running() && ui.button("Abbrechen").clicked(){self.session.cancel();}
                     let (current,total)=self.session.progress();
                     if total>0{ui.add(egui::ProgressBar::new(current as f32/total as f32).text(format!("Datei {current} / {total}")));}
-                    if !self.session.status().is_empty(){ui.label(self.session.status());}
-                    if let Some(error)=&self.start_error{ui.colored_label(egui::Color32::LIGHT_RED,error);}
+                    if !self.session.status().is_empty(){let level=import::log_levels(self.session.log()).last().copied().unwrap_or(import::LogLevel::Neutral);ui.colored_label(crate::theme::import_log_color(level),self.session.status());}
+                    if let Some(error)=&self.start_error{ui.colored_label(crate::theme::IMPORT_ERROR,error);}
+                    ui.horizontal_wrapped(|ui|{
+                        ui.colored_label(crate::theme::IMPORT_SUCCESS,"Erfolg");
+                        ui.colored_label(crate::theme::IMPORT_WARNING,"Fallback / Hinweis");
+                        ui.colored_label(crate::theme::IMPORT_ERROR,"Fehler");
+                    });
                     ui.horizontal_wrapped(|ui| {
                         ui.checkbox(&mut self.detailed_log, "Alle Schritte anzeigen");
                         if ui.button("Protokoll kopieren").clicked() {
@@ -137,12 +142,19 @@ fn show_import_log(ui: &mut egui::Ui, events: &[Event]) {
         .show(ui, |ui| {
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width());
-                for event in events.iter().filter(|event| !event.message.is_empty()) {
+                for (event, level) in events
+                    .iter()
+                    .zip(import::log_levels(events))
+                    .filter(|(event, _)| !event.message.is_empty())
+                {
                     ui.add(
-                        egui::Label::new(format!(
-                            "[{}/{}] {}",
-                            event.file, event.total, event.message
-                        ))
+                        egui::Label::new(
+                            egui::RichText::new(format!(
+                                "[{}/{}] {}",
+                                event.file, event.total, event.message
+                            ))
+                            .color(crate::theme::import_log_color(level)),
+                        )
                         .wrap(),
                     );
                 }
@@ -181,6 +193,14 @@ fn compact_line(event: &Event, root: Option<&std::path::Path>) -> Option<String>
     );
     if let Some(target) = destination {
         line.push_str(&format!(" → {target}"));
+    }
+    if let Some(time) = &report.captured
+        && time.is_fallback()
+    {
+        line.push_str(&format!(" · {}", time.origin()));
+    }
+    if report.collision_renamed {
+        line.push_str(" · Kollisionszusatz");
     }
     if !report.tags.is_empty() {
         line.push_str(&format!(" · Tags: {}", report.tags.join(", ")));
@@ -262,13 +282,7 @@ fn show_compact_log(
             for index in rows {
                 let event = reports[index];
                 let report = event.file_report.as_ref().unwrap();
-                let color = if report.tag_error.is_some()
-                    || matches!(report.decision, import::FileDecision::Failed(_))
-                {
-                    egui::Color32::LIGHT_RED
-                } else {
-                    crate::theme::TEXT
-                };
+                let color = crate::theme::import_log_color(report.level());
                 ui.add_sized(
                     [ui.available_width(), 22.],
                     egui::Label::new(
@@ -299,6 +313,7 @@ mod tests {
             decision: import::FileDecision::Planned,
             tags: Vec::new(),
             tag_error: None,
+            collision_renamed: false,
         };
         let events = vec![
             Event {
@@ -421,6 +436,71 @@ mod tests {
             assert!(text[1].pos.y >= text[0].visual_bounding_rect().bottom());
             for text in text {
                 assert!(text.visual_bounding_rect().right() <= width + 1.);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod log_color_tests {
+    use super::*;
+    #[test]
+    fn compact_and_detailed_logs_use_the_same_readable_semantic_colors() {
+        for (source, decision, expected) in [
+            (
+                crate::domain::DateSource::Metadata,
+                import::FileDecision::Copied,
+                crate::theme::IMPORT_SUCCESS,
+            ),
+            (
+                crate::domain::DateSource::FileSystem,
+                import::FileDecision::Copied,
+                crate::theme::IMPORT_WARNING,
+            ),
+            (
+                crate::domain::DateSource::Metadata,
+                import::FileDecision::Failed("error".into()),
+                crate::theme::IMPORT_ERROR,
+            ),
+        ] {
+            let events = vec![Event {
+                file: 1,
+                total: 1,
+                message: "Ergebnis".into(),
+                outcome: None,
+                file_report: Some(import::FileReport {
+                    source: "photo.jpg".into(),
+                    target: None,
+                    captured: Some(
+                        crate::domain::CaptureTime::parse(
+                            "2026:11:14 12:00:00",
+                            "FALLBACK Dateisystemdatum",
+                        )
+                        .unwrap()
+                        .with_source(source),
+                    ),
+                    decision,
+                    tags: vec![],
+                    tag_error: None,
+                    collision_renamed: false,
+                }),
+            }];
+            if source == crate::domain::DateSource::FileSystem {
+                assert!(compact_line(&events[0], None).unwrap().contains("FALLBACK"));
+            }
+            for detailed in [false, true] {
+                let ctx = egui::Context::default();
+                crate::theme::install(&ctx);
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        if detailed {
+                            show_import_log(ui, &events);
+                        } else {
+                            show_compact_log(ui, &events, None, false);
+                        }
+                    });
+                });
+                assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.sections.iter().any(|section|section.format.color==expected))));
             }
         }
     }

@@ -20,6 +20,12 @@ pub trait ImportAdapter: Send + Sync + 'static {
     fn validate(&self, source: &Path, target: &Path) -> Result<(), String>;
     fn discover(&self, source: &Path) -> Result<Vec<Media>, String>;
     fn capture_time(&self, media: &Media) -> Result<CaptureTime, String>;
+    fn verify_audio(&self, _media: &Media) -> Result<(), String> {
+        Err("Audioformat konnte nicht bestätigt werden".into())
+    }
+    fn file_dates(&self, _media: &Media) -> Result<crate::domain::import_date::FileDates, String> {
+        Err("Dateisystemdaten nicht verfügbar".into())
+    }
     fn exists(&self, path: &Path) -> Result<bool, String>;
     fn identical(&self, source: &Path, target: &Path) -> Result<bool, String>;
     fn copy_verified(
@@ -55,6 +61,63 @@ pub struct FileReport {
     pub decision: FileDecision,
     pub tags: Vec<String>,
     pub tag_error: Option<String>,
+    pub collision_renamed: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LogLevel {
+    Neutral,
+    Success,
+    Warning,
+    Error,
+}
+impl FileReport {
+    pub fn level(&self) -> LogLevel {
+        if self.tag_error.is_some() || matches!(self.decision, FileDecision::Failed(_)) {
+            LogLevel::Error
+        } else if self.collision_renamed
+            || self.captured.as_ref().is_some_and(CaptureTime::is_fallback)
+            || matches!(
+                self.decision,
+                FileDecision::SkippedVideoName | FileDecision::Cancelled
+            )
+        {
+            LogLevel::Warning
+        } else {
+            LogLevel::Success
+        }
+    }
+}
+/// Final file severity also colors its earlier detailed steps; no text parsing.
+pub fn log_levels(events: &[Event]) -> Vec<LogLevel> {
+    let files: std::collections::BTreeMap<_, _> = events
+        .iter()
+        .filter_map(|event| {
+            event
+                .file_report
+                .as_ref()
+                .map(|report| (event.file, report.level()))
+        })
+        .collect();
+    events
+        .iter()
+        .map(|event| match &event.outcome {
+            Some(ImportOutcome::Failed(_)) => LogLevel::Error,
+            Some(ImportOutcome::Completed(summary))
+                if summary.failed > 0
+                    || summary.tag_index_error.is_some()
+                    || files.values().any(|level| *level == LogLevel::Error) =>
+            {
+                LogLevel::Error
+            }
+            Some(ImportOutcome::Completed(summary))
+                if summary.aborted || files.values().any(|level| *level == LogLevel::Warning) =>
+            {
+                LogLevel::Warning
+            }
+            Some(ImportOutcome::Completed(_)) => LogLevel::Success,
+            None => files.get(&event.file).copied().unwrap_or(LogLevel::Neutral),
+        })
+        .collect()
 }
 #[derive(Clone, Debug)]
 pub struct ImportSummary {
@@ -247,6 +310,7 @@ pub fn start_with_options(
                     source: media.path().into(),
                     tags: Vec::new(),
                     tag_error: None,
+                    collision_renamed: false,
                     target: None,
                     captured: None,
                     decision: if preview {
@@ -257,7 +321,29 @@ pub fn start_with_options(
                 };
                 let action = (|| {
                     log("Aufnahmedatum aus Metadaten lesen …".into());
-                    let time = adapter.capture_time(media)?;
+                    let primary = adapter.capture_time(media);
+                    let time = match primary {
+                        Ok(date) if date.source() != crate::domain::DateSource::FileSystem => date,
+                        previous => {
+                            let verify_audio = media.is_audio() && previous.is_err();
+                            let reason = match previous {
+                                Ok(date) => date.origin().to_owned(),
+                                Err(error) => error,
+                            };
+                            if verify_audio {
+                                adapter.verify_audio(media).map_err(|error| {
+                                    format!("{reason}; Audio nicht importierbar: {error}")
+                                })?;
+                            }
+                            log(format!(
+                                "Kein belegtes Aufnahmedatum: {reason}. Dateisystem-Fallback wird geprüft."
+                            ));
+                            let dates = adapter.file_dates(media).map_err(|e| {
+                                format!("{reason}; Dateisystem-Fallback fehlgeschlagen: {e}")
+                            })?;
+                            dates.oldest().map_err(|e| format!("{reason}; {e}"))?
+                        }
+                    };
                     report.captured = Some(time.clone());
                     log(format!("Datum: {} ({})", time.stamp(), time.origin()));
                     let mut suffix = 0;
@@ -265,6 +351,7 @@ pub fn start_with_options(
                         if stop.load(Ordering::Relaxed) {
                             return Err("Abgebrochen".into());
                         }
+                        report.collision_renamed = suffix > 0;
                         let candidate =
                             time.target_with_layout(&target, media, suffix, photo_layout);
                         report.target = Some(candidate.clone());
@@ -514,5 +601,158 @@ mod use_case_tests {
                 .unwrap()
                 .contains_key(Path::new("library/2008/09/img_20080916_035811_001.jpg"))
         );
+    }
+}
+
+#[cfg(test)]
+mod severity_tests {
+    use super::*;
+    use crate::domain::DateSource;
+    fn report() -> FileReport {
+        FileReport {
+            source: "photo.jpg".into(),
+            target: None,
+            captured: Some(CaptureTime::parse("2026:11:14 12:00:00", "EXIF").unwrap()),
+            decision: FileDecision::Copied,
+            tags: vec![],
+            tag_error: None,
+            collision_renamed: false,
+        }
+    }
+    #[test]
+    fn report_levels_distinguish_success_fallback_collision_skip_cancel_and_errors() {
+        let mut value = report();
+        assert_eq!(value.level(), LogLevel::Success);
+        value.captured = Some(value.captured.unwrap().with_source(DateSource::FileSystem));
+        assert_eq!(value.level(), LogLevel::Warning);
+        value = report();
+        value.collision_renamed = true;
+        assert_eq!(value.level(), LogLevel::Warning);
+        value = report();
+        value.decision = FileDecision::SkippedVideoName;
+        assert_eq!(value.level(), LogLevel::Warning);
+        value.decision = FileDecision::SkippedIdentical;
+        assert_eq!(value.level(), LogLevel::Success);
+        value.decision = FileDecision::Cancelled;
+        assert_eq!(value.level(), LogLevel::Warning);
+        value.decision = FileDecision::Failed("failure".into());
+        assert_eq!(value.level(), LogLevel::Error);
+        value = report();
+        value.tag_error = Some("tags failed".into());
+        assert_eq!(value.level(), LogLevel::Error);
+    }
+    #[test]
+    fn detailed_steps_inherit_typed_file_severity_without_parsing_messages() {
+        let mut value = report();
+        value.captured = Some(value.captured.unwrap().with_source(DateSource::FileSystem));
+        let events = vec![
+            Event {
+                file: 1,
+                total: 1,
+                message: "any translated step".into(),
+                outcome: None,
+                file_report: None,
+            },
+            Event {
+                file: 1,
+                total: 1,
+                message: String::new(),
+                outcome: None,
+                file_report: Some(value),
+            },
+        ];
+        assert_eq!(
+            log_levels(&events),
+            vec![LogLevel::Warning, LogLevel::Warning]
+        );
+    }
+}
+
+#[cfg(test)]
+mod audio_fallback_tests {
+    use super::*;
+    struct Adapter {
+        valid: bool,
+        copies: std::sync::atomic::AtomicUsize,
+    }
+    impl ImportAdapter for Adapter {
+        fn validate(&self, _: &Path, _: &Path) -> Result<(), String> {
+            Ok(())
+        }
+        fn discover(&self, _: &Path) -> Result<Vec<Media>, String> {
+            Ok(vec![
+                Media::from_audio_asset("recording.wav".into(), String::new()).unwrap(),
+            ])
+        }
+        fn capture_time(&self, _: &Media) -> Result<CaptureTime, String> {
+            Err("keine Metadaten".into())
+        }
+        fn verify_audio(&self, _: &Media) -> Result<(), String> {
+            if self.valid {
+                Ok(())
+            } else {
+                Err("ungültiges Audio".into())
+            }
+        }
+        fn file_dates(&self, _: &Media) -> Result<crate::domain::import_date::FileDates, String> {
+            assert!(self.valid, "invalid audio must not reach date fallback");
+            Ok(crate::domain::import_date::FileDates {
+                created: None,
+                modified: Some(crate::domain::import_date::FileTimestamp {
+                    unix_seconds: 1,
+                    local: CaptureTime::parse("2020:01:02 03:04:05", "FALLBACK Inhaltsänderung")
+                        .unwrap(),
+                }),
+            })
+        }
+        fn exists(&self, _: &Path) -> Result<bool, String> {
+            Ok(false)
+        }
+        fn identical(&self, _: &Path, _: &Path) -> Result<bool, String> {
+            unreachable!()
+        }
+        fn copy_verified(
+            &self,
+            _: &Path,
+            _: &Path,
+            _: &AtomicBool,
+            _: &dyn Fn(CopyProgress),
+        ) -> Result<(), String> {
+            self.copies.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+    #[test]
+    fn filesystem_date_fallback_requires_valid_audio_and_never_bypasses_asset_validation() {
+        for valid in [false, true] {
+            let adapter = Arc::new(Adapter {
+                valid,
+                copies: Default::default(),
+            });
+            let job = start(adapter.clone(), "source".into(), "library".into(), false);
+            let mut report = None;
+            loop {
+                let event = job
+                    .events
+                    .recv_timeout(std::time::Duration::from_secs(3))
+                    .unwrap();
+                let done = event.is_terminal();
+                if event.file_report.is_some() {
+                    report = event.file_report;
+                }
+                if done {
+                    break;
+                }
+            }
+            assert_eq!(adapter.copies.load(Ordering::Relaxed), usize::from(valid));
+            assert_eq!(
+                report.unwrap().level(),
+                if valid {
+                    LogLevel::Warning
+                } else {
+                    LogLevel::Error
+                }
+            );
+        }
     }
 }

@@ -1,5 +1,5 @@
 //! Explicit reliability order. Never confuse release years with recording times.
-use crate::CaptureTime;
+use crate::{CaptureTime, DateSource};
 use std::collections::BTreeMap;
 pub fn select_audio_date(
     tags: &BTreeMap<String, String>,
@@ -54,6 +54,7 @@ pub fn select_audio_date(
         )?,
         &origin,
     )
+    .map(|date| date.with_source(DateSource::FileSystem))
 }
 /// Anchored YYYY[-_]MM[-_]DD[-_]hh[-_]mm[-_]ss, also without separators.
 /// Optional aud_ / comment_ prefix and a separated numeric collision suffix are supported.
@@ -111,6 +112,7 @@ pub fn date_from_filename(stem: &str) -> Option<CaptureTime> {
         &date,
         &format!("{origin}: {stem} (keine vollständige eingebettete Aufnahmezeit)"),
     )
+    .map(|date| date.with_source(DateSource::FileName))
     .ok()
 }
 /// A comment's logical time belongs to the photograph, not to its later recording session.
