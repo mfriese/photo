@@ -66,6 +66,9 @@ impl Suite {
         self.load_path(path, true);
     }
     fn load_path(&mut self, path: PathBuf, remember: bool) {
+        self.load_library(path, remember, false);
+    }
+    fn load_library(&mut self, path: PathBuf, remember: bool, refresh_tags: bool) {
         let path = if path.is_absolute() {
             path
         } else {
@@ -78,7 +81,10 @@ impl Suite {
             self.comments.show();
             return;
         }
-        if self.root.as_ref() != Some(&path) || self.organization.catalog().is_none() {
+        if refresh_tags
+            || self.root.as_ref() != Some(&path)
+            || self.organization.catalog().is_none()
+        {
             if let Err(error) = self.organization.open(path.clone()) {
                 self.status = error;
                 self.tag_view.open = true;
@@ -520,7 +526,7 @@ impl eframe::App for Suite {
 impl Suite {
     fn refresh_after_import(&mut self, path: PathBuf) {
         if self.root.as_ref().is_none_or(|root| root == &path) {
-            self.load(path);
+            self.load_library(path, true, true);
         } else {
             self.status = format!("Importziel aktualisiert: {}", path.display());
         }

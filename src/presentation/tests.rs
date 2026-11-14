@@ -2056,3 +2056,63 @@ fn import_requires_an_open_library_and_has_no_target_picker() {
     );
     assert!(!labels.iter().any(|s| s.contains("Zielbibliothek")));
 }
+
+#[test]
+fn import_completion_reloads_existing_tag_catalog_and_memberships() {
+    use crate::domain::tags::{LibraryFile, TagCatalog};
+    use photosuite_application::organization::{CatalogRepository, StoredCatalog};
+    struct Catalog(std::sync::Mutex<TagCatalog>);
+    impl CatalogRepository for Catalog {
+        fn load(&self, _: &std::path::Path) -> Result<StoredCatalog, String> {
+            Ok(StoredCatalog {
+                catalog: self.0.lock().unwrap().clone(),
+                revision: None,
+            })
+        }
+        fn save(
+            &self,
+            _: &std::path::Path,
+            _: &TagCatalog,
+            _: Option<&[u8]>,
+        ) -> Result<Vec<u8>, String> {
+            Ok(vec![])
+        }
+    }
+    struct EmptyMedia;
+    impl crate::ports::MediaRepository for EmptyMedia {
+        fn scan(&self, _: &std::path::Path) -> (Vec<Media>, usize) {
+            (vec![], 0)
+        }
+    }
+    let repository = Arc::new(Catalog(Default::default()));
+    let mut suite = test_suite();
+    // Use an actual temporary library so refreshing exercises the normal background scan.
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().to_path_buf();
+    suite.services.repository = Arc::new(EmptyMedia);
+    suite.organization =
+        photosuite_application::organization::OrganizationSession::new(repository.clone());
+    suite.root = Some(path.clone());
+    suite.organization.open(path.clone()).unwrap();
+    let wait = |suite: &mut Suite| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while suite.organization.loading() {
+            assert!(std::time::Instant::now() < deadline);
+            suite.organization.poll();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    };
+    wait(&mut suite);
+    assert!(suite.organization.catalog().unwrap().tags().is_empty());
+    let file = LibraryFile::new("2026/11/img_20261114_120000.jpg".into()).unwrap();
+    let mut imported = TagCatalog::default();
+    imported.create("scan").unwrap();
+    imported.assign("scan", file.clone(), true).unwrap();
+    *repository.0.lock().unwrap() = imported;
+    suite.refresh_after_import(path.clone());
+    wait(&mut suite);
+    let catalog = suite.organization.catalog().unwrap();
+    assert!(catalog.tags().contains_key("scan"));
+    assert_eq!(catalog.tags_for(&file), vec!["scan"]);
+    assert_eq!(suite.root, Some(path));
+}
