@@ -47,7 +47,8 @@ impl AudioPlayer for NativeAudioPlayer {
             unsafe extern "C" {
                 fn photosuite_audio_empty(session: u64, label: *const std::ffi::c_char) -> i32;
             }
-            let label = std::ffi::CString::new(label).map_err(|e| e.to_string())?;
+            let label = std::ffi::CString::new(if label == "all" { "Alles" } else { label })
+                .map_err(|e| e.to_string())?;
             if unsafe {
                 photosuite_audio_empty(
                     self.session.load(std::sync::atomic::Ordering::Relaxed),

@@ -71,7 +71,7 @@ impl DiaryClip {
 }
 #[derive(Clone, Debug)]
 pub struct DiaryTimeline {
-    year: String,
+    year: Option<String>,
     kind: crate::diary::AudioKind,
     month: Option<String>,
     photo: Option<String>,
@@ -80,10 +80,19 @@ pub struct DiaryTimeline {
 impl DiaryTimeline {
     pub fn new(year: String, clips: Vec<DiaryClip>) -> Result<Self, String> {
         if year.len() != 4
-            || year.parse::<u16>().ok().filter(|v| *v > 0).is_none()
-            || clips.is_empty()
+            || !year.bytes().all(|b| b.is_ascii_digit())
+            || !year.parse::<u16>().is_ok_and(|y| y > 0)
         {
-            return Err("Diary benötigt ein gültiges Jahr und mindestens eine Aufnahme".into());
+            return Err("Ungültiges Audiojahr".into());
+        }
+        Self::build(Some(year), clips)
+    }
+    pub fn for_library(clips: Vec<DiaryClip>) -> Result<Self, String> {
+        Self::build(None, clips)
+    }
+    fn build(year: Option<String>, clips: Vec<DiaryClip>) -> Result<Self, String> {
+        if clips.is_empty() {
+            return Err("Audiobereich benötigt mindestens eine Aufnahme".into());
         }
         let mut paths = HashSet::new();
         if clips.iter().any(|c| !paths.insert(c.path.clone())) {
@@ -115,6 +124,9 @@ impl DiaryTimeline {
         self
     }
     pub fn with_month(mut self, month: Option<String>) -> Result<Self, String> {
+        if self.is_library() && month.is_some() {
+            return Err("Monatsfilter benötigt ein Jahr".into());
+        }
         if let Some(month) = &month
             && (month.len() != 2 || !month.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)))
         {
@@ -124,6 +136,9 @@ impl DiaryTimeline {
         Ok(self)
     }
     pub fn with_photo(mut self, photo: Option<String>) -> Result<Self, String> {
+        if self.is_library() && photo.is_some() {
+            return Err("Fotofilter benötigt einen Fotobereich".into());
+        }
         if let Some(photo) = &photo {
             crate::comments::Comment::metadata_path(&crate::tags::LibraryFile::new(
                 photo.clone(),
@@ -142,7 +157,10 @@ impl DiaryTimeline {
         self.kind
     }
     pub fn year(&self) -> &str {
-        &self.year
+        self.year.as_deref().unwrap_or("")
+    }
+    pub fn is_library(&self) -> bool {
+        self.year.is_none()
     }
     pub fn clips(&self) -> &[DiaryClip] {
         &self.clips
@@ -258,6 +276,24 @@ impl DiaryTimeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_period_is_explicit_and_cannot_gain_a_month_or_photo_filter() {
+        let clips = vec![
+            DiaryClip::from_filename("aud_20261114_120000.wav".into()),
+            DiaryClip::from_filename("aud_19800101_120000.wav".into()),
+        ];
+        assert!(DiaryTimeline::new("all".into(), clips.clone()).is_err());
+        let timeline = DiaryTimeline::for_library(clips).unwrap();
+        assert!(timeline.is_library());
+        assert_eq!(timeline.clips()[0].captured().unwrap().year(), "1980");
+        assert!(timeline.clone().with_month(Some("01".into())).is_err());
+        assert!(
+            timeline
+                .with_photo(Some("1980/01/img_19800101_120000.jpg".into()))
+                .is_err()
+        );
+        assert!(DiaryTimeline::for_library(vec![]).is_err());
+    }
     #[test]
     fn duration_batch_is_atomic_and_does_not_invent_or_change_dates() {
         let a = PathBuf::from("aud_20261113_120000.wav");

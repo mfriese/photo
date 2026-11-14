@@ -227,7 +227,7 @@ fn controls_sized(
             let help = format!(
                 "{date}\n{}\nGeprüft: {} / {} · {} Fehler",
                 hover.unwrap_or_else(|| {
-                    "Jahresleiste · Abschnittsbreiten proportional zur Dauer, grau noch vorläufig"
+                    "Audioleiste · Abschnittsbreiten proportional zur Dauer, grau noch vorläufig"
                         .into()
                 }),
                 progress.checked,
