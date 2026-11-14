@@ -74,20 +74,21 @@ impl Comment {
         {
             return Err("Kommentarziel muss ein Foto sein".into());
         }
+        let path = Path::new(audio.as_str());
         if audio == photo
-            || !Media::from_audio_asset(PathBuf::from(audio.as_str()), String::new()).is_some_and(
-                |_| {
-                    Path::new(audio.as_str()).file_stem().is_some_and(|s| {
-                        let name = s.to_string_lossy().to_lowercase();
-                        name.starts_with("comment_") || name.starts_with("com_")
-                    })
-                },
-            )
+            || !Media::from_audio_asset(path.into(), String::new()).is_some_and(|_| {
+                path.file_stem()
+                    .is_some_and(|stem| stem.to_string_lossy().to_lowercase().starts_with("com_"))
+            })
         {
-            return Err("Kommentar benötigt eine com_- oder ältere comment_-Audiodatei".into());
+            return Err("Kommentar benötigt eine com_-Audiodatei".into());
         }
         Self::metadata_path(&photo)?;
-        let recorded_at = RecordedAt::from_audio_name(Path::new(audio.as_str()))?;
+        let recorded_at = RecordedAt::from_audio_name(path)?;
+        let expected = Path::new(recorded_at.time().year()).join("audio").join("c");
+        if path.parent() != Some(expected.as_path()) {
+            return Err("Kommentar-Audio muss im eigenen Aufnahmejahr unter audio/c liegen".into());
+        }
         Ok(Self {
             id: id.to_ascii_lowercase(),
             audio,
@@ -119,6 +120,13 @@ impl Comment {
             .to_string_lossy();
         target.set_file_name(format!("{name}.yaml"));
         LibraryFile::new(target.to_string_lossy().into_owned())
+    }
+    /// Logical playback time, distinct from the real recording timestamp and storage year.
+    pub fn reference_time(&self) -> Option<CaptureTime> {
+        Path::new(self.photo.as_str())
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(CaptureTime::from_photo_filename)
     }
     pub fn sidecar(&self) -> LibraryFile {
         Self::metadata_path(&self.photo).expect("validated photo reference")
@@ -213,10 +221,36 @@ mod tests {
     fn comment() -> Comment {
         Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
-            LibraryFile::new("2026/audio/comment_20261112_153000.m4a".into()).unwrap(),
+            LibraryFile::new("2026/audio/c/com_20261112_153000.m4a".into()).unwrap(),
             LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
         )
         .unwrap()
+    }
+    #[test]
+    fn comment_recording_year_folder_and_media_identity_cannot_disagree() {
+        let valid = comment();
+        for path in [
+            "2025/audio/c/com_20261113_120000.m4a",
+            "2026/audio/d/com_20261113_120000.m4a",
+            "2026/09/com_20261113_120000.m4a",
+        ] {
+            assert!(
+                Comment::new(
+                    valid.id().into(),
+                    LibraryFile::new(path.into()).unwrap(),
+                    valid.photo().clone()
+                )
+                .is_err()
+            );
+        }
+        let other = Media::from_audio_asset(
+            "2026/audio/c/com_20261113_120000.m4a".into(),
+            "2026/audio/c".into(),
+        )
+        .unwrap()
+        .with_comment_recording(Some(&valid));
+        assert!(!other.has_recording_time());
+        assert_eq!(other.group(), "2026/audio/c");
     }
     #[test]
     fn recording_date_and_physical_tree_location_survive_refinement() {
@@ -231,9 +265,10 @@ mod tests {
             .unwrap()
             .with_comment_recording(Some(&c));
         assert_eq!(m.group(), "2026/audio");
+        assert_eq!(m.recording_time().unwrap().stamp(), "20261112_153000");
         assert_eq!(
             crate::capture_from_filename(&m).unwrap().stamp(),
-            "20261112_153000"
+            "20080916_035811"
         );
         let mut timeline = crate::diary_timeline::DiaryTimeline::new(
             "2026".into(),
@@ -248,19 +283,49 @@ mod tests {
             .unwrap();
         assert_eq!(
             timeline.clips()[0].captured().unwrap().stamp(),
-            "20261112_153000"
+            "20080916_035811"
         );
         assert_eq!(timeline.clips()[0].duration(), Some(4.));
         assert!(
-            crate::diary::AudioScope::parse("2026/audio/comments")
+            crate::diary::AudioScope::parse("2008/audio/comments")
                 .unwrap()
                 .includes(&m)
         );
         assert!(
-            !crate::diary::AudioScope::parse("2008/audio")
+            !crate::diary::AudioScope::parse("2026/audio")
                 .unwrap()
                 .includes(&m)
         );
+    }
+    #[test]
+    fn unknown_photo_time_never_falls_back_to_the_comment_recording_date() {
+        let c = Comment::new(
+            "12345678-1234-1234-1234-123456789abc".into(),
+            LibraryFile::new("2026/audio/c/com_20261114_120000.m4a".into()).unwrap(),
+            LibraryFile::new("1980/09/unknown.jpg".into()).unwrap(),
+        )
+        .unwrap();
+        let m = Media::from_audio_asset(c.audio().as_str().into(), "2026/audio/c".into())
+            .unwrap()
+            .with_comment_recording(Some(&c));
+        assert_eq!(m.reference_year(), Some("1980"));
+        assert!(crate::capture_from_filename(&m).is_none());
+        assert!(
+            crate::diary::AudioViewScope::parse("1980")
+                .unwrap()
+                .includes(&m)
+        );
+        assert!(
+            !crate::diary::AudioViewScope::parse("2026")
+                .unwrap()
+                .includes(&m)
+        );
+        assert!(
+            !crate::diary::AudioViewScope::parse("1980/11")
+                .unwrap()
+                .includes(&m)
+        );
+        assert_eq!(m.recording_time().unwrap().year(), "2026");
     }
     #[test]
     fn indexes_reject_conflicts_and_keep_multiple_comments_for_one_photo() {
@@ -271,8 +336,7 @@ mod tests {
         let mut other = c.clone();
         other.id = "22345678-1234-1234-1234-123456789abc".into();
         assert!(catalog.insert(other.clone()).is_err());
-        other.audio =
-            LibraryFile::new("2026/audio/comment_20261112_153000_001.m4a".into()).unwrap();
+        other.audio = LibraryFile::new("2026/audio/c/com_20261112_153000_001.m4a".into()).unwrap();
         catalog.insert(other).unwrap();
         assert_eq!(catalog.for_photo(c.photo()).len(), 2);
         assert_eq!(catalog.by_audio(c.audio()), Some(&c));

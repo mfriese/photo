@@ -27,3 +27,5 @@ pub mod organization;
 pub mod media_dates;
 
 pub mod comments;
+
+pub mod diary_preparation;

@@ -14,7 +14,7 @@ pub struct DiaryClip {
     provisional_weight: Option<f64>,
     captured: Option<CaptureTime>,
     duration: Option<f64>,
-    recording_locked: bool,
+    reference_locked: bool,
 }
 impl DiaryClip {
     /// Equal provisional slots until actual durations are available; no I/O required.
@@ -34,20 +34,20 @@ impl DiaryClip {
             provisional_weight: None,
             captured,
             duration: None,
-            recording_locked: false,
+            reference_locked: false,
         }
     }
     pub fn from_media(media: &crate::Media) -> Self {
         let mut clip = Self::from_filename(media.path().into());
         if media.has_recording_time() {
-            clip.captured = media.recording_time().cloned();
-            clip.recording_locked = true;
+            clip.captured = media.reference_time().cloned();
+            clip.reference_locked = true;
         }
         clip
     }
-    pub fn with_recording_time(mut self, time: Option<CaptureTime>) -> Self {
+    pub fn with_reference_time(mut self, time: Option<CaptureTime>) -> Self {
         self.captured = time;
-        self.recording_locked = true;
+        self.reference_locked = true;
         self
     }
     pub fn path(&self) -> &Path {
@@ -147,6 +147,61 @@ impl DiaryTimeline {
     pub fn clips(&self) -> &[DiaryClip] {
         &self.clips
     }
+    /// Apply measured durations without changing dates or ordering; validate the batch atomically.
+    pub fn refine_durations(&mut self, updates: &[(PathBuf, f64)]) -> Result<(), String> {
+        if updates
+            .iter()
+            .any(|(_, d)| !d.is_finite() || *d <= 0. || !(*d * WEIGHT_PER_SECOND).is_finite())
+        {
+            return Err("Ungültige Audiodauer".into());
+        }
+        let updates: std::collections::HashMap<_, _> = updates
+            .iter()
+            .map(|(path, duration)| (path.as_path(), *duration))
+            .collect();
+        let known: HashSet<_> = self.clips.iter().map(|c| c.path()).collect();
+        if updates.keys().any(|path| !known.contains(path)) {
+            return Err("Aufnahme gehört nicht zum Verlauf".into());
+        }
+        let durations: Vec<_> = self
+            .clips
+            .iter()
+            .map(|c| updates.get(c.path()).copied().or(c.duration()))
+            .collect();
+        let weights: Vec<_> = durations
+            .iter()
+            .flatten()
+            .map(|d| d * WEIGHT_PER_SECOND)
+            .collect();
+        if weights.is_empty() {
+            return Ok(());
+        }
+        let provisional = weights.iter().sum::<f64>() / weights.len() as f64;
+        let total: f64 = self
+            .clips
+            .iter()
+            .zip(&durations)
+            .map(|(clip, d)| {
+                d.map(|d| d * WEIGHT_PER_SECOND).unwrap_or_else(|| {
+                    if clip.provisional_weight.is_some() {
+                        provisional
+                    } else {
+                        clip.weight()
+                    }
+                })
+            })
+            .sum();
+        if !total.is_finite() {
+            return Err("Gesamtgewicht der Audioleiste zu groß".into());
+        }
+        for (clip, duration) in self.clips.iter_mut().zip(durations) {
+            clip.duration = duration;
+            if duration.is_none() && clip.provisional_weight.is_some() {
+                clip.provisional_weight = Some(provisional);
+            }
+        }
+        Ok(())
+    }
     pub fn refine(&mut self, recording: Recording) -> Result<(), String> {
         if !(recording.duration() * WEIGHT_PER_SECOND).is_finite() {
             return Err("Audiodauer überschreitet den Darstellungsbereich".into());
@@ -181,7 +236,7 @@ impl DiaryTimeline {
             .iter_mut()
             .find(|c| c.path == recording.path())
             .ok_or("Aufnahme gehört nicht zum Jahresverlauf")?;
-        if !clip.recording_locked {
+        if !clip.reference_locked {
             clip.captured = Some(
                 clip.path
                     .file_stem()
@@ -203,6 +258,37 @@ impl DiaryTimeline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn duration_batch_is_atomic_and_does_not_invent_or_change_dates() {
+        let a = PathBuf::from("aud_20261113_120000.wav");
+        let b = PathBuf::from("unknown.wav");
+        let mut timeline = DiaryTimeline::new(
+            "2026".into(),
+            vec![
+                DiaryClip::from_filename(a.clone()),
+                DiaryClip::from_filename(b.clone()),
+            ],
+        )
+        .unwrap();
+        timeline
+            .refine_durations(&[(a.clone(), 1.), (b.clone(), 3.)])
+            .unwrap();
+        assert_eq!(
+            timeline.clips()[1].weight() / timeline.clips()[0].weight(),
+            3.
+        );
+        assert!(timeline.clips()[1].captured().is_none());
+        let stamp = timeline.clips()[0].captured().unwrap().stamp().to_owned();
+        for invalid in [0., -1., f64::NAN, f64::INFINITY] {
+            assert!(
+                timeline
+                    .refine_durations(&[(a.clone(), 5.), (b.clone(), invalid)])
+                    .is_err()
+            );
+            assert_eq!(timeline.clips()[0].duration(), Some(1.));
+        }
+        assert_eq!(timeline.clips()[0].captured().unwrap().stamp(), stamp);
+    }
     #[test]
     fn name_only_draft_stays_balanced_during_refinement_then_has_exact_duration_ratios() {
         let a = PathBuf::from("2023-12-27_22-51-32.wav");
@@ -327,7 +413,7 @@ mod tests {
 mod comment_tests {
     use super::*;
     #[test]
-    fn comment_keeps_actual_recording_time_and_duration_refines_without_photo_remapping() {
+    fn comment_keeps_photo_reference_time_while_duration_is_refined() {
         let comment = crate::comments::Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
             crate::tags::LibraryFile::new("2026/audio/c/com_20261113_120000.m4a".into()).unwrap(),
@@ -352,7 +438,7 @@ mod comment_tests {
             .unwrap();
         assert_eq!(
             timeline.clips()[0].captured().unwrap().stamp(),
-            "20261113_120000"
+            "20080916_035811"
         );
         assert_eq!(timeline.clips()[0].duration(), Some(15.));
         assert_eq!(media.group(), "2026/audio/c");

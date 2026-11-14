@@ -19,8 +19,16 @@ pub struct AudioProbe {
     pub file_created: Option<String>,
 }
 pub trait AudioSource: Send + Sync + 'static {
+    /// Already measured data only; must never perform I/O.
+    fn cached_probe(&self, _: &Path) -> Option<AudioProbe> {
+        None
+    }
     fn probe(&self, path: &Path) -> Result<AudioProbe, String>;
     fn capture_time(&self, path: &Path) -> Result<CaptureTime, String>;
+    /// Resolve remaining date metadata while reusing a measured audio probe.
+    fn capture_time_from_probe(&self, path: &Path, _: &AudioProbe) -> Result<CaptureTime, String> {
+        self.capture_time(path)
+    }
     fn inspect(&self, path: &Path) -> Result<Recording, String> {
         let probe = self.probe(path)?;
         if !probe.audio_only {
@@ -40,6 +48,7 @@ pub struct AudioPlaybackState {
     pub is_open: bool,
     pub has_started: bool,
     pub failed: bool,
+    pub empty_selection: bool,
 }
 #[derive(Clone, Default)]
 pub struct VerificationProgress {
@@ -55,11 +64,18 @@ pub struct AudioTransportSnapshot {
     pub loading: bool,
     pub failed: bool,
     pub fraction: f64,
+    pub category_filter: Option<AudioKind>,
     pub current_date: Option<CaptureTime>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AudioControl {
     Toggle,
+    /// Restore the complete year in the shared transport and continue playback.
+    PlayAll,
+    Configure {
+        playing: bool,
+        category: Option<AudioKind>,
+    },
     Seek(f64),
     ShowWindow,
     Stop,
@@ -89,6 +105,9 @@ pub trait AudioPlayer: Send + Sync + 'static {
     fn control(&self, _command: AudioControl) -> Result<(), String> {
         Err("Audio-Steuerung nicht verfügbar".into())
     }
+    fn empty_view(&self, _label: &str) -> Result<(), String> {
+        self.control(AudioControl::Stop)
+    }
     /// Update layout in place without replacing/reseeking the current recording.
     fn revise(
         &self,
@@ -111,9 +130,10 @@ enum Event {
 struct Pending {
     receiver: mpsc::Receiver<Event>,
     cancel: Arc<AtomicBool>,
-    gate: Option<mpsc::Sender<()>>,
+    gate: Option<mpsc::Sender<bool>>,
     opened: bool,
     embedded: bool,
+    priority_released: bool,
 }
 struct EmbeddedRequest {
     items: Vec<Media>,
@@ -132,6 +152,7 @@ pub struct DiarySession {
     progress: VerificationProgress,
     status: String,
     warnings: Vec<String>,
+    restore: Option<AudioTransportSnapshot>,
 }
 impl DiarySession {
     pub fn with_priority(priority: Arc<crate::work_priority::WorkPriority>) -> Self {
@@ -144,6 +165,7 @@ impl DiarySession {
             progress: Default::default(),
             status: String::new(),
             warnings: Vec::new(),
+            restore: None,
         }
     }
     pub fn timeline(&self) -> Option<&DiaryTimeline> {
@@ -195,6 +217,7 @@ impl DiarySession {
         source: Arc<dyn AudioSource>,
         group: &str,
     ) -> Result<(), String> {
+        self.restore = None;
         self.request_playback(items, selected, source, group, true)
     }
     pub fn request_window(
@@ -204,7 +227,51 @@ impl DiarySession {
         source: Arc<dyn AudioSource>,
         group: &str,
     ) -> Result<(), String> {
+        self.restore = None;
         self.request_playback(items, selected, source, group, false)
+    }
+    /// Follow navigation without inventing playback intent or discarding the category filter.
+    pub fn follow_view(
+        &mut self,
+        items: &[Media],
+        root: &Path,
+        source: Arc<dyn AudioSource>,
+        group: &str,
+        player: &dyn AudioPlayer,
+    ) -> Result<(), String> {
+        let snapshot = player.transport();
+        if !snapshot.active {
+            return Ok(());
+        }
+        let mut draft = GalleryAudio::default();
+        draft.ensure(items, root, group);
+        if self
+            .timeline_for_view(group)
+            .is_some_and(|t| draft.accepts_active(t))
+        {
+            return Ok(());
+        }
+        if let Some(selected) = draft
+            .selected()
+            .and_then(|p| items.iter().find(|m| m.path() == p))
+        {
+            self.request_playback(items, selected, source, group, true)?;
+            self.restore = Some(snapshot);
+        } else {
+            self.cancel();
+            self.timeline = None;
+            let label = playback_scope(group)
+                .map(|scope| {
+                    format!(
+                        "{}{}",
+                        scope.year(),
+                        scope.month().map(|m| format!("/{m}")).unwrap_or_default()
+                    )
+                })
+                .unwrap_or_default();
+            player.empty_view(&label)?;
+        }
+        Ok(())
     }
     fn request_playback(
         &mut self,
@@ -260,6 +327,7 @@ impl DiarySession {
         &self.warnings
     }
     pub fn cancel(&mut self) {
+        self.restore = None;
         self.queued = None;
         self.requested_group = None;
         if let Some(pending) = &mut self.pending {
@@ -277,7 +345,7 @@ impl DiarySession {
         let group = AudioScope::parse(selected.group())
             .and_then(|scope| {
                 AudioScope::for_year(
-                    scope.year(),
+                    selected.reference_year().unwrap_or(scope.year()),
                     crate::domain::diary::audio_kind(selected).unwrap_or(AudioKind::All),
                 )
             })
@@ -308,7 +376,7 @@ impl DiarySession {
         let placements: std::collections::HashMap<_, _> = items
             .iter()
             .filter(|m| m.has_recording_time())
-            .map(|m| (m.path().to_owned(), m.recording_time().cloned()))
+            .map(|m| (m.path().to_owned(), m.reference_time().cloned()))
             .collect();
         let selected = selected.path().to_owned();
         if !paths.contains(&selected) {
@@ -335,6 +403,7 @@ impl DiarySession {
             gate: Some(go),
             opened: false,
             embedded: false,
+            priority_released: false,
         });
         self.status = "Audioplayer wird aus Dateinamen geöffnet …".into();
         let audio_work = self.priority.audio();
@@ -348,16 +417,26 @@ impl DiarySession {
                     }
                     let mut clip = DiaryClip::from_filename(path.clone());
                     if let Some(time) = placements.get(path) {
-                        clip = clip.with_recording_time(time.clone());
+                        clip = clip.with_reference_time(time.clone());
                     }
                     clips.push(clip);
                 }
-                DiaryTimeline::new(year, clips).and_then(|timeline| {
-                    timeline
-                        .with_kind(kind)
-                        .with_month(month)?
-                        .with_photo(photo_reference)
-                })
+                let mut timeline = DiaryTimeline::new(year, clips)?
+                    .with_kind(kind)
+                    .with_month(month)?
+                    .with_photo(photo_reference)?;
+                let durations = timeline
+                    .clips()
+                    .iter()
+                    .filter_map(|clip| {
+                        source
+                            .cached_probe(clip.path())
+                            .filter(|probe| probe.audio_only)
+                            .map(|probe| (clip.path().into(), probe.duration))
+                    })
+                    .collect::<Vec<_>>();
+                timeline.refine_durations(&durations)?;
+                Ok::<_, String>(timeline)
             })();
             let Ok(timeline) = draft else {
                 let _ = sender.send(Event::Draft(Err(draft.unwrap_err())));
@@ -385,7 +464,10 @@ impl DiarySession {
                     return;
                 }
                 match gate.recv_timeout(std::time::Duration::from_millis(100)) {
-                    Ok(()) => break,
+                    Ok(true) => break,
+                    Ok(false) => {
+                        audio_work.take();
+                    }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                     Err(mpsc::RecvTimeoutError::Disconnected) => {
                         let _ = sender.send(Event::Done);
@@ -416,9 +498,14 @@ impl DiarySession {
             let state = player.state();
             if state.has_started {
                 if let Some(gate) = pending.gate.take() {
-                    let _ = gate.send(());
+                    let _ = gate.send(true);
                 }
                 self.status = "Aufnahmedaten und Dauern werden im Hintergrund geprüft …".into();
+            } else if state.empty_selection && !pending.priority_released {
+                if let Some(gate) = &pending.gate {
+                    let _ = gate.send(false);
+                }
+                pending.priority_released = true;
             } else if !state.is_open || state.failed {
                 pending.cancel.store(true, Ordering::Relaxed);
                 pending.gate.take();
@@ -449,6 +536,20 @@ impl DiarySession {
                         player.open(&timeline, &selected, &photos)
                     } {
                         Ok(()) => {
+                            if let Some(state) = self.restore.take() {
+                                if !state.playing {
+                                    if let Some(gate) = &pending.gate {
+                                        let _ = gate.send(false);
+                                    }
+                                    pending.priority_released = true;
+                                }
+                                if let Err(error) = player.control(AudioControl::Configure {
+                                    playing: state.playing,
+                                    category: state.category_filter,
+                                }) {
+                                    self.warnings.push(error);
+                                }
+                            }
                             self.timeline = Some(timeline);
                             pending.opened = true;
                             self.status =
@@ -603,7 +704,7 @@ impl DiaryCatalog {
         let placements: std::collections::HashMap<_, _> = items
             .iter()
             .filter(|m| m.has_recording_time())
-            .map(|m| (m.path(), m.recording_time()))
+            .map(|m| (m.path(), m.reference_time()))
             .collect();
         let mut missing = Vec::new();
         for path in paths {
@@ -732,8 +833,29 @@ mod tests {
         started: AtomicBool,
         closed: AtomicBool,
         modes: Mutex<Vec<bool>>,
+        controls: Mutex<Vec<AudioControl>>,
+        snapshot: Mutex<Option<AudioTransportSnapshot>>,
+        empty: Mutex<Vec<String>>,
     }
     impl AudioPlayer for Player {
+        fn transport(&self) -> AudioTransportSnapshot {
+            self.snapshot
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| AudioTransportSnapshot {
+                    active: self.state().is_open,
+                    ..Default::default()
+                })
+        }
+        fn control(&self, command: AudioControl) -> Result<(), String> {
+            self.controls.lock().unwrap().push(command);
+            Ok(())
+        }
+        fn empty_view(&self, label: &str) -> Result<(), String> {
+            self.empty.lock().unwrap().push(label.into());
+            Ok(())
+        }
         fn open(&self, t: &DiaryTimeline, selected: &Path, _: &[Media]) -> Result<(), String> {
             *self.opened.lock().unwrap() = Some((t.clone(), selected.into()));
             self.modes.lock().unwrap().push(true);
@@ -759,6 +881,7 @@ mod tests {
                     && !self.closed.load(Ordering::Relaxed),
                 has_started: self.started.load(Ordering::Relaxed),
                 failed: false,
+                empty_selection: false,
             }
         }
     }
@@ -773,6 +896,97 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
+    }
+    #[test]
+    fn navigation_follows_month_and_preserves_pause_and_category_including_empty_periods() {
+        let items = mixed_recording_time_items();
+        let player = Player::default();
+        *player.snapshot.lock().unwrap() = Some(AudioTransportSnapshot {
+            active: true,
+            playing: false,
+            category_filter: Some(AudioKind::Comments),
+            ..Default::default()
+        });
+        let priority = Arc::new(crate::work_priority::WorkPriority::default());
+        let mut session = DiarySession::with_priority(priority.clone());
+        session
+            .follow_view(
+                &items,
+                Path::new("/library"),
+                Arc::new(NamedSource),
+                "2008/09",
+                &player,
+            )
+            .unwrap();
+        until(&mut session, &player, |s, _| {
+            s.timeline_for_view("2008/09").is_some()
+        });
+        assert_eq!(
+            player.controls.lock().unwrap().last(),
+            Some(&AudioControl::Configure {
+                playing: false,
+                category: Some(AudioKind::Comments)
+            })
+        );
+        assert_eq!(session.timeline().unwrap().month(), Some("09"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while priority.audio_active() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        session
+            .follow_view(
+                &items,
+                Path::new("/library"),
+                Arc::new(NamedSource),
+                "2008/10",
+                &player,
+            )
+            .unwrap();
+        assert_eq!(player.empty.lock().unwrap().as_slice(), &["2008/10"]);
+        assert!(session.timeline().is_none());
+    }
+    #[test]
+    fn player_opens_with_prepared_duration_ratios_before_verification_gate() {
+        struct Cached;
+        impl AudioSource for Cached {
+            fn cached_probe(&self, path: &Path) -> Option<AudioProbe> {
+                Some(AudioProbe {
+                    duration: if path.file_name().unwrap() == "a.wav" {
+                        1.
+                    } else {
+                        3.
+                    },
+                    audio_only: true,
+                    file_created: None,
+                })
+            }
+            fn probe(&self, _: &Path) -> Result<AudioProbe, String> {
+                panic!("verification must wait until playback starts")
+            }
+            fn capture_time(&self, _: &Path) -> Result<CaptureTime, String> {
+                panic!("no date query before playback starts")
+            }
+        }
+        let items = vec![
+            Media::from_audio_asset("2026/audio/d/a.wav".into(), "2026/audio/d".into()).unwrap(),
+            Media::from_audio_asset("2026/audio/d/b.wav".into(), "2026/audio/d".into()).unwrap(),
+        ];
+        let mut session = DiarySession::default();
+        let player = Player::default();
+        session
+            .start_embedded(&items, &items[0], Arc::new(Cached), "2026")
+            .unwrap();
+        until(&mut session, &player, |s, _| s.timeline().is_some());
+        let opened = player.opened.lock().unwrap();
+        let timeline = &opened.as_ref().unwrap().0;
+        assert_eq!(
+            timeline.clips()[1].weight() / timeline.clips()[0].weight(),
+            3.
+        );
+        drop(opened);
+        session.cancel();
+        until(&mut session, &player, |s, _| !s.is_loading());
     }
     #[test]
     fn catalog_reads_dates_in_background_and_reuses_the_same_year() {
@@ -1117,7 +1331,7 @@ mod tests {
                 .iter()
                 .map(|c| c.captured().unwrap().year())
                 .collect::<Vec<_>>(),
-            vec!["2025", "2026"]
+            vec!["2008", "2008"]
         );
         assert!(draft.accepts_active(timeline));
         assert!(session.timeline_for_view("2008/audio/comments").is_none());
@@ -1128,7 +1342,7 @@ mod tests {
         let comment = Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
             LibraryFile::new("2008/audio/c/com_20080916_035811.m4a".into()).unwrap(),
-            LibraryFile::new("1999/09/img_19990916_035811.jpg".into()).unwrap(),
+            LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
         )
         .unwrap();
         vec![
@@ -1293,6 +1507,24 @@ mod tests {
     }
 }
 
+/// All playback surfaces share the selected year/month; window categories are independent.
+pub fn header_audio_group(items: &[Media], group: Option<&str>) -> String {
+    if let Some(scope) = group.and_then(playback_scope) {
+        return scope.group();
+    }
+    items
+        .iter()
+        .filter(|m| m.is_audio())
+        .filter_map(|m| {
+            m.reference_year()
+                .or_else(|| m.reference_time().map(|d| d.year()))
+                .or_else(|| gallery_year(m.group()))
+        })
+        .max()
+        .or_else(|| items.iter().filter_map(|m| gallery_year(m.group())).max())
+        .unwrap_or("")
+        .into()
+}
 /// Names-only selection for the gallery header; all recordings of the year share one axis.
 pub fn gallery_audio<'a>(items: &'a [Media], group: &str) -> Option<&'a Media> {
     let scope = playback_scope(group)?;
@@ -1334,19 +1566,21 @@ pub struct GalleryAudio {
     key: Option<(PathBuf, String, usize)>,
     timeline: Option<DiaryTimeline>,
     selected: Option<PathBuf>,
+    prepared_version: Option<(u64, u64)>,
 }
 impl GalleryAudio {
-    pub fn ensure(&mut self, items: &[Media], root: &Path, group: &str) {
+    pub fn ensure(&mut self, items: &[Media], root: &Path, group: &str) -> bool {
         let key = (root.to_owned(), group.to_owned(), items.len());
         if self.key.as_ref() == Some(&key) {
-            return;
+            return false;
         }
         self.key = Some(key);
+        self.prepared_version = None;
         self.members.clear();
         self.timeline = None;
         self.selected = None;
         let Some(scope) = playback_scope(group) else {
-            return;
+            return true;
         };
         self.selected = gallery_audio(items, group).map(|m| m.path().to_owned());
         let clips = items
@@ -1357,7 +1591,7 @@ impl GalleryAudio {
                     media.path().to_owned(),
                     (
                         media.has_recording_time(),
-                        media.recording_time().map(|date| date.stamp().to_owned()),
+                        media.reference_time().map(|date| date.stamp().to_owned()),
                     ),
                 );
                 DiaryClip::from_media(media)
@@ -1371,12 +1605,27 @@ impl GalleryAudio {
                     .with_photo(scope.photo_reference().map(str::to_owned))
             })
             .ok();
+        true
+    }
+    pub fn apply_prepared(
+        &mut self,
+        preparation: &crate::diary_preparation::AudioPreparation,
+    ) -> Result<(), String> {
+        let version = preparation.version();
+        if self.prepared_version == Some(version) {
+            return Ok(());
+        }
+        self.prepared_version = Some(version);
+        if let Some(timeline) = &mut self.timeline {
+            preparation.apply(timeline)?;
+        }
+        Ok(())
     }
     pub fn timeline(&self) -> Option<&DiaryTimeline> {
         self.timeline.as_ref()
     }
     /// Date refinements may change diary dates, but linked comments must keep the
-    /// current photo placement and the active list must contain the current members.
+    /// photo reference time and the active list must contain the current members.
     pub fn accepts_active(&self, active: &DiaryTimeline) -> bool {
         self.timeline.as_ref().is_some_and(|draft| {
             draft.year() == active.year()
@@ -1418,5 +1667,67 @@ mod gallery_tests {
         cache.ensure(&items, Path::new("/library"), "albums");
         assert!(cache.timeline().is_none());
         assert!(gallery_year("0000/01").is_none());
+    }
+}
+
+#[cfg(test)]
+mod header_scope_tests {
+    use super::*;
+    #[test]
+    fn header_uses_whole_selected_year_and_disables_without_context() {
+        assert_eq!(header_audio_group(&[], Some("2026/09")), "2026/09");
+        assert_eq!(
+            header_audio_group(&[], Some("2025/audio/comments")),
+            "2025/audio/comments"
+        );
+        assert_eq!(header_audio_group(&[], None), "");
+    }
+}
+
+#[cfg(test)]
+mod reference_period_tests {
+    use super::*;
+    #[test]
+    fn a_comment_recorded_in_2026_belongs_to_its_1980_photo_period() {
+        use crate::domain::{comments::Comment, tags::LibraryFile};
+        let c = Comment::new(
+            "12345678-1234-1234-1234-123456789abc".into(),
+            LibraryFile::new("2026/audio/c/com_20261114_120000.m4a".into()).unwrap(),
+            LibraryFile::new("1980/09/img_19800916_035811.jpg".into()).unwrap(),
+        )
+        .unwrap();
+        let m = Media::from_audio_asset(
+            "/library/2026/audio/c/com_20261114_120000.m4a".into(),
+            "2026/audio/c".into(),
+        )
+        .unwrap()
+        .with_comment_recording(Some(&c));
+        assert_eq!(m.recording_time().unwrap().year(), "2026");
+        for (scope, count) in [
+            ("1980", 1),
+            ("1980/09", 1),
+            ("1980/10", 0),
+            ("2026", 0),
+            ("2026/11", 0),
+        ] {
+            assert_eq!(playback_scope(scope).unwrap().includes(&m), count == 1);
+            let mut draft = GalleryAudio::default();
+            draft.ensure(std::slice::from_ref(&m), Path::new("/library"), scope);
+            assert_eq!(
+                draft.timeline().map(|t| t.clips().len()).unwrap_or(0),
+                count
+            );
+        }
+        let mut draft = GalleryAudio::default();
+        draft.ensure(std::slice::from_ref(&m), Path::new("/library"), "1980/09");
+        let mut timeline = draft.timeline().unwrap().clone();
+        timeline
+            .refine(Recording::new(m.path().into(), c.recorded_at().time().clone(), 5.).unwrap())
+            .unwrap();
+        assert_eq!(
+            timeline.clips()[0].captured().unwrap().stamp(),
+            "19800916_035811"
+        );
+        assert_eq!(timeline.month(), Some("09"));
     }
 }

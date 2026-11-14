@@ -18,6 +18,8 @@ pub struct Media {
     group: String,
     kind: MediaKind,
     recorded_time: Option<CaptureTime>,
+    reference_time: Option<CaptureTime>,
+    reference_year: Option<String>,
 }
 impl Media {
     pub fn from_path(path: PathBuf, group: String) -> Option<Self> {
@@ -43,6 +45,8 @@ impl Media {
             group,
             kind,
             recorded_time: None,
+            reference_time: None,
+            reference_year: None,
         })
     }
     /// Fast browsing classification: diary containers are provisional audio candidates.
@@ -68,6 +72,8 @@ impl Media {
             group,
             kind: MediaKind::Audio,
             recorded_time: None,
+            reference_time: None,
+            reference_year: None,
         })
     }
     pub fn is_audio(&self) -> bool {
@@ -85,11 +91,33 @@ impl Media {
     /// Explicit recording time never changes the file's physical tree location.
     pub fn with_comment_recording(mut self, comment: Option<&comments::Comment>) -> Self {
         self.recorded_time = if self.is_audio() {
-            comment.map(|c| c.recorded_at().time().clone())
+            comment
+                .filter(|c| self.path.ends_with(c.audio().as_str()))
+                .map(|c| c.recorded_at().time().clone())
         } else {
             None
         };
+        self.reference_year = comment
+            .filter(|c| self.is_audio() && self.path.ends_with(c.audio().as_str()))
+            .map(|c| c.photo_year().to_owned());
+        self.reference_time = comment
+            .filter(|c| self.is_audio() && self.path.ends_with(c.audio().as_str()))
+            .and_then(comments::Comment::reference_time);
         self
+    }
+    /// Logical playback placement; physical path and actual recording time stay unchanged.
+    pub fn reference_time(&self) -> Option<&CaptureTime> {
+        if self.reference_year.is_some() {
+            self.reference_time.as_ref()
+        } else {
+            self.recorded_time.as_ref()
+        }
+    }
+    pub fn reference_year(&self) -> Option<&str> {
+        self.reference_time
+            .as_ref()
+            .map(CaptureTime::year)
+            .or(self.reference_year.as_deref())
     }
     pub fn has_recording_time(&self) -> bool {
         self.recorded_time.is_some()
@@ -175,7 +203,7 @@ pub mod tags;
 /// Filename fast path for gallery captions. Never performs I/O or invents a date.
 pub fn capture_from_filename(media: &Media) -> Option<CaptureTime> {
     if media.has_recording_time() {
-        return media.recording_time().cloned();
+        return media.reference_time().cloned();
     }
     let stem = media.path().file_stem()?.to_str()?;
     if media.is_audio() {

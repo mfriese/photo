@@ -54,6 +54,13 @@ impl AudioSource for NativeAudioSource {
         }
     }
 
+    fn capture_time_from_probe(
+        &self,
+        path: &Path,
+        probe: &AudioProbe,
+    ) -> Result<CaptureTime, String> {
+        self.capture_with_probe(path, probe)
+    }
     fn inspect(&self, path: &Path) -> Result<crate::domain::diary::Recording, String> {
         let probe = self.probe(path)?;
         crate::domain::diary::Recording::new(

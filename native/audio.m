@@ -63,7 +63,7 @@ static NSImage *PSAudioSymbolImage(PSAudioSymbol symbol){
     else {NSImage *muted=[NSImage imageWithSize:NSMakeSize(18,18) flipped:NO drawingHandler:^BOOL(NSRect rect){[self.image drawInRect:rect];[PS_THEME_DISABLED_TEXT setFill];NSRectFillUsingOperation(rect,NSCompositingOperationSourceIn);return YES;}];[muted drawInRect:icon];}
 }
 @end
-@interface PSAudioController : NSWindowController <NSWindowDelegate>
+@interface PSAudioController : NSWindowController <NSWindowDelegate, NSTableViewDataSource>
 @property(nonatomic,strong) PSAudioTransport *transport;
 @property(nonatomic,strong) PSAudioTimeline *timeline;
 @property(nonatomic,strong) PSContextPhotos *contextPhotos;
@@ -71,9 +71,15 @@ static NSImage *PSAudioSymbolImage(PSAudioSymbol symbol){
 @property(nonatomic,strong) NSButton *playButton;
 @property(nonatomic,strong) NSButton *recordButton;
 @property(nonatomic,strong) NSStackView *controlGroup;
+@property(nonatomic,strong) NSSegmentedControl *categoryControl;
+@property(nonatomic,copy) NSArray<PSAudioClipViewModel *> *sourceClips;
+@property(nonatomic) NSInteger category;
+@property(nonatomic) BOOL wantsBeforeEmpty;
 @property(nonatomic) BOOL photoRecordPending;
 @property(nonatomic) unsigned long long recordedPhotoRequest;
 @property(nonatomic,strong) NSTextField *titleLabel;
+@property(nonatomic,copy) NSString *periodLabel;
+@property(nonatomic,strong) NSTableView *fileTable;
 @property(nonatomic,strong) NSTextField *detailLabel;
 @property(nonatomic,strong) NSTextField *verificationLabel;
 @property(nonatomic) BOOL cancelled;
@@ -98,6 +104,40 @@ static NSImage *PSAudioSymbolImage(PSAudioSymbol symbol){
 static PSAudioController *PSAudio=nil;
 static unsigned long long PSNextPhotoSession=0;
 @implementation PSAudioController
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView { return self.timeline.clips.count; }
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
+    if(row<0||(NSUInteger)row>=self.timeline.clips.count)return @"";
+    PSAudioClipViewModel *clip=self.timeline.clips[row];
+    if([column.identifier isEqualToString:@"file"])return clip.path.lastPathComponent;
+    double value=[column.identifier isEqualToString:@"reference"]?clip.recordedAt:clip.actualRecordedAt;
+    return isfinite(value)?[NSString stringWithFormat:@"%@ %@",PSAudioDateText(value),PSAudioClockText(value)]:@"Unbekannt";
+}
+- (void)playSelectedFile:(id)sender {
+    NSInteger row=self.fileTable.clickedRow;if(row<0||(NSUInteger)row>=self.timeline.clips.count)return;
+    [self seek:[self.timeline offset:row]];
+}
+- (void)applyCategory {
+    BOOL wasEmpty=self.timeline.clips.count==0;
+    BOOL desired=wasEmpty?self.wantsBeforeEmpty:self.transport.wantsPlay;
+    NSUInteger mask=1u<<self.category;
+    NSArray *visible=self.category==0?self.sourceClips:[self.sourceClips filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(PSAudioClipViewModel *clip,NSDictionary *bindings){return (clip.visibilityMask&mask)!=0;}]];
+    self.timeline.clips=visible;self.timeline.needsDisplay=YES;[self.fileTable reloadData];
+    if(visible.count==0){
+        if(!wasEmpty)self.wantsBeforeEmpty=desired;self.transport.wantsPlay=NO;[self.transport.player pause];self.timeline.position=0;
+        self.photoRequest++;self.photoPending=NO;self.photoClickPending=NO;self.photoRecordPending=NO;self.photosStarted=NO;
+        self.contextPhotos.loading=NO;self.contextPhotos.statusText=@"Keine Aufnahmen für diese Auswahl";
+        for(PSContextPhotoSlot *slot in self.contextPhotos.slots){slot.image=nil;slot.dateText=@"";slot.clockText=@"";slot.tooltip=@"";}[self.contextPhotos rebuildTips];self.contextPhotos.needsDisplay=YES;
+        [self tick:nil];return;
+    }
+    self.transport.wantsPlay=desired;
+    if([self currentIndex]==NSNotFound){self.photosStarted=NO;self.photoPending=NO;self.photoRequest++;self.contextPhotos.loading=YES;for(PSContextPhotoSlot *slot in self.contextPhotos.slots){slot.image=nil;slot.dateText=@"";slot.clockText=@"";slot.tooltip=@"";}[self.contextPhotos rebuildTips];[self.transport openPath:self.timeline.clips[0].path fraction:0 offset:0];}
+    else if(desired&&!self.transport.loading&&!self.transport.seeking){[self.transport.player play];}
+    [self tick:nil];
+}
+- (void)categoryChanged:(NSSegmentedControl *)sender {
+    NSInteger values[]={1,2,0};NSInteger index=sender.selectedSegment;if(index<0||index>2)return;
+    self.category=values[index];[self applyCategory];
+}
 - (void)connectControls {
         __weak PSAudioController *owner=self;
         self.timeline.onSeek=^(double position){[owner seek:position];};self.timeline.onRelativeSeek=^(double seconds){[owner seekRelative:seconds];};self.timeline.onToggle=^{[owner toggle:nil];};
@@ -112,14 +152,14 @@ static unsigned long long PSNextPhotoSession=0;
     if(self.cancelled)return;
     self.cancelled=YES;self.photoPending=NO;self.photoClickPending=NO;self.photoRecordPending=NO;self.contextPhotos.onSelect=nil;
     self.timeline.onSeek=nil;self.timeline.onToggle=nil;self.timeline.onRelativeSeek=nil;
-    for(PSContextPhotoSlot *slot in self.contextPhotos.slots)slot.image=nil;
+    for(PSContextPhotoSlot *slot in self.contextPhotos.slots){slot.image=nil;slot.dateText=@"";slot.clockText=@"";slot.tooltip=@"";}[self.contextPhotos rebuildTips];
     [self.timer invalidate];self.timer=nil;[self.transport shutdown];self.timeline.clips=@[];
 }
 - (void)windowWillClose:(NSNotification *)notification { /* Window visibility is independent of the shared transport. */ }
 - (void)dealloc {[self shutdown];}
 - (void)tick:(NSTimer *)timer {
     [self.transport tick];
-    NSUInteger index=[self currentIndex];if(index==NSNotFound)return;
+    NSUInteger index=[self currentIndex];if(index==NSNotFound){self.titleLabel.stringValue=self.periodLabel ?: @"Audio";self.detailLabel.stringValue=@"Keine Aufnahmen für diese Auswahl";for(NSButton *button in self.controlGroup.arrangedSubviews)button.enabled=NO;return;}
     PSAudioClipViewModel *clip=self.timeline.clips[index];
     if(clip.verification==1)[self.transport useVerifiedDuration:clip.duration forPath:clip.path];
     double local=CMTimeGetSeconds(self.transport.player.currentTime);if(!isfinite(local))local=0;
@@ -127,8 +167,8 @@ static unsigned long long PSNextPhotoSession=0;
     if(!self.transport.loading && !self.transport.seeking)self.timeline.position=[self.timeline offset:index]+clip.weight*fraction;
     self.timeline.needsDisplay=YES;
     double civil=clip.recordedAt+local;
-    self.titleLabel.stringValue=PSAudioDateText(civil);
-    self.detailLabel.stringValue=self.transport.error.length?self.transport.error:PSAudioClockText(civil);
+    self.titleLabel.stringValue=self.periodLabel ?: @"Audio";
+    self.detailLabel.stringValue=self.transport.error.length?self.transport.error:[NSString stringWithFormat:@"%@  %@",PSAudioDateText(civil),PSAudioClockText(civil)];
     self.detailLabel.toolTip=clip.label;
     if(!isfinite(civil) && self.transport.hasStarted){
         self.contextPhotos.loading=YES;
@@ -148,9 +188,11 @@ static unsigned long long PSNextPhotoSession=0;
     self.playButton.toolTip=self.transport.wantsPlay?@"Wiedergabe pausieren":@"Wiedergabe starten";
     [self.playButton setAccessibilityLabel:self.playButton.toolTip];
     self.recordButton.enabled=!self.contextPhotos.loading && self.contextPhotos.slots[2].image!=nil && !self.transport.loading && !self.transport.seeking && self.lastPhotoSeek==self.settledPhotoSeek;
+    for(NSButton *button in self.controlGroup.arrangedSubviews)if(button!=self.recordButton)button.enabled=YES;
     self.playButton.enabled=!self.transport.loading && self.transport.error.length==0;
 }
 - (void)toggle:(id)sender {
+    if(self.timeline.clips.count==0)return;
     self.transport.wantsPlay=!self.transport.wantsPlay;
     if(!self.transport.wantsPlay)[self.transport.player pause];
     else if(CMTimeGetSeconds(self.transport.player.currentTime)>=self.transport.duration-0.01 && [self currentIndex]+1==self.timeline.clips.count)[self seek:0];
@@ -212,20 +254,20 @@ static NSArray<PSAudioClipViewModel *> *PSAudioReadClips(const char **paths,cons
     for(size_t i=0;i<count;++i){
         if(!isfinite(weights[i]) || weights[i]<=0 || (!isfinite(dates[i]) && !isnan(dates[i])) || states[i]>2 || !isfinite(durations[i]) || durations[i]<0 || (states[i]==1 && durations[i]<=0))return nil;
         PSAudioClipViewModel *clip=[PSAudioClipViewModel new];clip.path=PSAudioPath(paths[i]);clip.label=[NSString stringWithUTF8String:labels[i]] ?: @"";
-        if([seen containsObject:clip.path])return nil;[seen addObject:clip.path];clip.weight=weights[i];clip.recordedAt=dates[i];clip.verification=states[i];clip.duration=durations[i];[clips addObject:clip];total+=weights[i];
+        if([seen containsObject:clip.path])return nil;[seen addObject:clip.path];clip.weight=weights[i];clip.recordedAt=dates[i];clip.actualRecordedAt=NAN;clip.verification=states[i];clip.duration=durations[i];[clips addObject:clip];total+=weights[i];
     }
     return isfinite(total)?clips:nil;
 }
 // App-local companion: main-window focus must not cover the audio controls.
 // Hiding on app deactivation prevents floating above other applications.
 static NSWindow *PSAudioCreateWindow(void) {
-    NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,740,370) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
+    NSWindow *window=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,740,550) styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     window.backgroundColor=PS_THEME_SURFACE;
     window.level=NSFloatingWindowLevel;
     window.hidesOnDeactivate=YES;
     window.acceptsMouseMovedEvents=YES;
     window.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
-    window.minSize=NSMakeSize(440,392);window.maxSize=NSMakeSize(1600,392);window.releasedWhenClosed=NO;
+    window.minSize=NSMakeSize(440,572);window.maxSize=NSMakeSize(1600,572);window.releasedWhenClosed=NO;
     return window;
 }
 int photosuite_audio_open_mode(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *year,const char *selected,unsigned long long *session,int showWindow){
@@ -234,18 +276,22 @@ int photosuite_audio_open_mode(const char **paths,const char **labels,const doub
         NSArray *clips=PSAudioReadClips(paths,labels,weights,dates,durations,states,count);NSString *chosen=PSAudioPath(selected);
         if(!clips || [clips indexOfObjectPassingTest:^BOOL(PSAudioClipViewModel *clip,NSUInteger i,BOOL *stop){return [clip.path isEqualToString:chosen];}]==NSNotFound)return 2;
         showWindow=showWindow || (PSAudio && PSAudio.window.visible);
+        NSRect previousFrame=PSAudio?PSAudio.window.frame:NSZeroRect;
         if(PSAudio){[PSAudio shutdown];[PSAudio close];}
         NSWindow *window=PSAudioCreateWindow();
-        window.title=[NSString stringWithFormat:@"%@ · Jahresverlauf",[NSString stringWithUTF8String:year]];
+        window.title=[NSString stringWithFormat:@"%@ · Audiowiedergabe",[NSString stringWithUTF8String:year]];
         PSAudioController *controller=[[PSAudioController alloc] initWithWindow:window];PSAudio=controller;window.delegate=controller;
-        controller.photoSession=++PSNextPhotoSession;*session=controller.photoSession;
+        controller.periodLabel=[NSString stringWithUTF8String:year];controller.photoSession=++PSNextPhotoSession;*session=controller.photoSession;
         controller.transport=[PSAudioTransport new];controller.transport.player.volume=0.8;
         NSView *view=window.contentView;
-        controller.titleLabel=PSAudioLabel(NSMakeRect(20,328,700,24),20);controller.titleLabel.stringValue=@"Aufnahme wird geladen …";[view addSubview:controller.titleLabel];
+        controller.titleLabel=PSAudioLabel(NSMakeRect(20,328,700,24),20);controller.titleLabel.stringValue=controller.periodLabel;[view addSubview:controller.titleLabel];
         controller.detailLabel=PSAudioLabel(NSMakeRect(20,302,700,22),16);[view addSubview:controller.detailLabel];
-        controller.verificationLabel=PSAudioLabel(NSMakeRect(20,281,700,16),12);controller.verificationLabel.stringValue=@"Vorläufig · Dateinamen · Grau: ungeprüft";[view addSubview:controller.verificationLabel];
-        controller.timeline=[[PSAudioTimeline alloc] initWithFrame:NSMakeRect(12,235,716,58)];controller.timeline.clips=clips;controller.timeline.autoresizingMask=NSViewWidthSizable;[view addSubview:controller.timeline];
+        controller.verificationLabel=PSAudioLabel(NSMakeRect(20,281,700,16),12);controller.verificationLabel.stringValue=@"";controller.verificationLabel.hidden=YES;[view addSubview:controller.verificationLabel];
+        controller.timeline=[[PSAudioTimeline alloc] initWithFrame:NSMakeRect(12,235,716,58)];controller.sourceClips=clips;controller.timeline.clips=clips;controller.timeline.autoresizingMask=NSViewWidthSizable;[view addSubview:controller.timeline];
         controller.contextPhotos=[[PSContextPhotos alloc] initWithFrame:NSMakeRect(20,65,700,160)];controller.contextPhotos.autoresizingMask=NSViewWidthSizable;[view addSubview:controller.contextPhotos];
+        controller.categoryControl=[NSSegmentedControl segmentedControlWithLabels:@[@"Tagebuch",@"Kommentare",@"Beide"] trackingMode:NSSegmentSwitchTrackingSelectOne target:controller action:@selector(categoryChanged:)];
+        controller.categoryControl.selectedSegment=2;controller.categoryControl.frame=NSMakeRect(view.bounds.size.width-240,328,220,24);controller.categoryControl.autoresizingMask=NSViewMinXMargin;controller.categoryControl.font=[NSFont systemFontOfSize:12];controller.categoryControl.toolTip=@"Aufnahmen im Player filtern";[controller.categoryControl setAccessibilityLabel:@"Aufnahmeart"];[view addSubview:controller.categoryControl];
+        controller.titleLabel.frame=NSMakeRect(20,328,170,24);controller.titleLabel.autoresizingMask=NSViewMaxXMargin;
         [controller connectControls];
         NSStackView *buttons=[NSStackView stackViewWithViews:@[]];buttons.orientation=NSUserInterfaceLayoutOrientationHorizontal;buttons.spacing=6;buttons.distribution=NSStackViewDistributionFillEqually;buttons.alignment=NSLayoutAttributeCenterY;
         buttons.frame=NSMakeRect((view.bounds.size.width-154)/2,22,154,34);buttons.translatesAutoresizingMaskIntoConstraints=NO;controller.controlGroup=buttons;
@@ -253,10 +299,18 @@ int photosuite_audio_open_mode(const char **paths,const char **labels,const doub
         PSAudioSymbol symbols[]={PSAudioBack,PSAudioPause,PSAudioRecord,PSAudioForward};SEL selectors[]={@selector(back:),@selector(toggle:),@selector(recordCurrentPhoto:),@selector(forward:)};
         for(NSUInteger i=0;i<4;++i){NSButton *button=[PSAudioButton buttonWithTitle:@"" target:controller action:selectors[i]];button.image=PSAudioSymbolImage(symbols[i]);button.imagePosition=NSImageOnly;button.imageScaling=NSImageScaleProportionallyDown;button.bordered=NO;button.toolTip=tips[i];[button setAccessibilityLabel:tips[i]];[buttons addArrangedSubview:button];if(i==1){controller.playButton=button;button.enabled=NO;}if(i==2){controller.recordButton=button;button.enabled=NO;}}
         [view addSubview:buttons];
-        [NSLayoutConstraint activateConstraints:@[[buttons.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],[buttons.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-22],[buttons.widthAnchor constraintEqualToConstant:154],[buttons.heightAnchor constraintEqualToConstant:34]]];
+        [NSLayoutConstraint activateConstraints:@[[buttons.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],[buttons.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-202],[buttons.widthAnchor constraintEqualToConstant:154],[buttons.heightAnchor constraintEqualToConstant:34]]];
         for(NSView *button in buttons.arrangedSubviews){[NSLayoutConstraint activateConstraints:@[[button.widthAnchor constraintEqualToConstant:34],[button.heightAnchor constraintEqualToConstant:34]]];}
         NSSlider *volume=[NSSlider sliderWithValue:0.8 minValue:0 maxValue:1 target:controller action:@selector(volume:)];volume.frame=NSMakeRect(615,29,105,20);volume.autoresizingMask=NSViewMinXMargin;volume.toolTip=@"Lautstärke";[view addSubview:volume];
-        [window center];if(showWindow){[controller showWindow:nil];[window makeKeyAndOrderFront:nil];[window makeFirstResponder:controller.timeline];}
+        // Upper player keeps its compact geometry; the file list occupies the lower area.
+        for(NSView *child in [view.subviews copy])if(child!=buttons){NSRect frame=child.frame;frame.origin.y+=180;child.frame=frame;child.autoresizingMask|=NSViewMinYMargin;}
+        NSBox *separator=[[NSBox alloc] initWithFrame:NSMakeRect(20,190,view.bounds.size.width-40,1)];separator.boxType=NSBoxSeparator;separator.autoresizingMask=NSViewWidthSizable;[view addSubview:separator];
+        NSScrollView *scroll=[[NSScrollView alloc] initWithFrame:NSMakeRect(20,16,view.bounds.size.width-40,162)];scroll.hasVerticalScroller=YES;scroll.hasHorizontalScroller=YES;scroll.autoresizingMask=NSViewWidthSizable;
+        controller.fileTable=[[NSTableView alloc] initWithFrame:scroll.bounds];controller.fileTable.dataSource=controller;controller.fileTable.target=controller;controller.fileTable.doubleAction=@selector(playSelectedFile:);controller.fileTable.rowHeight=22;controller.fileTable.backgroundColor=PS_THEME_SURFACE;
+        NSArray *ids=@[@"file",@"reference",@"recorded"],*titles=@[@"Dateiname",@"Bezugsdatum",@"Aufnahmedatum"];
+        for(NSUInteger i=0;i<ids.count;i++){NSTableColumn *column=[[NSTableColumn alloc] initWithIdentifier:ids[i]];column.title=titles[i];column.width=i==0?260:180;column.minWidth=i==0?140:170;[(NSTextFieldCell *)column.dataCell setTextColor:PS_THEME_TEXT];column.editable=NO;[controller.fileTable addTableColumn:column];}
+        scroll.documentView=controller.fileTable;[view addSubview:scroll];
+        if(NSIsEmptyRect(previousFrame))[window center];else [window setFrame:previousFrame display:NO];if(showWindow){[controller showWindow:nil];[window makeKeyAndOrderFront:nil];[window makeFirstResponder:controller.timeline];}
         controller.timer=[NSTimer scheduledTimerWithTimeInterval:0.1 target:controller selector:@selector(tick:) userInfo:nil repeats:YES];
         [controller.transport openPath:chosen fraction:0 offset:0];
         return 0;
@@ -268,7 +322,7 @@ int photosuite_audio_transport_state(unsigned long long session,double *fraction
     [PSAudio tick:nil];NSUInteger index=[PSAudio currentIndex];
     *fraction=PSAudio.timeline.total>0?MIN(1,MAX(0,PSAudio.timeline.position/PSAudio.timeline.total)):0;
     *civil=NAN;if(index!=NSNotFound){double local=CMTimeGetSeconds(PSAudio.transport.player.currentTime);if(isfinite(local))*civil=PSAudio.timeline.clips[index].recordedAt+local;}
-    return 1|(PSAudio.transport.wantsPlay?2:0)|((PSAudio.transport.loading || PSAudio.transport.seeking)?4:0)|(PSAudio.transport.error.length?8:0);
+    return 1|(PSAudio.transport.wantsPlay?2:0)|((PSAudio.transport.loading || PSAudio.transport.seeking)?4:0)|(PSAudio.transport.error.length?8:0)|((int)PSAudio.category<<4);
 }
 int photosuite_audio_control(unsigned long long session,int command,double fraction){
     if(![NSThread isMainThread] || !PSAudio || PSAudio.cancelled || PSAudio.photoSession!=session)return 1;
@@ -276,20 +330,29 @@ int photosuite_audio_control(unsigned long long session,int command,double fract
     else if(command==1){if(!isfinite(fraction))return 2;[PSAudio seek:MIN(1,MAX(0,fraction))*PSAudio.timeline.total];}
     else if(command==2){[PSAudio showWindow:nil];[PSAudio.window makeKeyAndOrderFront:nil];[PSAudio.window makeFirstResponder:PSAudio.timeline];}
     else if(command==3){[PSAudio shutdown];[PSAudio.window orderOut:nil];}
+    else if(command==4){PSAudio.category=0;PSAudio.categoryControl.selectedSegment=2;[PSAudio applyCategory];if(!PSAudio.transport.wantsPlay)[PSAudio toggle:nil];}
+    else if(command==5){
+        if(!isfinite(fraction)||fraction<0||fraction>6||floor(fraction)!=fraction||((int)fraction&3)>2)return 2;
+        BOOL playing=((int)fraction&4)!=0;PSAudio.category=(int)fraction&3;PSAudio.categoryControl.selectedSegment=PSAudio.category==0?2:PSAudio.category-1;
+        PSAudio.wantsBeforeEmpty=playing;PSAudio.transport.wantsPlay=playing;[PSAudio applyCategory];
+        if(!playing)[PSAudio.transport.player pause];[PSAudio tick:nil];
+    }
     else return 2;return 0;
 }
 int photosuite_audio_state(unsigned long long session){
     if(![NSThread isMainThread] || !PSAudio || PSAudio.cancelled || PSAudio.photoSession!=session)return 0;
-    return 1|(PSAudio.transport.hasStarted?2:0)|(PSAudio.transport.error.length?4:0);
+    return 1|(PSAudio.transport.hasStarted?2:0)|(PSAudio.transport.error.length?4:0)|(PSAudio.timeline.clips.count==0?8:0);
 }
 int photosuite_audio_revise(unsigned long long session,const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *status){
     if(![NSThread isMainThread] || !PSAudio || PSAudio.cancelled || PSAudio.photoSession!=session)return 1;
     NSArray *clips=PSAudioReadClips(paths,labels,weights,dates,durations,states,count);
-    if(!clips || clips.count!=PSAudio.timeline.clips.count)return 2;
-    NSSet *before=[NSSet setWithArray:[PSAudio.timeline.clips valueForKey:@"path"]],*after=[NSSet setWithArray:[clips valueForKey:@"path"]];
+    if(!clips || clips.count!=PSAudio.sourceClips.count)return 2;
+    NSSet *before=[NSSet setWithArray:[PSAudio.sourceClips valueForKey:@"path"]],*after=[NSSet setWithArray:[clips valueForKey:@"path"]];
     if(![before isEqualToSet:after])return 2;
-    PSAudio.timeline.clips=clips;PSAudio.timeline.needsDisplay=YES;
-    PSAudio.verificationLabel.stringValue=[NSString stringWithUTF8String:status] ?: @"";PSAudio.verificationLabel.toolTip=PSAudio.verificationLabel.stringValue;
+    NSMutableDictionary *masks=[NSMutableDictionary new];for(PSAudioClipViewModel *old in PSAudio.sourceClips)masks[old.path]=@(old.visibilityMask);
+    for(PSAudioClipViewModel *clip in clips)clip.visibilityMask=[masks[clip.path] unsignedIntValue];
+    PSAudio.sourceClips=clips;[PSAudio applyCategory];
+    PSAudio.verificationLabel.toolTip=[NSString stringWithUTF8String:status] ?: @"";
     [PSAudio tick:nil];return 0;
 }
 
@@ -336,4 +399,27 @@ int photosuite_audio_context_record(unsigned long long *session,unsigned long lo
     PSAudio.photoRecordPending=NO;
     if(PSAudio.recordedPhotoRequest!=PSAudio.photoRequest)return 0;
     *session=PSAudio.photoSession;*request=PSAudio.recordedPhotoRequest;*slot=2;return 1;
+}
+
+int photosuite_audio_visibility(unsigned long long session,const unsigned int *masks,size_t count){
+    if(![NSThread isMainThread]||!PSAudio||PSAudio.cancelled||PSAudio.photoSession!=session)return 1;
+    if(count!=PSAudio.sourceClips.count||(!masks&&count))return 2;
+    for(NSUInteger i=0;i<count;i++)if((masks[i]&1)==0||(masks[i]&~7u)!=0)return 2;
+    for(NSUInteger i=0;i<count;i++)PSAudio.sourceClips[i].visibilityMask=masks[i];
+    [PSAudio applyCategory];return 0;
+}
+
+int photosuite_audio_recorded_dates(unsigned long long session,const double *dates,size_t count){
+    if(![NSThread isMainThread]||!PSAudio||PSAudio.cancelled||PSAudio.photoSession!=session)return 1;
+    if(count!=PSAudio.sourceClips.count||(!dates&&count))return 2;
+    for(NSUInteger i=0;i<count;i++)if(isinf(dates[i]))return 2;
+    for(NSUInteger i=0;i<count;i++)PSAudio.sourceClips[i].actualRecordedAt=dates[i];
+    [PSAudio.fileTable reloadData];return 0;
+}
+
+int photosuite_audio_empty(unsigned long long session,const char *label){
+    if(![NSThread isMainThread]||!PSAudio||PSAudio.cancelled||PSAudio.photoSession!=session||!label)return 1;
+    PSAudio.periodLabel=[NSString stringWithUTF8String:label] ?: @"Audio";
+    PSAudio.window.title=[PSAudio.periodLabel stringByAppendingString:@" · Audiowiedergabe"];
+    PSAudio.sourceClips=@[];[PSAudio applyCategory];return 0;
 }

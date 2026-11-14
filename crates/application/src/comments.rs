@@ -82,26 +82,26 @@ pub struct RebuildProgress {
     pub checked: usize,
     pub phase: String,
 }
+/// Technical cache state; obsolete data never carries legacy reference values.
+pub enum CommentCache {
+    Current(StoredComments),
+    Missing,
+    Obsolete,
+}
 pub trait CommentRepository: Send + Sync + 'static {
-    fn load(&self, root: &Path) -> Result<StoredComments, String>;
-    fn write_photo_record(&self, root: &Path, comment: &Comment) -> Result<(), String>;
-    fn commit(
-        &self,
-        root: &Path,
-        comment: &Comment,
-        catalog: &CommentCatalog,
-        expected: Option<&[u8]>,
-    ) -> Result<StoredComments, String> {
-        self.write_photo_record(root, comment)?;
-        let revision = self.save(root, catalog, expected)?;
-        Ok(StoredComments {
-            catalog: catalog.clone(),
-            revision: Some(revision),
-        })
-    }
+    fn read_cache(&self, root: &Path) -> Result<CommentCache, String>;
+    /// Return the complete authoritative photo record after the revision-guarded update.
+    fn write_photo_record(&self, root: &Path, comment: &Comment) -> Result<CommentCatalog, String>;
     fn rebuild_base(&self, root: &Path) -> Result<RebuildBase, String> {
+        let revision = match self.read_cache(root)? {
+            CommentCache::Current(stored) => stored.revision,
+            CommentCache::Missing => None,
+            CommentCache::Obsolete => {
+                return Err("Adapter benötigt die rohe Indexrevision zum Neuaufbau".into());
+            }
+        };
         Ok(RebuildBase {
-            revision: self.load(root)?.revision,
+            revision,
             warning: String::new(),
         })
     }
@@ -137,15 +137,22 @@ pub trait CommentMediaStore: Send + Sync + 'static {
     /// Exclusive, byte-verified publication; must never overwrite an existing file.
     fn copy_verified(&self, source: &Path, target: &Path) -> Result<(), String>;
 }
+mod index;
+pub use index::{commit as commit_comment, load as load_catalog};
 mod publication;
 pub use publication::publish_comment;
 
 enum Outcome {
     Rebuilt {
         root: PathBuf,
+        generation: u64,
         result: Result<(StoredComments, String), String>,
     },
-    Loaded(PathBuf, Result<StoredComments, String>),
+    Loaded {
+        root: PathBuf,
+        generation: u64,
+        result: Result<StoredComments, String>,
+    },
     Saved {
         published: Option<Box<Comment>>,
         result: Result<StoredComments, String>,
@@ -171,6 +178,8 @@ pub struct CommentSession {
     catalog: CommentCatalog,
     revision: Option<Vec<u8>>,
     request: Option<PathBuf>,
+    generation: u64,
+    load_cancel: Arc<std::sync::atomic::AtomicBool>,
     worker: Option<mpsc::Receiver<Outcome>>,
     refresh_pending: bool,
     rebuilding: bool,
@@ -209,6 +218,8 @@ impl CommentSession {
             catalog: CommentCatalog::default(),
             revision: None,
             request: None,
+            generation: 0,
+            load_cancel: Default::default(),
             worker: None,
             refresh_pending: false,
             rebuilding: false,
@@ -304,6 +315,10 @@ impl CommentSession {
         }
         self.rebuild_cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.load_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.load_cancel = Default::default();
+        self.generation += 1;
         self.refresh_pending = false;
         self.root = Some(root.clone());
         self.catalog = CommentCatalog::default();
@@ -337,6 +352,7 @@ impl CommentSession {
             && !self.has_unsaved()
             && !self.saving
             && self.worker.is_none()
+            && self.request.is_none()
             && !self.rebuilding
     }
     pub fn rebuild_progress(&self) -> &RebuildProgress {
@@ -364,35 +380,16 @@ impl CommentSession {
             checked: 0,
             phase: "Kommentar-YAMLs werden vorbereitet …".into(),
         };
+        let generation = self.generation;
         std::thread::spawn(move || {
-            let result = (|| {
-                let base = repository.rebuild_base(&root)?;
-                let entries = repository.scan_photo_records(&root, &cancel, &|update| {
-                    let _ = progress.try_send(update);
-                })?;
-                let mut catalog = CommentCatalog::default();
-                for comment in entries {
-                    catalog.insert(comment)?;
-                }
-                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err("Neuaufbau abgebrochen; Gesamtdatei unverändert".into());
-                }
-                let revision =
-                    repository.replace_index(&root, &catalog, base.revision.as_deref())?;
-                let message = format!(
-                    "Kommentarindex neu aufgebaut: {} Zuordnungen. {}",
-                    catalog.entries().len(),
-                    base.warning
-                );
-                Ok((
-                    StoredComments {
-                        catalog,
-                        revision: Some(revision),
-                    },
-                    message,
-                ))
-            })();
-            let _ = tx.send(Outcome::Rebuilt { root, result });
+            let result = index::rebuild(repository.as_ref(), &root, &cancel, &|update| {
+                let _ = progress.try_send(update);
+            });
+            let _ = tx.send(Outcome::Rebuilt {
+                root,
+                generation,
+                result,
+            });
         });
         Ok(())
     }
@@ -440,10 +437,15 @@ impl CommentSession {
         let comments = self.catalog.for_photo(&file);
         let year = comments
             .first()
-            .map(|c| c.recorded_at().time().year())
-            .or_else(|| file.as_str().split(std::path::MAIN_SEPARATOR).next())
-            .unwrap_or("")
-            .to_owned();
+            .and_then(|c| c.reference_time())
+            .map(|d| d.year().to_owned())
+            .unwrap_or_else(|| {
+                file.as_str()
+                    .split(std::path::MAIN_SEPARATOR)
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            });
         let group = format!("photo/{}", file.as_str());
         let items = comments
             .into_iter()
@@ -672,12 +674,22 @@ impl CommentSession {
                 Ok(comment) => {
                     let result = (|| {
                         if retry {
-                            let current = repository.load(&target.root)?;
+                            let current = index::load(
+                                repository.as_ref(),
+                                &target.root,
+                                &std::sync::atomic::AtomicBool::new(false),
+                            )?;
                             catalog = current.catalog;
                             revision = current.revision;
                         }
                         catalog.insert(comment.clone())?;
-                        repository.commit(&target.root, &comment, &catalog, revision.as_deref())
+                        index::commit(
+                            repository.as_ref(),
+                            &target.root,
+                            &comment,
+                            &catalog,
+                            revision.as_deref(),
+                        )
                     })();
                     Outcome::Saved {
                         published: Some(Box::new(comment)),
@@ -764,10 +776,14 @@ impl CommentSession {
                 Ok(outcome) => {
                     self.worker = None;
                     match outcome {
-                        Outcome::Rebuilt { root, result } => {
+                        Outcome::Rebuilt {
+                            root,
+                            generation,
+                            result,
+                        } => {
                             self.rebuilding = false;
                             self.rebuild_updates = None;
-                            if self.root.as_ref() == Some(&root) {
+                            if self.root.as_ref() == Some(&root) && generation == self.generation {
                                 match result {
                                     Ok((stored, message)) => {
                                         self.catalog = stored.catalog;
@@ -783,7 +799,11 @@ impl CommentSession {
                                 }
                             }
                         }
-                        Outcome::Loaded(root, result) if self.root.as_ref() == Some(&root) => {
+                        Outcome::Loaded {
+                            root,
+                            generation,
+                            result,
+                        } if self.root.as_ref() == Some(&root) && generation == self.generation => {
                             match result {
                                 Ok(stored) => {
                                     self.catalog = stored.catalog;
@@ -798,7 +818,7 @@ impl CommentSession {
                                 }
                             }
                         }
-                        Outcome::Loaded(_, _) => {}
+                        Outcome::Loaded { .. } => {}
                         Outcome::Saved { published, result } => {
                             self.saving = false;
                             self.published = published.map(|comment| *comment);
@@ -848,9 +868,15 @@ impl CommentSession {
             let repository = self.repository.clone();
             let (tx, rx) = mpsc::sync_channel(1);
             self.worker = Some(rx);
+            let generation = self.generation;
+            let cancel = self.load_cancel.clone();
             std::thread::spawn(move || {
-                let result = repository.load(&root);
-                let _ = tx.send(Outcome::Loaded(root, result));
+                let result = index::load(repository.as_ref(), &root, &cancel);
+                let _ = tx.send(Outcome::Loaded {
+                    root,
+                    generation,
+                    result,
+                });
             });
         }
         if self.refresh_pending && self.request.is_none() && self.can_rebuild() {
@@ -863,6 +889,8 @@ impl CommentSession {
 }
 impl Drop for CommentSession {
     fn drop(&mut self) {
+        self.load_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.rebuild_cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
         if !self.saving {
@@ -946,15 +974,26 @@ mod tests {
             *self.catalog.lock().unwrap() = catalog.clone();
             Ok(vec![1])
         }
-        fn write_photo_record(&self, _: &Path, _: &Comment) -> Result<(), String> {
-            Ok(())
+        fn write_photo_record(
+            &self,
+            _: &Path,
+            comment: &Comment,
+        ) -> Result<CommentCatalog, String> {
+            let current = self.catalog.lock().unwrap();
+            let mut record = CommentCatalog::default();
+            for c in current.for_photo(comment.photo()) {
+                record.insert(c.clone())?;
+            }
+            record.insert(comment.clone())?;
+            Ok(record)
         }
-        fn load(&self, _: &Path) -> Result<StoredComments, String> {
-            Ok(StoredComments {
+        fn read_cache(&self, _: &Path) -> Result<CommentCache, String> {
+            Ok(CommentCache::Current(StoredComments {
                 catalog: self.catalog.lock().unwrap().clone(),
                 revision: None,
-            })
+            }))
         }
+
         fn save(
             &self,
             _: &Path,
@@ -992,6 +1031,75 @@ mod tests {
         panic!("worker did not finish");
     }
     #[test]
+    fn same_library_reload_rejects_old_results_and_serializes_workers() {
+        struct Slow {
+            calls: AtomicUsize,
+            entered: mpsc::SyncSender<usize>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl CommentRepository for Slow {
+            fn read_cache(&self, _: &Path) -> Result<CommentCache, String> {
+                let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+                self.entered.send(n).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                Ok(CommentCache::Current(StoredComments {
+                    catalog: Default::default(),
+                    revision: Some(vec![n as u8]),
+                }))
+            }
+            fn write_photo_record(&self, _: &Path, _: &Comment) -> Result<CommentCatalog, String> {
+                panic!("load must not write sources")
+            }
+            fn save(
+                &self,
+                _: &Path,
+                _: &CommentCatalog,
+                _: Option<&[u8]>,
+            ) -> Result<Vec<u8>, String> {
+                panic!("current cache must not be rewritten")
+            }
+        }
+        let (entered, events) = mpsc::sync_channel(2);
+        let (release, gate) = mpsc::channel();
+        let repository = Arc::new(Slow {
+            calls: AtomicUsize::new(0),
+            entered,
+            release: Mutex::new(gate),
+        });
+        let fake = Arc::new(Fake::default());
+        let mut session = CommentSession::new(repository, fake.clone(), fake);
+        session.load("/library".into());
+        assert!(!session.can_rebuild());
+        session.poll();
+        assert_eq!(
+            events
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap(),
+            1
+        );
+        session.load("/library".into());
+        session.take_changed();
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            session.poll();
+            if let Ok(n) = events.try_recv() {
+                assert_eq!(n, 2);
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(!session.loaded);
+        assert!(session.error().is_empty());
+        assert!(!session.take_changed());
+        release.send(()).unwrap();
+        wait(&mut session);
+        assert!(session.loaded);
+        assert_eq!(session.revision, Some(vec![2]));
+        assert!(session.error().is_empty());
+    }
+    #[test]
     fn photo_audio_projects_only_linked_comments_without_probing() {
         let fake = Arc::new(Fake::default());
         let photo = LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap();
@@ -1015,7 +1123,7 @@ mod tests {
         wait(&mut session);
         let commands_before = fake.commands.load(Ordering::SeqCst);
         let audio = session.audio_for_photo(&Path::new("/library").join(photo.as_str()));
-        assert_eq!(audio.year, "2025");
+        assert_eq!(audio.year, "2008");
         assert_eq!(audio.group, format!("photo/{}", photo.as_str()));
         assert_eq!(audio.items.len(), 2);
         assert!(

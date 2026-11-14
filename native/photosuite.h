@@ -15,7 +15,7 @@ int photosuite_audio_probe(const char *path, double *duration, int *audioOnly, c
 // Dates are civil clock seconds (no implicit timezone shift), NAN when not yet known.
 // States: 0 pending, 1 verified, 2 failed. Only the selected asset loads at open.
 int photosuite_audio_open(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *year,const char *selected,unsigned long long *session);
-// Read-only flags: 1 open, 2 has actually played, 4 transport error. Session guards replacement.
+// Read-only flags: 1 open, 2 has actually played, 4 transport error, 8 empty selection. Session guards replacement.
 int photosuite_audio_state(unsigned long long session);
 // Reorder/resize the same file set, without replacing or seeking the active AVPlayerItem.
 int photosuite_audio_revise(unsigned long long session,const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *status);
@@ -36,9 +36,9 @@ int photosuite_audio_context_click(unsigned long long *session, unsigned long lo
 
 // Main-thread shared transport. showWindow=0 starts without displaying/focusing a window.
 int photosuite_audio_open_mode(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *year,const char *selected,unsigned long long *session,int showWindow);
-// Flags: 1 active (also when hidden), 2 wants play, 4 loading/seeking, 8 failed. Civil time may be NAN.
+// Flags: 1 active, 2 wants play, 4 loading/seeking, 8 failed, 16 Diary filter, 32 Comments filter. Civil time may be NAN.
 int photosuite_audio_transport_state(unsigned long long session,double *fraction,double *civil);
-// Commands: 0 toggle, 1 seek normalized [0,1], 2 show existing window, 3 stop.
+// Commands: 0 toggle, 1 seek normalized [0,1], 2 show existing window, 3 stop, 4 restore All and play.
 int photosuite_audio_control(unsigned long long session,int command,double fraction);
 
 // Recorder is opaque/retained. Commands are serialized internally; no UI-thread I/O.
@@ -61,3 +61,12 @@ void photosuite_comment_seek(void *recorder,double seconds);
 
 // Main-thread photo-record intent. IDs bind it to the displayed center photo; no microphone access.
 int photosuite_audio_context_record(unsigned long long *session,unsigned long long *request,unsigned int *slot);
+
+// Main thread, copied in source-row order. Bits 1 All, 2 Diary, 4 Comments; All mandatory.
+int photosuite_audio_visibility(unsigned long long session,const unsigned int *masks,size_t count);
+
+// Main thread; actual recording dates copied in the complete source order (NaN = unknown).
+int photosuite_audio_recorded_dates(unsigned long long session,const double *dates,size_t count);
+
+// Main-thread navigation to a valid but empty period; leaves the window and filter available.
+int photosuite_audio_empty(unsigned long long session,const char *label);

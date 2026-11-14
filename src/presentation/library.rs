@@ -38,20 +38,6 @@ impl super::Suite {
                             .id_salt((&self.root, &year)).default_open(false)
                             .open((self.scroll_to_photo.is_some() && self.group.as_deref()==Some(year.as_str())).then_some(true))
                             .show(ui, |ui| {
-                                if let Some(scope)=crate::domain::diary::AudioScope::for_year(&year,crate::domain::diary::AudioKind::All) {
-                                    let audio=scope.group();
-                                    let response=egui::CollapsingHeader::new("Audio")
-                                        .id_salt((&self.root,&audio)).default_open(false)
-                                        .show(ui,|ui|{
-                                            for (kind,label) in [(crate::domain::diary::AudioKind::Diary,"Tagebuch"),(crate::domain::diary::AudioKind::Comments,"Kommentare")] {
-                                                let group=crate::domain::diary::AudioScope::for_year(&year,kind).unwrap().group();
-                                                if theme::navigation(ui,self.group.as_ref()==Some(&group),label).clicked() {
-                                                    self.group=Some(group);self.tag_view.active=None;
-                                                }
-                                            }
-                                        });
-                                    if response.header_response.clicked() {self.group=Some(audio);self.tag_view.active=None;self.collection.prioritize(&year);}
-                                }
                                 for g in months {
                                     if g == year || crate::domain::diary::audio_year(&g).is_some() {continue;}
                                     let label=g.strip_prefix(&format!("{year}/")).unwrap_or(&g);
@@ -91,6 +77,7 @@ impl super::Suite {
             self.scroll_to_photo = None;
             self.storyboard.clear();
             self.diary_catalog.cancel();
+            self.audio_preparation.cancel();
         }
     }
 }

@@ -113,54 +113,18 @@ fn obsolete_cache(bytes: &[u8]) -> bool {
         .is_some_and(|version| [1, 2].contains(&version))
 }
 impl CommentRepository for YamlComments {
-    fn load(&self, root: &Path) -> Result<StoredComments, String> {
-        let revision = read(root)?;
-        if revision.as_deref().is_some_and(obsolete_cache) {
-            let base = self.rebuild_base(root)?;
-            let mut catalog = CommentCatalog::default();
-            for comment in self.scan_photo_records(root, &AtomicBool::new(false), &|_| {})? {
-                catalog.insert(comment)?;
-            }
-            let revision = self.replace_index(root, &catalog, base.revision.as_deref())?;
-            return Ok(StoredComments {
-                catalog,
-                revision: Some(revision),
-            });
+    fn read_cache(&self, root: &Path) -> Result<CommentCache, String> {
+        match read(root)? {
+            None => Ok(CommentCache::Missing),
+            Some(bytes) if obsolete_cache(&bytes) => Ok(CommentCache::Obsolete),
+            Some(bytes) => Ok(CommentCache::Current(StoredComments {
+                catalog: decode(&bytes)?,
+                revision: Some(bytes),
+            })),
         }
-        let catalog = revision
-            .as_deref()
-            .map(decode)
-            .transpose()?
-            .unwrap_or_default();
-        let catalog = if revision.is_none() {
-            let mut catalog = catalog;
-            for comment in self.scan_photo_records(root, &AtomicBool::new(false), &|_| {})? {
-                catalog.insert(comment)?;
-            }
-            catalog
-        } else {
-            catalog
-        };
-        Ok(StoredComments { catalog, revision })
     }
-    fn write_photo_record(&self, root: &Path, comment: &Comment) -> Result<(), String> {
-        self.update_photo_record(root, comment).map(|_| ())
-    }
-    fn commit(
-        &self,
-        root: &Path,
-        comment: &Comment,
-        catalog: &CommentCatalog,
-        expected: Option<&[u8]>,
-    ) -> Result<StoredComments, String> {
-        let photo_record = self.update_photo_record(root, comment)?;
-        let mut catalog = catalog.clone();
-        catalog.replace_photo(comment.photo(), photo_record.entries().values().cloned())?;
-        let revision = self.save(root, &catalog, expected)?;
-        Ok(StoredComments {
-            catalog,
-            revision: Some(revision),
-        })
+    fn write_photo_record(&self, root: &Path, comment: &Comment) -> Result<CommentCatalog, String> {
+        self.update_photo_record(root, comment)
     }
     fn rebuild_base(&self, root: &Path) -> Result<RebuildBase, String> {
         self.read_rebuild_base(root)
@@ -294,6 +258,78 @@ mod tests {
             recorded_at: format!("{year}-11-13T12:00:00+01:00"),
         }
     }
+    struct NoCapture;
+    impl CommentRecorder for NoCapture {
+        fn devices(&self) -> Result<Vec<InputDevice>, String> {
+            Ok(Vec::new())
+        }
+        fn start(&self, _: &str) -> Result<(), String> {
+            panic!("rebuild must never start a microphone")
+        }
+        fn command(&self, _: CaptureCommand) -> Result<(), String> {
+            Ok(())
+        }
+        fn snapshot(&self) -> CaptureSnapshot {
+            Default::default()
+        }
+    }
+    fn drain(session: &mut CommentSession) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while session.busy() {
+            session.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_source_ancestors_abort_rebuild_without_erasing_cached_references() {
+        for ancestor in ["2008", "2008/audio", "2008/audio/y"] {
+            let root = tempfile::tempdir().unwrap();
+            let source = tempfile::tempdir().unwrap();
+            let outside = tempfile::tempdir().unwrap();
+            let target = photo(root.path(), "2008/09/photo.jpg");
+            let files = Arc::new(adapter());
+            let repo = Arc::new(store());
+            let comment =
+                publish_comment(files.as_ref(), &target, &take(source.path(), 1, 2026)).unwrap();
+            let stored = commit_comment(
+                repo.as_ref(),
+                root.path(),
+                &comment,
+                &CommentCatalog::default(),
+                None,
+            )
+            .unwrap();
+            let before = stored.revision.unwrap();
+            let moved = outside.path().join("held");
+            fs::rename(root.path().join(ancestor), &moved).unwrap();
+            std::os::unix::fs::symlink(&moved, root.path().join(ancestor)).unwrap();
+            let mut session = CommentSession::new(repo, Arc::new(NoCapture), files);
+            session.load(root.path().into());
+            drain(&mut session);
+            assert_eq!(session.catalog().entries().len(), 1);
+            session.rebuild().unwrap();
+            drain(&mut session);
+            assert!(!session.error().is_empty());
+            assert_eq!(fs::read(root.path().join(FILE)).unwrap(), before);
+            assert_eq!(session.catalog().entries().len(), 1);
+        }
+    }
+    #[test]
+    fn directory_with_media_extension_is_not_accepted_as_a_regular_reference() {
+        let root = tempfile::tempdir().unwrap();
+        let target = photo(root.path(), "2008/09/photo.jpg");
+        let comment = Comment::new(
+            "12345678-1234-1234-1234-123456789abc".into(),
+            LibraryFile::new("2026/audio/c/com_20261113_120000.m4a".into()).unwrap(),
+            target.file,
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join(comment.audio().as_str())).unwrap();
+        assert!(store().write_photo_record(root.path(), &comment).is_err());
+        assert!(!root.path().join(comment.sidecar().as_str()).exists());
+    }
     #[test]
     fn obsolete_cache_never_blocks_photo_recording_and_rebuilds_only_new_sources() {
         let root = tempfile::tempdir().unwrap();
@@ -304,7 +340,7 @@ mod tests {
         repo.write_photo_record(root.path(), &comment).unwrap();
         let old=b"# old cache\nversion: 2\ncomments:\n  invalid-old-id:\n    audio: 2020/audio/c/old.m4a\n";
         fs::write(root.path().join(FILE), old).unwrap();
-        let loaded = repo.load(root.path()).unwrap();
+        let loaded = load_catalog(&repo, root.path(), &AtomicBool::new(false)).unwrap();
         assert_eq!(loaded.catalog.entries().len(), 1);
         assert!(loaded.catalog.by_audio(comment.audio()).is_some());
         assert!(
@@ -326,7 +362,7 @@ mod tests {
         // Failure in the new authoritative source leaves the old index byte-for-byte intact.
         fs::write(root.path().join(FILE), old).unwrap();
         fs::write(root.path().join(comment.sidecar().as_str()), b"broken: [").unwrap();
-        assert!(repo.load(root.path()).is_err());
+        assert!(load_catalog(&repo, root.path(), &AtomicBool::new(false)).is_err());
         assert_eq!(fs::read(root.path().join(FILE)).unwrap(), old);
     }
     #[test]
@@ -341,7 +377,7 @@ mod tests {
         let second = publish_comment(&files, &target, &take(source.path(), 2, 2026)).unwrap();
         let mut stale = CommentCatalog::default();
         stale.insert(second.clone()).unwrap();
-        let stored = repo.commit(root.path(), &second, &stale, None).unwrap();
+        let stored = commit_comment(&repo, root.path(), &second, &stale, None).unwrap();
         assert_eq!(stored.catalog.entries().len(), 2);
         let sidecar = root.path().join(second.sidecar().as_str());
         fs::remove_file(&sidecar).unwrap();
@@ -357,7 +393,13 @@ mod tests {
             base.revision.as_deref(),
         )
         .unwrap();
-        assert!(repo.load(root.path()).unwrap().catalog.entries().is_empty());
+        assert!(
+            load_catalog(&repo, root.path(), &AtomicBool::new(false))
+                .unwrap()
+                .catalog
+                .entries()
+                .is_empty()
+        );
         assert!(!sidecar.exists());
         assert!(root.path().join(first.audio().as_str()).is_file());
         assert!(root.path().join(second.audio().as_str()).is_file());
@@ -375,9 +417,14 @@ mod tests {
             let take = take(source.path(), n, 2024 + n);
             let comment = publish_comment(&files, &target, &take).unwrap();
             catalog.insert(comment.clone()).unwrap();
-            let stored = repo
-                .commit(library.path(), &comment, &catalog, revision.as_deref())
-                .unwrap();
+            let stored = commit_comment(
+                &repo,
+                library.path(),
+                &comment,
+                &catalog,
+                revision.as_deref(),
+            )
+            .unwrap();
             catalog = stored.catalog;
             revision = stored.revision;
             assert_eq!(
@@ -391,7 +438,7 @@ mod tests {
         assert!(!text.contains("recorded_at") && !text.contains("photo_taken_at"));
         assert_eq!(fs::read_dir(sidecar.parent().unwrap()).unwrap().count(), 1);
         fs::remove_file(library.path().join(FILE)).unwrap();
-        let rebuilt = repo.load(library.path()).unwrap();
+        let rebuilt = load_catalog(&repo, library.path(), &AtomicBool::new(false)).unwrap();
         assert_eq!(rebuilt.catalog.entries().len(), 2);
         for comment in rebuilt.catalog.entries().values() {
             let m = Media::from_audio_asset(
@@ -452,9 +499,15 @@ mod tests {
         )
         .unwrap();
         let repo = store();
-        assert!(repo.load(root.path()).unwrap().catalog.entries().is_empty());
+        assert!(
+            load_catalog(&repo, root.path(), &AtomicBool::new(false))
+                .unwrap()
+                .catalog
+                .entries()
+                .is_empty()
+        );
         fs::write(root.path().join(FILE), b"version: 2\ncomments: {}\n").unwrap();
-        let rebuilt = repo.load(root.path()).unwrap();
+        let rebuilt = load_catalog(&repo, root.path(), &AtomicBool::new(false)).unwrap();
         assert!(rebuilt.catalog.entries().is_empty());
         assert!(
             String::from_utf8(rebuilt.revision.unwrap())

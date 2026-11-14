@@ -7,6 +7,9 @@ use std::{
     path::Path,
 };
 unsafe extern "C" {
+    fn photosuite_audio_recorded_dates(session: u64, dates: *const f64, count: usize) -> i32;
+    fn photosuite_audio_visibility(session: u64, masks: *const u32, count: usize) -> i32;
+    fn photosuite_audio_control(session: u64, command: i32, fraction: f64) -> i32;
     fn photosuite_audio_open_mode(
         paths: *const *const c_char,
         labels: *const *const c_char,
@@ -39,6 +42,8 @@ pub(super) struct NativeLayout {
     dates: Vec<f64>,
     durations: Vec<f64>,
     states: Vec<u32>,
+    visibility: Vec<u32>,
+    recorded_dates: Vec<f64>,
 }
 impl NativeLayout {
     pub(super) fn new(
@@ -52,6 +57,8 @@ impl NativeLayout {
             dates: Vec::new(),
             durations: Vec::new(),
             states: Vec::new(),
+            visibility: Vec::new(),
+            recorded_dates: Vec::new(),
         };
         for clip in timeline.clips() {
             layout
@@ -83,6 +90,19 @@ impl NativeLayout {
                 CString::new(format!("{}\n{date}\n{detail}", clip.path().display()))
                     .map_err(|e| e.to_string())?,
             );
+            let actual = if crate::domain::diary::recording_kind(clip.path())
+                == Some(crate::domain::diary::AudioKind::Comments)
+            {
+                clip.path()
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(crate::domain::audio_date::date_from_filename)
+            } else {
+                clip.captured().cloned()
+            };
+            layout
+                .recorded_dates
+                .push(actual.map(|d| d.civil_seconds() as f64).unwrap_or(f64::NAN));
             layout.weights.push(clip.weight());
             layout.dates.push(
                 clip.captured()
@@ -91,6 +111,13 @@ impl NativeLayout {
             );
             layout.durations.push(clip.duration().unwrap_or(0.));
             layout.states.push(state);
+            layout
+                .visibility
+                .push(match crate::domain::diary::recording_kind(clip.path()) {
+                    Some(crate::domain::diary::AudioKind::Diary) => 3,
+                    Some(crate::domain::diary::AudioKind::Comments) => 5,
+                    _ => 1,
+                });
         }
         Ok(layout)
     }
@@ -121,6 +148,32 @@ impl NativeLayout {
             )
         };
         if status == 0 {
+            if unsafe {
+                photosuite_audio_visibility(
+                    session,
+                    self.visibility.as_ptr(),
+                    self.visibility.len(),
+                )
+            } != 0
+            {
+                unsafe {
+                    photosuite_audio_control(session, 3, 0.);
+                };
+                return Err("Player-Kategorien konnten nicht gesetzt werden".into());
+            }
+            if unsafe {
+                photosuite_audio_recorded_dates(
+                    session,
+                    self.recorded_dates.as_ptr(),
+                    self.recorded_dates.len(),
+                )
+            } != 0
+            {
+                unsafe {
+                    photosuite_audio_control(session, 3, 0.);
+                }
+                return Err("Aufnahmedaten konnten nicht angezeigt werden".into());
+            }
             Ok(session)
         } else {
             Err(format!(
@@ -146,6 +199,26 @@ impl NativeLayout {
             )
         };
         if code == 0 {
+            if unsafe {
+                photosuite_audio_visibility(
+                    session,
+                    self.visibility.as_ptr(),
+                    self.visibility.len(),
+                )
+            } != 0
+            {
+                return Err("Player-Kategorien konnten nicht aktualisiert werden".into());
+            }
+            if unsafe {
+                photosuite_audio_recorded_dates(
+                    session,
+                    self.recorded_dates.as_ptr(),
+                    self.recorded_dates.len(),
+                )
+            } != 0
+            {
+                return Err("Aufnahmedaten konnten nicht aktualisiert werden".into());
+            }
             Ok(())
         } else {
             Err(format!(

@@ -8,6 +8,7 @@ pub(super) struct AudioHeader {
     pub draft: photosuite_application::diary::GalleryAudio,
     drag: Option<f64>,
     photo: Option<std::path::PathBuf>,
+    followed_scope: Option<String>,
     year_draft: photosuite_application::diary::GalleryAudio,
 }
 #[derive(Default)]
@@ -269,17 +270,42 @@ impl super::Suite {
         let Some(root) = &self.root else {
             return;
         };
-        let group = self.group.as_deref().unwrap_or("");
-        if photosuite_application::diary::playback_scope(group).is_none() {
-            return;
+        let year_group =
+            photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
+        let group = year_group.as_str();
+        let changed = self.audio_header.draft.ensure(&self.items, root, group);
+        if self.selected.is_none()
+            && (changed || self.audio_header.followed_scope.as_deref() != Some(group))
+        {
+            self.audio_header.followed_scope = Some(group.to_owned());
+            if let Err(error) = self.diary.follow_view(
+                &self.items,
+                root,
+                self.audio_preparation.source(),
+                group,
+                self.services.audio_player.as_ref(),
+            ) {
+                self.status = error;
+            }
         }
-        self.audio_header.draft.ensure(&self.items, root, group);
+
+        if self.selected.is_none() {
+            self.audio_preparation
+                .ensure(group, self.audio_header.draft.timeline(), changed);
+        }
+        if let Err(error) = self
+            .audio_header
+            .draft
+            .apply_prepared(&self.audio_preparation)
+        {
+            self.status = error;
+        }
         let live = self.services.audio_player.transport();
         let active_timeline = self
             .diary
             .timeline_for_view(group)
             .filter(|timeline| self.audio_header.draft.accepts_active(timeline));
-        let matches = live.active && active_timeline.is_some();
+        let matches = live.active && live.category_filter.is_none() && active_timeline.is_some();
         let state = if matches {
             live
         } else {
@@ -291,7 +317,9 @@ impl super::Suite {
         } else {
             self.audio_header.draft.timeline()
         };
-        let empty_progress = VerificationProgress::default();
+        let empty_progress = self
+            .audio_preparation
+            .progress(self.audio_header.draft.timeline());
         let progress = if matches {
             self.diary.progress()
         } else {
@@ -329,7 +357,7 @@ impl super::Suite {
                 self.open_audio_for_view();
             }
         }
-        if state.active || self.diary.is_loading() {
+        if state.active || self.diary.is_loading() || self.audio_preparation.is_loading() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -348,26 +376,41 @@ impl super::Suite {
             // Preserve the year cache when browsing photos in the same year.
         }
         if let Some(root) = &self.root {
-            self.viewer_audio
+            let changed = self
+                .viewer_audio
                 .draft
                 .ensure(&audio.items, root, &audio.group);
+            self.audio_preparation.ensure(
+                &audio.group,
+                self.viewer_audio.draft.timeline(),
+                changed,
+            );
+            if let Err(error) = self
+                .viewer_audio
+                .draft
+                .apply_prepared(&self.audio_preparation)
+            {
+                self.status = error;
+            }
         }
         let live = self.services.audio_player.transport();
         let active = self
             .diary
             .timeline_for_view(&audio.group)
             .filter(|t| self.viewer_audio.draft.accepts_active(t));
-        let matches = live.active && active.is_some();
+        let matches = live.active && live.category_filter.is_none() && active.is_some();
         let state = if matches {
             live
         } else {
             AudioTransportSnapshot::default()
         };
-        let year = state
-            .current_date
-            .as_ref()
-            .map(|date| date.year().to_owned())
-            .unwrap_or_else(|| audio.year.clone());
+        let selected_period =
+            photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
+        let year = if selected_period.is_empty() {
+            audio.year.clone()
+        } else {
+            selected_period
+        };
         if let Some(root) = &self.root {
             self.viewer_audio
                 .year_draft
@@ -379,7 +422,9 @@ impl super::Suite {
         } else {
             self.viewer_audio.draft.timeline()
         };
-        let empty = VerificationProgress::default();
+        let empty = self
+            .audio_preparation
+            .progress(self.viewer_audio.draft.timeline());
         if !matches {
             self.viewer_audio.drag = None;
         }
@@ -412,14 +457,15 @@ impl super::Suite {
             && let Err(error) = self.diary.request_embedded(
                 &audio.items,
                 selected,
-                self.services.audio_source.clone(),
+                self.audio_preparation.source(),
                 &audio.group,
             )
         {
             self.status = error;
         }
         if actions.window {
-            let year_is_live = self.services.audio_player.transport().active
+            let year_state = self.services.audio_player.transport();
+            let year_is_live = year_state.active
                 && self
                     .diary
                     .timeline_for_view(&year)
@@ -444,7 +490,7 @@ impl super::Suite {
                     && let Err(error) = self.diary.request_window(
                         &self.items,
                         selected,
-                        self.services.audio_source.clone(),
+                        self.audio_preparation.source(),
                         &year,
                     )
                 {
@@ -452,7 +498,7 @@ impl super::Suite {
                 }
             }
         }
-        if state.active || self.diary.is_loading() {
+        if state.active || self.diary.is_loading() || self.audio_preparation.is_loading() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -462,14 +508,28 @@ impl super::Suite {
         let Some(root) = &self.root else {
             return;
         };
-        let group = self.group.as_deref().unwrap_or("");
+        let year_group =
+            photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
+        let group = year_group.as_str();
         self.audio_header.draft.ensure(&self.items, root, group);
+        let state = self.services.audio_player.transport();
+        let same_year = state.active
+            && self
+                .diary
+                .timeline_for_view(group)
+                .is_some_and(|timeline| self.audio_header.draft.accepts_active(timeline));
+        if same_year && state.category_filter.is_some() {
+            if let Err(error) = self.services.audio_player.control(AudioControl::PlayAll) {
+                self.status = error;
+            }
+            return;
+        }
         if let Some(path) = self.audio_header.draft.selected()
             && let Some(selected) = self.items.iter().find(|media| media.path() == path)
             && let Err(error) = self.diary.request_embedded(
                 &self.items,
                 selected,
-                self.services.audio_source.clone(),
+                self.audio_preparation.source(),
                 group,
             )
         {
@@ -480,14 +540,27 @@ impl super::Suite {
         let Some(root) = &self.root else {
             return;
         };
-        let group = self.group.as_deref().unwrap_or("");
+        let year_group =
+            photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
+        let group = year_group.as_str();
         self.audio_header.draft.ensure(&self.items, root, group);
+        if self.services.audio_player.transport().active
+            && self
+                .diary
+                .timeline_for_view(group)
+                .is_some_and(|timeline| self.audio_header.draft.accepts_active(timeline))
+        {
+            if let Err(error) = self.services.audio_player.control(AudioControl::ShowWindow) {
+                self.status = error;
+            }
+            return;
+        }
         if let Some(path) = self.audio_header.draft.selected()
             && let Some(selected) = self.items.iter().find(|media| media.path() == path)
             && let Err(error) = self.diary.request_window(
                 &self.items,
                 selected,
-                self.services.audio_source.clone(),
+                self.audio_preparation.source(),
                 group,
             )
         {

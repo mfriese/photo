@@ -11,7 +11,7 @@ impl photosuite_application::diary::AudioSource for UnusedAdapters {
         &self,
         _: &std::path::Path,
     ) -> Result<photosuite_application::diary::AudioProbe, String> {
-        unreachable!()
+        Err("Keine echten Audiodaten im Layouttest".into())
     }
     fn capture_time(&self, path: &std::path::Path) -> Result<crate::domain::CaptureTime, String> {
         crate::domain::audio_date::select_audio_date(
@@ -186,6 +186,10 @@ pub(super) fn test_suite() -> Suite {
         search_open: false,
         help_open: false,
         audio_header: Default::default(),
+        audio_preparation: photosuite_application::diary_preparation::AudioPreparation::new(
+            adapters.clone(),
+            Default::default(),
+        ),
         viewer_audio: Default::default(),
         organization: photosuite_application::organization::OrganizationSession::new(
             adapters.clone(),
@@ -464,7 +468,11 @@ fn library_years_start_collapsed_and_expand_on_click() {
     ]);
     let expanded = draw(vec![]);
     assert!(expanded.iter().any(|(text, _)| text == "September"));
-    assert!(expanded.iter().any(|(text, _)| text == "Audio"));
+    assert!(
+        !expanded
+            .iter()
+            .any(|(text, _)| ["Audio", "Tagebuch", "Kommentare"].contains(&text.as_str()))
+    );
     assert!(!expanded.iter().any(|(text, _)| text == "Photos"));
     assert!(!expanded.iter().any(|(text, _)| text == "Ganzes Jahr"));
     let click = |pos| {
@@ -484,32 +492,14 @@ fn library_years_start_collapsed_and_expand_on_click() {
             },
         ]
     };
-    let audio = expanded.iter().find(|(text, _)| text == "Audio").unwrap().1;
     let month = expanded
         .iter()
         .find(|(text, _)| text == "September")
         .unwrap()
-        .1;
-    assert!(audio.top() < month.top(), "Audio must precede months");
-    let audio = audio.center();
-    draw(click(audio));
-    let audio_entries = draw(vec![]);
-    assert!(
-        !audio_entries
-            .iter()
-            .any(|(text, _)| text == "Alle Aufnahmen")
-    );
-    for label in ["Tagebuch", "Kommentare"] {
-        assert!(audio_entries.iter().any(|(text, _)| text == label));
-    }
-    let comments = audio_entries
-        .iter()
-        .find(|(text, _)| text == "Kommentare")
-        .unwrap()
         .1
         .center();
-    draw(click(comments));
-    assert_eq!(suite.group.as_deref(), Some("2026/audio/comments"));
+    draw(click(month));
+    assert_eq!(suite.group.as_deref(), Some("2026/09"));
 }
 #[test]
 fn importing_elsewhere_keeps_the_open_photo_library_and_saved_path() {
@@ -1587,18 +1577,22 @@ impl photosuite_application::comments::CommentRepository for UnusedAdapters {
     fn write_photo_record(
         &self,
         _: &std::path::Path,
-        _: &crate::domain::comments::Comment,
-    ) -> Result<(), String> {
-        Ok(())
+        comment: &crate::domain::comments::Comment,
+    ) -> Result<crate::domain::comments::CommentCatalog, String> {
+        let mut record = crate::domain::comments::CommentCatalog::default();
+        record.insert(comment.clone())?;
+        Ok(record)
     }
-    fn load(
+    fn read_cache(
         &self,
         _: &std::path::Path,
-    ) -> Result<photosuite_application::comments::StoredComments, String> {
-        Ok(photosuite_application::comments::StoredComments {
-            catalog: Default::default(),
-            revision: None,
-        })
+    ) -> Result<photosuite_application::comments::CommentCache, String> {
+        Ok(photosuite_application::comments::CommentCache::Current(
+            photosuite_application::comments::StoredComments {
+                catalog: Default::default(),
+                revision: None,
+            },
+        ))
     }
     fn save(
         &self,
@@ -1775,4 +1769,74 @@ fn player_record_intent_opens_the_recording_target_without_starting_capture_or_c
     });
     assert!(suite.record_photo.is_none());
     assert!(!suite.status.is_empty());
+}
+
+#[test]
+fn changing_page_prepares_audio_ratios_without_play_or_date_io() {
+    use photosuite_application::diary::{AudioProbe, AudioSource};
+    struct Source(std::sync::atomic::AtomicUsize);
+    impl AudioSource for Source {
+        fn probe(&self, path: &std::path::Path) -> Result<AudioProbe, String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(AudioProbe {
+                duration: if path.to_string_lossy().contains("130000") {
+                    3.
+                } else {
+                    1.
+                },
+                audio_only: true,
+                file_created: None,
+            })
+        }
+        fn capture_time(&self, _: &std::path::Path) -> Result<crate::domain::CaptureTime, String> {
+            panic!("page preparation must not load date metadata")
+        }
+    }
+    let source = Arc::new(Source(std::sync::atomic::AtomicUsize::new(0)));
+    let mut suite = test_suite();
+    suite.root = Some("/library".into());
+    suite.group = Some("2026".into());
+    suite.audio_preparation = photosuite_application::diary_preparation::AudioPreparation::new(
+        source.clone(),
+        Default::default(),
+    );
+    suite.items = [("2026", "120000"), ("2026", "130000"), ("2027", "120000")]
+        .into_iter()
+        .map(|(year, time)| {
+            Media::from_audio_asset(
+                format!("/library/{year}/audio/d/aud_{year}1113_{time}.wav").into(),
+                format!("{year}/audio/d"),
+            )
+            .unwrap()
+        })
+        .collect();
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    for (year, expected) in [("2026", 2), ("2027", 3)] {
+        suite.group = Some(year.into());
+        let render = |suite: &mut Suite| {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| suite.page_heading(ui, year));
+            });
+        };
+        render(&mut suite);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while suite.audio_preparation.is_loading() {
+            suite.audio_preparation.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        render(&mut suite);
+        assert_eq!(source.0.load(std::sync::atomic::Ordering::SeqCst), expected);
+        let timeline = suite.audio_header.draft.timeline().unwrap();
+        assert_eq!(timeline.year(), year);
+        assert!(timeline.clips().iter().all(|c| c.is_verified()));
+        if year == "2026" {
+            assert_eq!(
+                timeline.clips()[1].weight() / timeline.clips()[0].weight(),
+                3.
+            );
+        }
+        assert!(suite.diary.timeline().is_none());
+    }
 }

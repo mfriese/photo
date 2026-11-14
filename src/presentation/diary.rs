@@ -37,7 +37,7 @@ impl super::Suite {
         self.diary_catalog.ensure(
             &self.items,
             self.group.as_deref().unwrap_or(""),
-            self.services.audio_source.clone(),
+            self.audio_preparation.source(),
         );
         if self.diary_catalog.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -98,7 +98,7 @@ impl super::Suite {
             && let Err(error) = self.diary.start_in_scope(
                 &self.items,
                 &self.items[index],
-                self.services.audio_source.clone(),
+                self.audio_preparation.source(),
                 self.group.as_deref().unwrap_or(""),
             )
         {

@@ -27,6 +27,7 @@ pub struct Suite {
     search_open: bool,
     help_open: bool,
     audio_header: audio_header::AudioHeader,
+    audio_preparation: photosuite_application::diary_preparation::AudioPreparation,
     viewer_audio: audio_header::AudioHeader,
     organization: photosuite_application::organization::OrganizationSession,
     tag_view: tags::TagView,
@@ -84,6 +85,8 @@ impl Suite {
             }
             self.tag_view.clear_scope();
         }
+        self.audio_preparation.reset();
+        self.organization.begin_media_scan(&path);
         self.comments.load(path.clone());
         self.persist_preferences();
         self.preferences.library_scope = None;
@@ -333,6 +336,13 @@ impl eframe::App for Suite {
         if self.organization.loading() || self.organization.saving() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
+        self.audio_preparation.poll();
+        if !self.audio_preparation.error().is_empty() {
+            self.status = self.audio_preparation.error().into();
+        }
+        if self.audio_preparation.is_loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.diary_catalog.poll();
         if self.diary_catalog.is_loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -383,6 +393,11 @@ impl eframe::App for Suite {
         if let Some(result) = self.collection.poll() {
             match result {
                 Ok(collection) => {
+                    self.organization.observe_media(
+                        &collection.root,
+                        &collection.items,
+                        !self.collection.is_loading() && collection.unreadable == 0,
+                    );
                     for media in collection.items {
                         let media = self.comments.project(media);
                         if self.known_media.insert(media.path().to_owned()) {
@@ -515,6 +530,10 @@ pub fn create(
         search_open: false,
         help_open: false,
         audio_header: Default::default(),
+        audio_preparation: photosuite_application::diary_preparation::AudioPreparation::new(
+            services.audio_source.clone(),
+            services.work_priority.clone(),
+        ),
         viewer_audio: Default::default(),
         organization: photosuite_application::organization::OrganizationSession::new(
             services.organization.clone(),

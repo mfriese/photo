@@ -45,19 +45,68 @@ pub struct TagCatalog {
     albums: BTreeSet<String>,
 }
 impl TagCatalog {
-    /// The reserved comment tag is a projection of authoritative comment references.
-    /// Preserve unrelated tags and an existing album flag; remove an empty derived tag.
-    pub fn reconcile_comments(&mut self, comments: &crate::comments::CommentCatalog) {
-        let files: BTreeSet<_> = comments
-            .entries()
-            .values()
-            .map(|comment| comment.photo().clone())
-            .collect();
+    /// Derive managed tags without removing unseen files during a partial collection scan.
+    pub fn reconcile_automatic(
+        &mut self,
+        comments: Option<&crate::comments::CommentCatalog>,
+        audio: &BTreeMap<LibraryFile, crate::diary::AudioKind>,
+        complete: bool,
+    ) {
+        use crate::diary::AudioKind;
+        let mut photo_files = BTreeSet::new();
+        let mut comment_files = BTreeSet::new();
+        let mut diary_files = BTreeSet::new();
+        if let Some(comments) = comments {
+            for comment in comments.entries().values() {
+                photo_files.insert(comment.photo().clone());
+                comment_files.insert(comment.audio().clone());
+            }
+        }
+        for (file, kind) in audio {
+            match kind {
+                AudioKind::Comments => {
+                    comment_files.insert(file.clone());
+                }
+                AudioKind::Diary => {
+                    diary_files.insert(file.clone());
+                }
+                AudioKind::All => {}
+            }
+        }
+        if !complete {
+            for (tag, kind, files) in [
+                ("comment", AudioKind::Comments, &mut comment_files),
+                ("diary", AudioKind::Diary, &mut diary_files),
+            ] {
+                for file in self.tags.get(tag).into_iter().flatten() {
+                    let path = Path::new(file.as_str());
+                    let group = path
+                        .parent()
+                        .unwrap_or(Path::new(""))
+                        .to_string_lossy()
+                        .into_owned();
+                    if crate::Media::from_library_path(path.into(), group)
+                        .as_ref()
+                        .and_then(crate::diary::audio_kind)
+                        == Some(kind)
+                    {
+                        files.insert(file.clone());
+                    }
+                }
+            }
+        }
+        if comments.is_some() {
+            self.replace_derived("commented", photo_files);
+        }
+        self.replace_derived("comment", comment_files);
+        self.replace_derived("diary", diary_files);
+    }
+    fn replace_derived(&mut self, tag: &str, files: BTreeSet<LibraryFile>) {
         if files.is_empty() {
-            self.tags.remove("comment");
-            self.albums.remove("comment");
+            self.tags.remove(tag);
+            self.albums.remove(tag);
         } else {
-            self.tags.insert("comment".into(), files);
+            self.tags.insert(tag.into(), files);
         }
     }
 
@@ -170,6 +219,54 @@ impl TagCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_media_tags_split_photos_from_audio_and_preserve_unseen_partial_years() {
+        use crate::{
+            comments::{Comment, CommentCatalog},
+            diary::AudioKind,
+        };
+        let photo = LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap();
+        let comment_audio =
+            LibraryFile::new("2026/audio/c/com_20261113_120000.m4a".into()).unwrap();
+        let diary = LibraryFile::new("2026/audio/d/aud_20261113_130000.wav".into()).unwrap();
+        let old = LibraryFile::new("2025/audio/d/aud_20251113_130000.wav".into()).unwrap();
+        let mut comments = CommentCatalog::default();
+        comments
+            .insert(
+                Comment::new(
+                    "12345678-1234-1234-1234-123456789abc".into(),
+                    comment_audio.clone(),
+                    photo.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut tags = TagCatalog::default();
+        for name in ["comment", "diary", "urlaub"] {
+            tags.create(name).unwrap();
+        }
+        tags.assign("comment", photo.clone(), true).unwrap();
+        tags.assign("diary", old.clone(), true).unwrap();
+        tags.assign("urlaub", photo.clone(), true).unwrap();
+        let media = BTreeMap::from([
+            (comment_audio.clone(), AudioKind::Comments),
+            (diary.clone(), AudioKind::Diary),
+        ]);
+        tags.reconcile_automatic(Some(&comments), &media, false);
+        assert!(tags.contains("commented", photo.as_str()));
+        assert!(!tags.contains("comment", photo.as_str()));
+        assert!(tags.contains("comment", comment_audio.as_str()));
+        assert!(tags.contains("diary", old.as_str()));
+        assert!(tags.contains("diary", diary.as_str()));
+        assert!(tags.contains("urlaub", photo.as_str()));
+        tags.reconcile_automatic(None, &media, false);
+        assert!(tags.contains("commented", photo.as_str()));
+        tags.reconcile_automatic(Some(&CommentCatalog::default()), &media, true);
+        assert!(!tags.tags().contains_key("commented"));
+        assert!(!tags.contains("diary", old.as_str()));
+        assert!(tags.contains("comment", comment_audio.as_str()));
+        assert!(tags.contains("urlaub", photo.as_str()));
+    }
     #[test]
     fn all_tag_boundaries_normalize_case_and_merge_legacy_variants_without_loss() {
         let mut catalog = TagCatalog::from_entries(

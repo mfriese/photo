@@ -59,7 +59,10 @@ pub struct OrganizationSession {
     revision: u64,
     acknowledged: u64,
     catalog: Option<Arc<TagCatalog>>,
-    pending_comments: Option<(PathBuf, crate::domain::comments::CommentCatalog)>,
+    automatic_pending: bool,
+    automatic_comments: Option<crate::domain::comments::CommentCatalog>,
+    automatic_audio: std::collections::BTreeMap<LibraryFile, crate::domain::diary::AudioKind>,
+    automatic_complete: bool,
     loading: bool,
     saving: bool,
     error: String,
@@ -75,7 +78,10 @@ impl OrganizationSession {
             revision: 0,
             acknowledged: 0,
             catalog: None,
-            pending_comments: None,
+            automatic_pending: false,
+            automatic_comments: None,
+            automatic_audio: Default::default(),
+            automatic_complete: false,
             loading: false,
             saving: false,
             error: String::new(),
@@ -90,7 +96,10 @@ impl OrganizationSession {
             root: root.clone(),
             generation,
         })?;
-        self.pending_comments = None;
+        self.automatic_pending = false;
+        self.automatic_comments = None;
+        self.automatic_audio.clear();
+        self.automatic_complete = false;
         self.root = Some(root);
         self.generation = generation;
         self.revision = 0;
@@ -194,21 +203,54 @@ impl OrganizationSession {
         comments: &crate::domain::comments::CommentCatalog,
     ) {
         if self.root.as_deref() == Some(root) {
-            self.pending_comments = Some((root.to_owned(), comments.clone()));
+            for comment in comments.entries().values() {
+                self.automatic_audio.insert(
+                    comment.audio().clone(),
+                    crate::domain::diary::AudioKind::Comments,
+                );
+            }
+            self.automatic_comments = Some(comments.clone());
+            self.automatic_pending = true;
+        }
+    }
+    pub fn begin_media_scan(&mut self, root: &Path) {
+        if self.root.as_deref() == Some(root) {
+            self.automatic_audio.clear();
+            self.automatic_comments = None;
+            self.automatic_complete = false;
+            self.automatic_pending = true;
+        }
+    }
+    pub fn observe_media(&mut self, root: &Path, items: &[Media], complete: bool) {
+        if self.root.as_deref() != Some(root) {
+            return;
+        }
+        let mut changed = self.automatic_complete != complete;
+        for media in items {
+            if let Some(kind) = crate::domain::diary::audio_kind(media)
+                && let Ok(file) = self.file(media.path())
+                && self.automatic_audio.insert(file, kind) != Some(kind)
+            {
+                changed = true;
+            }
+        }
+        self.automatic_complete = complete;
+        if changed {
+            self.automatic_pending = true;
         }
     }
     fn reconcile_pending_comments(&mut self) -> Result<(), String> {
-        if self.catalog.is_none() || self.loading {
+        if self.catalog.is_none() || self.loading || !self.automatic_pending {
             return Ok(());
         }
-        let Some((root, comments)) = self.pending_comments.take() else {
-            return Ok(());
-        };
-        if self.root.as_deref() != Some(root.as_path()) {
-            return Ok(());
-        }
+        self.automatic_pending = false;
+        let root = self.root.clone().ok_or("Keine Bibliothek geöffnet")?;
         let mut catalog = self.catalog.as_deref().unwrap().clone();
-        catalog.reconcile_comments(&comments);
+        catalog.reconcile_automatic(
+            self.automatic_comments.as_ref(),
+            &self.automatic_audio,
+            self.automatic_complete,
+        );
         if self.catalog.as_deref() == Some(&catalog) {
             return Ok(());
         }
@@ -398,6 +440,67 @@ mod tests {
         }
     }
     #[test]
+    fn observed_audio_updates_managed_tags_incrementally_and_persists_final_membership() {
+        let repository = Arc::new(Memory::default());
+        let mut original = TagCatalog::default();
+        original.create("diary").unwrap();
+        original
+            .assign(
+                "diary",
+                LibraryFile::new("2025/audio/d/aud_20251113_120000.wav".into()).unwrap(),
+                true,
+            )
+            .unwrap();
+        *repository.catalog.lock().unwrap() = original;
+        let mut session = OrganizationSession::new(repository.clone());
+        session.open("/library".into()).unwrap();
+        wait(&mut session, |s| s.catalog().is_some());
+        session.begin_media_scan(Path::new("/library"));
+        let audio = vec![
+            Media::from_audio_asset(
+                "/library/2026/audio/d/aud_20261113_120000.wav".into(),
+                "2026/audio/d".into(),
+            )
+            .unwrap(),
+            Media::from_audio_asset(
+                "/library/2026/audio/c/com_20261113_130000.m4a".into(),
+                "2026/audio/c".into(),
+            )
+            .unwrap(),
+        ];
+        session.observe_media(Path::new("/library"), &audio, false);
+        session.poll();
+        wait(&mut session, |s| !s.dirty());
+        assert!(
+            session
+                .catalog()
+                .unwrap()
+                .contains("diary", "2025/audio/d/aud_20251113_120000.wav")
+        );
+        assert!(
+            session
+                .catalog()
+                .unwrap()
+                .contains("comment", "2026/audio/c/com_20261113_130000.m4a")
+        );
+        session.observe_media(Path::new("/library"), &[], true);
+        session.poll();
+        wait(&mut session, |s| !s.dirty());
+        assert!(
+            !session
+                .catalog()
+                .unwrap()
+                .contains("diary", "2025/audio/d/aud_20251113_120000.wav")
+        );
+        assert!(
+            repository
+                .catalog
+                .lock()
+                .unwrap()
+                .contains("diary", "2026/audio/d/aud_20261113_120000.wav")
+        );
+    }
+    #[test]
     fn comment_reconciliation_waits_for_tags_repairs_memberships_and_is_idempotent() {
         use crate::domain::comments::{Comment, CommentCatalog};
         let repository = Arc::new(Memory::default());
@@ -431,8 +534,9 @@ mod tests {
         session.reconcile_comments(Path::new("/photos"), &comments);
         wait(&mut session, |s| s.catalog().is_some() && !s.dirty());
         let tags = session.catalog().unwrap();
-        assert_eq!(tags.tags()["comment"].len(), 1);
-        assert!(tags.contains("comment", photo.as_str()));
+        assert_eq!(tags.tags()["commented"].len(), 1);
+        assert_eq!(tags.tags()["comment"].len(), 2);
+        assert!(tags.contains("commented", photo.as_str()));
         assert!(tags.tags().contains_key("familie"));
         assert!(!tags.contains("comment", "2000/01/stale.jpg"));
         let writes = repository.saves.lock().unwrap().len();
@@ -447,10 +551,12 @@ mod tests {
             session
                 .catalog()
                 .unwrap()
-                .contains("comment", photo.as_str())
+                .contains("commented", photo.as_str())
         );
         repository.fail.store(true, Ordering::SeqCst);
+        session.begin_media_scan(Path::new("/photos"));
         session.reconcile_comments(Path::new("/photos"), &CommentCatalog::default());
+        session.observe_media(Path::new("/photos"), &[], true);
         session.poll();
         wait(&mut session, |s| !s.saving());
         assert!(session.dirty() && !session.error().is_empty());

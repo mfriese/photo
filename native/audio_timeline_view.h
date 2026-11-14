@@ -6,7 +6,9 @@
 @property(nonatomic,copy) NSString *label;
 @property(nonatomic) double weight;
 @property(nonatomic) double duration; // measured seconds or zero when unverified
-@property(nonatomic) double recordedAt;
+@property(nonatomic) double recordedAt; // logical reference time
+@property(nonatomic) double actualRecordedAt;
+@property(nonatomic) unsigned int visibilityMask; // supplied by Rust; bits All/Diary/Comments
 @property(nonatomic) unsigned int verification; // 0 pending, 1 verified, 2 failed
 @end
 @interface PSAudioTimeline : NSView

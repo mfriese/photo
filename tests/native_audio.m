@@ -106,7 +106,7 @@ int main(int argc,char **argv) {
         NSDateFormatter *date=[NSDateFormatter new];date.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];date.timeZone=[NSTimeZone timeZoneForSecondsFromGMT:0];date.dateFormat=@"yyyyMMdd_HHmmss";
         double late=[[date dateFromString:@"20231227_235959"] timeIntervalSince1970];
         double dates[]={late-3600,late};
-        controller.timeline.clips=PSAudioReadClips(paths,labels,weights,dates,durations,states,2);
+        controller.timeline.clips=PSAudioReadClips(paths,labels,weights,dates,durations,states,2);controller.sourceClips=controller.timeline.clips;
         assert(controller.timeline.total==160000 && controller.timeline.clips[0].verification==0);
         NSColor *gray=timelinePixel(controller.timeline);assert(fabs(gray.redComponent-gray.blueComponent)<0.1);
         controller.timeline.clips[0].verification=2;
@@ -115,8 +115,8 @@ int main(int argc,char **argv) {
         [controller.transport openPath:PSAudioPath(argv[2]) fraction:0.5 offset:0];loaded(controller);
         assert(fabs(controller.transport.duration-3)<0.01);
         assert(fabs(CMTimeGetSeconds(controller.transport.player.currentTime)-1.5)<0.03);
-        assert([controller.titleLabel.stringValue isEqualToString:@"28.12.2023"]);
-        assert([controller.detailLabel.stringValue isEqualToString:@"00:00:00"]);
+        assert([controller.titleLabel.stringValue isEqualToString:@"Audio"]);
+        assert([controller.detailLabel.stringValue isEqualToString:@"28.12.2023  00:00:00"]);
         assert(controller.photoRequest==0 && photosuite_audio_state(42)==1);
         controller.transport.wantsPlay=YES;[controller.transport.player play];pump(0.25);[controller tick:nil];
         assert(CMTimeGetSeconds(controller.transport.player.currentTime)>1.55);
@@ -187,7 +187,7 @@ int main(int argc,char **argv) {
         assert(photosuite_audio_control(embedded,1,0.5)==0);loaded(compact);
         // Native symbol controls remain centered and retain equal dimensions.
         for(NSNumber *width in @[@440,@740,@1600]){
-            [compact.window setContentSize:NSMakeSize(width.doubleValue,370)];[compact.window.contentView layoutSubtreeIfNeeded];
+            [compact.window setContentSize:NSMakeSize(width.doubleValue,550)];[compact.window.contentView layoutSubtreeIfNeeded];
             assert(fabs(NSMidX(compact.controlGroup.frame)-compact.window.contentView.bounds.size.width/2)<.5);
             assert(compact.controlGroup.arrangedSubviews.count==4);
             assert(NSMinY(compact.controlGroup.frame)>=0);
@@ -212,6 +212,39 @@ int main(int argc,char **argv) {
         assert(photosuite_audio_context_record(&recordSession,&recordRequest,&recordSlot)==1);assert(recordSession==embedded&&recordRequest==1234&&recordSlot==2);assert(!compact.transport.wantsPlay&&!compact.window.visible);assert(photosuite_audio_context_record(&recordSession,&recordRequest,&recordSlot)==0);
         compact.contextPhotos.loading=YES;[compact recordCurrentPhoto:nil];assert(photosuite_audio_context_record(&recordSession,&recordRequest,&recordSlot)==0);
         compact.contextPhotos.loading=NO;[compact recordCurrentPhoto:nil];compact.photoRequest++;assert(photosuite_audio_context_record(&recordSession,&recordRequest,&recordSlot)==0);
+        assert([compact.titleLabel.stringValue isEqualToString:@"2023"]);
+        double actualDates[]={1800000000,1800000100};
+        assert(photosuite_audio_recorded_dates(embedded,actualDates,2)==0);
+        assert([compact numberOfRowsInTableView:compact.fileTable]==2);
+        assert(![[compact tableView:compact.fileTable objectValueForTableColumn:compact.fileTable.tableColumns[1] row:0] isEqualToString:[compact tableView:compact.fileTable objectValueForTableColumn:compact.fileTable.tableColumns[2] row:0]]);
+        NSTableColumn *fileColumn=compact.fileTable.tableColumns[0];
+        assert([[compact tableView:compact.fileTable objectValueForTableColumn:fileColumn row:0] isEqualToString:compact.timeline.clips[0].path.lastPathComponent]);
+        assert(NSMaxY(compact.fileTable.enclosingScrollView.frame)<NSMinY(compact.controlGroup.frame));
+        // Filters change the visible playback queue, never the source timeline.
+        unsigned int masks[compact.sourceClips.count];
+        for(NSUInteger i=0;i<compact.sourceClips.count;i++)masks[i]=3;
+        assert(photosuite_audio_visibility(embedded,masks,compact.sourceClips.count)==0);
+        AVPlayerItem *retained=compact.transport.player.currentItem;
+        compact.categoryControl.selectedSegment=0;[compact categoryChanged:compact.categoryControl];
+        assert(compact.timeline.clips.count==compact.sourceClips.count);
+        assert(compact.transport.player.currentItem==retained);
+        compact.categoryControl.selectedSegment=1;[compact categoryChanged:compact.categoryControl];
+        assert(compact.timeline.clips.count==0&&!compact.transport.wantsPlay);
+        assert([compact numberOfRowsInTableView:compact.fileTable]==0);
+        assert(!compact.playButton.enabled&&!compact.recordButton.enabled);
+        assert((photosuite_audio_state(embedded)&8)!=0);
+        assert(photosuite_audio_control(embedded,4,0)==0);
+        assert(compact.category==0&&compact.timeline.clips.count==compact.sourceClips.count);
+        assert(compact.transport.player.currentItem==retained&&compact.transport.wantsPlay);
+        assert(photosuite_audio_control(embedded,5,1)==0);
+        assert(compact.category==1&&!compact.transport.wantsPlay&&compact.timeline.clips.count==2);
+        assert([compact numberOfRowsInTableView:compact.fileTable]==2);
+        assert(photosuite_audio_control(embedded,5,6)==0);
+        assert(compact.category==2&&compact.timeline.clips.count==0);
+        assert(photosuite_audio_control(embedded,4,0)==0);
+        masks[0]=0;
+        assert(photosuite_audio_visibility(embedded,masks,compact.sourceClips.count)!=0);
+        assert(compact.timeline.clips.count==compact.sourceClips.count);
         assert(photosuite_audio_control(embedded,3,0)==0);
         assert(!compact.transport.player.currentItem && photosuite_audio_state(embedded)==0);
         puts("Native audio: provisional weights/colors, real playback, in-place reorder, position preservation, seeks, corrected auto-advance, photo clicks and cancellation OK");

@@ -85,7 +85,11 @@ impl<'a> AudioScope<'a> {
     }
     pub fn includes(self, media: &crate::Media) -> bool {
         media.is_audio()
-            && audio_year(media.group()) == Some(self.year)
+            && media
+                .reference_year()
+                .or_else(|| media.reference_time().map(|d| d.year()))
+                .or_else(|| audio_year(media.group()))
+                == Some(self.year)
             && (self.kind == AudioKind::All || audio_kind(media) == Some(self.kind))
     }
     /// Canonical view key. Diary/comments are virtual filters, not new import directories.
@@ -183,6 +187,21 @@ pub fn audio_year(group: &str) -> Option<&str> {
 }
 /// Explicit prefixes take precedence; old category directories remain readable.
 /// Unknown filenames in the flat audio directory belong only to the combined view.
+/// Classify a projected recording path using the same directory/prefix rules as the library.
+pub fn recording_kind(path: &Path) -> Option<AudioKind> {
+    let parent = path.parent()?;
+    let parts: Vec<_> = parent.components().collect();
+    for start in (0..parts.len()).rev() {
+        let group: std::path::PathBuf = parts[start..].iter().collect();
+        let group = group.to_str()?;
+        if AudioScope::parse(group).is_some() {
+            return crate::Media::from_audio_asset(path.into(), group.into())
+                .as_ref()
+                .and_then(audio_kind);
+        }
+    }
+    None
+}
 pub fn audio_kind(media: &crate::Media) -> Option<AudioKind> {
     if !media.is_audio() {
         return None;
@@ -335,5 +354,22 @@ mod month_scope_tests {
         ] {
             assert!(AudioViewScope::parse(invalid).is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod projected_kind_tests {
+    use super::*;
+    #[test]
+    fn projected_paths_use_domain_category_rules_without_io() {
+        assert_eq!(
+            recording_kind(Path::new("/Fotos/2026/audio/d/aud_20261113_120000.wav")),
+            Some(AudioKind::Diary)
+        );
+        assert_eq!(
+            recording_kind(Path::new("2026/audio/c/com_20261113_120000.m4a")),
+            Some(AudioKind::Comments)
+        );
+        assert_eq!(recording_kind(Path::new("2026/audio/unknown.wav")), None);
     }
 }

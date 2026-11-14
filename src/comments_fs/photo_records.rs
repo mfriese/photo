@@ -48,6 +48,18 @@ fn safe_reference(root: &Path, relative: &LibraryFile) -> Result<bool, String> {
                     current.display()
                 ));
             }
+            Ok(m) if current == path && !m.is_file() => {
+                return Err(format!(
+                    "Kommentarverweis ist keine reguläre Datei: {}",
+                    current.display()
+                ));
+            }
+            Ok(m) if current != path && !m.is_dir() => {
+                return Err(format!(
+                    "Kommentar-Vorfahre ist kein Verzeichnis: {}",
+                    current.display()
+                ));
+            }
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => present = false,
             Err(e) => return Err(e.to_string()),
@@ -58,6 +70,22 @@ fn safe_reference(root: &Path, relative: &LibraryFile) -> Result<bool, String> {
         current = current.parent().ok_or("Verweis außerhalb der Bibliothek")?;
     }
     Ok(present)
+}
+// Do not traverse photo/video/diary trees to rebuild a metadata-only index.
+fn source_branch(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let parts: Vec<_> = relative.components().collect();
+    if parts.is_empty() {
+        return true;
+    }
+    let year = parts[0].as_os_str().to_str().is_some_and(|year| {
+        crate::domain::diary::AudioScope::for_year(year, crate::domain::diary::AudioKind::All)
+            .is_some()
+    });
+    year && (parts.len() < 2 || parts[1].as_os_str() == "audio")
+        && (parts.len() < 3 || parts[2].as_os_str() == "y")
 }
 impl YamlComments {
     pub(super) fn update_photo_record(
@@ -155,7 +183,11 @@ impl YamlComments {
         directory(root)?;
         let mut catalog = CommentCatalog::default();
         let mut checked = 0;
-        for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| source_branch(root, entry.path()))
+        {
             if cancel.load(Ordering::Relaxed) || !self.priority.wait_background(cancel) {
                 return Err("Neuaufbau abgebrochen; Gesamtdatei unverändert".into());
             }
@@ -169,8 +201,28 @@ impl YamlComments {
             }
             let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
             let parts: Vec<_> = relative.components().collect();
-            let in_metadata =
-                parts.len() >= 3 && parts[1].as_os_str() == "audio" && parts[2].as_os_str() == "y";
+            let year = parts
+                .first()
+                .and_then(|part| part.as_os_str().to_str())
+                .is_some_and(|year| {
+                    crate::domain::diary::AudioScope::for_year(
+                        year,
+                        crate::domain::diary::AudioKind::All,
+                    )
+                    .is_some()
+                });
+            let source_ancestor =
+                year && (parts.len() == 1 || (parts.len() == 2 && parts[1].as_os_str() == "audio"));
+            if source_ancestor && !entry.file_type().is_dir() {
+                return Err(format!(
+                    "Metadaten-Vorfahre ist kein reguläres Verzeichnis: {}; Index bleibt unverändert",
+                    path.display()
+                ));
+            }
+            let in_metadata = year
+                && parts.len() >= 3
+                && parts[1].as_os_str() == "audio"
+                && parts[2].as_os_str() == "y";
             if !in_metadata {
                 continue;
             }

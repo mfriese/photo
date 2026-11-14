@@ -8,16 +8,12 @@ pub fn kind_label(kind: photosuite_domain::diary::AudioKind) -> &'static str {
 }
 
 pub fn timeline_label(timeline: &photosuite_domain::diary_timeline::DiaryTimeline) -> String {
-    if timeline.photo_reference().is_some() {
-        return "Kommentare zu diesem Foto".into();
-    }
     format!(
-        "{} · {}{}",
-        kind_label(timeline.kind()),
+        "{}{}",
         timeline.year(),
         timeline
             .month()
-            .map(|month| format!("/{month}"))
+            .map(|m| format!("/{m}"))
             .unwrap_or_default()
     )
 }

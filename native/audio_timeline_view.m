@@ -38,6 +38,7 @@ NSColor *PSAudioClipColor(unsigned int state,NSUInteger index) {
     *fraction=0;return NSNotFound;
 }
 - (void)drawRect:(NSRect)dirty {
+    if(self.clips.count==0)return;
     double total=MAX(1,self.total),offset=0;CGFloat width=MAX(1,self.bounds.size.width-16);
     for(NSUInteger i=0;i<self.clips.count;++i){
         PSAudioClipViewModel *clip=self.clips[i];

@@ -41,6 +41,25 @@ impl AudioPlayer for NativeAudioPlayer {
     ) -> Result<(), String> {
         self.open_mode(timeline, selected, photos, false)
     }
+    fn empty_view(&self, label: &str) -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            unsafe extern "C" {
+                fn photosuite_audio_empty(session: u64, label: *const std::ffi::c_char) -> i32;
+            }
+            let label = std::ffi::CString::new(label).map_err(|e| e.to_string())?;
+            if unsafe {
+                photosuite_audio_empty(
+                    self.session.load(std::sync::atomic::Ordering::Relaxed),
+                    label.as_ptr(),
+                )
+            } != 0
+            {
+                return Err("Playerbereich nicht verfügbar".into());
+            }
+        }
+        Ok(())
+    }
     fn transport(&self) -> photosuite_application::diary::AudioTransportSnapshot {
         #[cfg(target_os = "macos")]
         {
@@ -70,6 +89,11 @@ impl AudioPlayer for NativeAudioPlayer {
                 } else {
                     0.
                 },
+                category_filter: match flags & 48 {
+                    16 => Some(photosuite_domain::diary::AudioKind::Diary),
+                    32 => Some(photosuite_domain::diary::AudioKind::Comments),
+                    _ => None,
+                },
                 current_date: if civil.is_finite() {
                     crate::domain::CaptureTime::from_civil_seconds(
                         civil.floor() as i64,
@@ -95,6 +119,15 @@ impl AudioPlayer for NativeAudioPlayer {
             }
             let (command, fraction) = match command {
                 AudioControl::Toggle => (0, 0.),
+                AudioControl::PlayAll => (4, 0.),
+                AudioControl::Configure { playing, category } => (
+                    5,
+                    (match category {
+                        Some(photosuite_domain::diary::AudioKind::Diary) => 1,
+                        Some(photosuite_domain::diary::AudioKind::Comments) => 2,
+                        _ => 0,
+                    } + if playing { 4 } else { 0 }) as f64,
+                ),
                 AudioControl::Seek(fraction) => {
                     if !fraction.is_finite() {
                         return Err("Ungültige Audioposition".into());
@@ -169,6 +202,7 @@ impl AudioPlayer for NativeAudioPlayer {
                 is_open: flags & 1 != 0,
                 has_started: flags & 2 != 0,
                 failed: flags & 4 != 0,
+                empty_selection: flags & 8 != 0,
             }
         }
         #[cfg(not(target_os = "macos"))]
