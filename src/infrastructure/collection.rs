@@ -253,15 +253,17 @@ mod tests {
             }
         }
         let directory = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(directory.path().join("2023/diary")).unwrap();
+        std::fs::create_dir_all(directory.path().join("2023/audio/diary")).unwrap();
         std::fs::create_dir_all(directory.path().join("2023/12")).unwrap();
-        let audio = directory.path().join("2023/diary/aud_20231227_225132.mp4");
+        let audio = directory
+            .path()
+            .join("2023/audio/diary/aud_20231227_225132.mp4");
         let video = directory.path().join("2023/12/img_20231227_225132.mp4");
         std::fs::write(&audio, b"audio-original").unwrap();
         std::fs::write(&video, b"video-original").unwrap();
         let sidecar = directory
             .path()
-            .join("2023/diary/._aud_20231227_225132.wav");
+            .join("2023/audio/diary/._aud_20231227_225132.wav");
         std::fs::write(&sidecar, [0, 5, 22, 7]).unwrap();
         let repository = FileSystemRepository {
             audio: std::sync::Arc::new(NoReads),
@@ -322,7 +324,7 @@ mod tests {
 mod flat_audio_tests {
     use super::*;
     #[test]
-    fn flat_audio_containers_and_legacy_files_load_without_metadata_or_writes() {
+    fn canonical_audio_containers_load_without_metadata_or_writes() {
         struct NoReads;
         impl photosuite_application::diary::AudioSource for NoReads {
             fn probe(&self, _: &Path) -> Result<photosuite_application::diary::AudioProbe, String> {
@@ -334,10 +336,10 @@ mod flat_audio_tests {
         }
         let root = tempfile::tempdir().unwrap();
         let files = [
-            "2023/audio/aud_20230101_120000.mp4",
-            "2023/audio/comment_20230101_120000.mov",
+            "2023/audio/diary/aud_20230101_120000.mp4",
+            "2023/audio/comments/com_20230101_120000.mov",
             "2023/audio/unknown.wav",
-            "2023/diary/old.wav",
+            "2023/audio/diary/old.wav",
         ];
         for path in files {
             let path = root.path().join(path);
@@ -382,7 +384,6 @@ mod flat_audio_tests {
                 b"untouched source"
             );
         }
-        assert!(!root.path().join("2023/audio/diary").exists());
-        assert!(!root.path().join("2023/audio/comments").exists());
+        assert!(!root.path().join("yaml").exists());
     }
 }

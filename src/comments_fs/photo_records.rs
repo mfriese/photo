@@ -1,11 +1,10 @@
 //! Authoritative photo records; every update is guarded by the current file revision.
 use super::*;
+use crate::media_records_fs::{Record as MediaRecord, parse};
 use std::{
     io::Write,
     sync::atomic::{AtomicUsize, Ordering},
 };
-const SIDECAR_MAX: u64 = 1024 * 1024;
-use crate::media_records_fs::{Record as PhotoSidecar, parse};
 fn checked_bytes(path: &Path) -> Result<Vec<u8>, String> {
     crate::media_records_fs::read(path)?
         .ok_or_else(|| format!("Foto-YAML fehlt: {}", path.display()))
@@ -65,13 +64,13 @@ impl YamlComments {
         let mut entry = if let Some(bytes) = &previous {
             parse(bytes)?
         } else {
-            PhotoSidecar::new(comment.photo())
+            MediaRecord::new(comment.photo())
         };
-        if entry.photo != comment.photo().as_str() {
+        if entry.file != comment.photo().as_str() {
             return Err("Foto-YAML gehört zu einem anderen Bild".into());
         }
         let mut catalog = CommentCatalog::default();
-        add_photo(&mut catalog, &entry.photo, entry.comments.clone())?;
+        add_photo(&mut catalog, &entry.file, entry.comments.clone())?;
         catalog.insert(comment.clone())?;
         let normalized = catalog
             .entries()
@@ -82,16 +81,7 @@ impl YamlComments {
             return Ok(catalog);
         }
         entry.comments = normalized;
-        entry.version = 3;
-        let bytes = serde_saphyr::to_string(&entry)
-            .map_err(|e| e.to_string())?
-            .into_bytes();
-        if bytes.len() as u64 > SIDECAR_MAX {
-            return Err("Foto-Kommentar-YAML überschreitet 1 MiB".into());
-        }
-        crate::metadata_fs::library_path(root, relative.as_str(), true)?;
-        safe_reference(root, &relative)?;
-        crate::metadata_fs::atomic_write_if_current(&path, &bytes, previous.as_deref())?;
+        crate::media_records_fs::write(root, comment.photo(), &entry, previous.as_deref())?;
         Ok(catalog)
     }
     pub(super) fn read_rebuild_base(&self, root: &Path) -> Result<RebuildBase, String> {
@@ -159,7 +149,7 @@ impl YamlComments {
             }
             safe_reference(root, &photo)?;
             let mut parsed = CommentCatalog::default();
-            add_photo(&mut parsed, &record.photo, record.comments)?;
+            add_photo(&mut parsed, &record.file, record.comments)?;
             // Empty image records are valid and carry no comment mapping.
             for comment in parsed.entries().values() {
                 if root.join(comment.sidecar().as_str()) != path {

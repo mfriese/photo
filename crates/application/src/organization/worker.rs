@@ -44,7 +44,6 @@ struct Loaded {
     generation: u64,
     version: Option<Vec<u8>>,
     catalog: TagCatalog,
-    seeded: bool,
 }
 pub(super) struct Worker {
     inbox: Arc<(Mutex<Mailbox>, Condvar)>,
@@ -81,11 +80,7 @@ impl Worker {
                         let result = if rebuild {
                             super::index::rebuild_cancel(repository.as_ref(), &root, &cancel)
                         } else {
-                            super::index::load_with_backfill_cancel(
-                                repository.as_ref(),
-                                &root,
-                                &cancel,
-                            )
+                            super::index::load_cancel(repository.as_ref(), &root, &cancel)
                         }
                         .map(|stored| {
                             loaded = Some(Loaded {
@@ -93,7 +88,6 @@ impl Worker {
                                 generation,
                                 version: stored.revision,
                                 catalog: stored.catalog.clone(),
-                                seeded: true,
                             });
                             stored.catalog
                         });
@@ -118,13 +112,11 @@ impl Worker {
                                     &active.catalog,
                                     &catalog,
                                     active.version.as_deref(),
-                                    !active.seeded,
                                     &std::sync::atomic::AtomicBool::new(false),
                                 )
                                 .map(|new| {
                                     active.version = Some(new);
                                     active.catalog = (*catalog).clone();
-                                    active.seeded = true;
                                 })
                             }
                             _ => Err("Tag-Bibliothek ist nicht geladen".into()),

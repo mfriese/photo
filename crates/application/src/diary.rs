@@ -1061,7 +1061,7 @@ mod tests {
     }
     #[test]
     fn catalog_reads_dates_in_background_and_reuses_the_same_year() {
-        let items = vec![Media::from_path("a.wav".into(), "2026/diary".into()).unwrap()];
+        let items = vec![Media::from_path("a.wav".into(), "2026/audio/diary".into()).unwrap()];
         let mut catalog = DiaryCatalog::default();
         catalog.ensure(&items, "2026", Arc::new(Source));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -1134,8 +1134,9 @@ mod tests {
                 panic!("grid must use names")
             }
         }
-        let items =
-            vec![Media::from_path("2023-12-27_22-51-32.wav".into(), "2023/diary".into()).unwrap()];
+        let items = vec![
+            Media::from_path("2023-12-27_22-51-32.wav".into(), "2023/audio/diary".into()).unwrap(),
+        ];
         let priority = Arc::new(crate::work_priority::WorkPriority::default());
         let mut catalog = DiaryCatalog::with_priority(priority.clone());
         catalog.ensure(&items, "2023", Arc::new(NoReads));
@@ -1168,9 +1169,9 @@ mod tests {
     #[test]
     fn whole_year_is_prepared_in_order_and_selected_file_sets_global_start() {
         let items: Vec<_> = [
-            ("b.wav", "2026/diary"),
-            ("a.wav", "2026/diary"),
-            ("outside.wav", "2025/diary"),
+            ("b.wav", "2026/audio/diary"),
+            ("a.wav", "2026/audio/diary"),
+            ("outside.wav", "2025/audio/diary"),
         ]
         .into_iter()
         .map(|(p, g)| Media::from_path(p.into(), g.into()).unwrap())
@@ -1200,7 +1201,7 @@ mod tests {
     }
     #[test]
     fn cancel_never_opens_a_late_player() {
-        let items = vec![Media::from_path("a.wav".into(), "2026/diary".into()).unwrap()];
+        let items = vec![Media::from_path("a.wav".into(), "2026/audio/diary".into()).unwrap()];
         let mut session = DiarySession::default();
         let player = Player::default();
         session.start(&items, &items[0], Arc::new(Source)).unwrap();
@@ -1245,7 +1246,7 @@ mod tests {
         }
         let items: Vec<_> = ["bad.wav", "2026-12-01_00-00-00.wav"]
             .iter()
-            .map(|p| Media::from_path((*p).into(), "2026/diary".into()).unwrap())
+            .map(|p| Media::from_path((*p).into(), "2026/audio/diary".into()).unwrap())
             .collect();
         let source = Arc::new(SlowSource {
             calls: AtomicUsize::new(0),
@@ -1289,7 +1290,7 @@ mod tests {
     }
     #[test]
     fn closing_before_playback_cancels_waiting_verification_without_late_reopen() {
-        let items = vec![Media::from_path("a.wav".into(), "2026/diary".into()).unwrap()];
+        let items = vec![Media::from_path("a.wav".into(), "2026/audio/diary".into()).unwrap()];
         let mut session = DiarySession::default();
         let player = Player::default();
         session.start(&items, &items[0], Arc::new(Source)).unwrap();
@@ -1319,7 +1320,7 @@ mod tests {
                 unreachable!()
             }
         }
-        let items = vec![Media::from_path("a.wav".into(), "2026/diary".into()).unwrap()];
+        let items = vec![Media::from_path("a.wav".into(), "2026/audio/diary".into()).unwrap()];
         for crash in [false, true] {
             let player = Player::default();
             player.started.store(true, Ordering::Relaxed);
@@ -1345,14 +1346,13 @@ mod tests {
     #[test]
     fn player_and_draft_use_the_selected_audio_category_only() {
         let items: Vec<_> = [
-            "aud_20230101_120000.wav",
-            "comment_20230102_120000.wav",
-            "unknown.wav",
+            ("aud_20230101_120000.wav", "2023/audio/diary"),
+            ("com_20230102_120000.wav", "2023/audio/comments"),
+            ("unknown.wav", "2023/audio"),
         ]
         .into_iter()
-        .map(|name| {
-            Media::from_library_path(Path::new("2023/audio").join(name), "2023/audio".into())
-                .unwrap()
+        .map(|(name, group)| {
+            Media::from_library_path(Path::new(group).join(name), group.into()).unwrap()
         })
         .collect();
         for (group, index, count, kind) in [
@@ -1753,9 +1753,9 @@ mod gallery_tests {
     #[test]
     fn monthly_scope_includes_only_its_month_and_ignores_other_years() {
         let items: Vec<_> = [
-            ("aud_20230102_120000.wav", "2023/diary"),
-            ("aud_20230601_080000.mp3", "2023/diary"),
-            ("aud_20220601_080000.mp3", "2022/diary"),
+            ("aud_20230102_120000.wav", "2023/audio/diary"),
+            ("aud_20230601_080000.mp3", "2023/audio/diary"),
+            ("aud_20220601_080000.mp3", "2022/audio/diary"),
         ]
         .into_iter()
         .map(|(p, g)| Media::from_path(p.into(), g.into()).unwrap())

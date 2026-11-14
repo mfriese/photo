@@ -132,9 +132,23 @@ fn replace(
         temp.write_all(bytes).map_err(|e| e.to_string())?;
         temp.flush().map_err(|e| e.to_string())?;
         temp.as_file().sync_all().map_err(|e| e.to_string())?;
-        verify()
+        Ok(())
     })();
     if let Err(error) = prepared {
+        return crate::staging_fs::cleanup(temp, Err(error), "Temporäre Verwaltungsdatei");
+    }
+    // In-process writers must not both accept the same revision before either publishes.
+    static COMMIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let guard = COMMIT
+        .lock()
+        .map_err(|_| "Metadaten-Schreibsperre unterbrochen".to_string());
+    let _guard = match guard {
+        Ok(guard) => guard,
+        Err(error) => {
+            return crate::staging_fs::cleanup(temp, Err(error), "Temporäre Verwaltungsdatei");
+        }
+    };
+    if let Err(error) = verify() {
         return crate::staging_fs::cleanup(temp, Err(error), "Temporäre Verwaltungsdatei");
     }
     match temp.persist(path) {
@@ -183,6 +197,35 @@ mod tests {
         assert!(atomic_write_if_current(&path, b"second", None).is_err());
         atomic_write_if_current(&path, b"second", Some(b"first")).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"second");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod concurrent_tests {
+    use super::*;
+    #[test]
+    fn competing_workers_cannot_both_publish_the_same_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("photo.jpg.yaml");
+        fs::write(&path, b"original").unwrap();
+        let ready = std::sync::Barrier::new(3);
+        let results = std::thread::scope(|scope| {
+            let write = |bytes: &[u8]| {
+                ready.wait();
+                atomic_write_if_current(&path, bytes, Some(b"original"))
+            };
+            let a = scope.spawn(move || write(b"tags"));
+            let b = scope.spawn(move || write(b"comments"));
+            ready.wait();
+            [a.join().unwrap(), b.join().unwrap()]
+        });
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|r| r.is_err()).count(), 1);
+        assert!(
+            [b"tags".as_slice(), b"comments".as_slice()]
+                .contains(&fs::read(&path).unwrap().as_slice())
+        );
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

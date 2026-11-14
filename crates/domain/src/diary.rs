@@ -51,13 +51,11 @@ impl<'a> AudioScope<'a> {
         let mut parts = group.split(std::path::MAIN_SEPARATOR);
         let year = parts.next()?;
         let folder = parts.next()?;
-        let kind = if folder.eq_ignore_ascii_case("diary") {
-            AudioKind::Diary
-        } else if folder.eq_ignore_ascii_case("audio") {
+        let kind = if folder == "audio" {
             match parts.next() {
                 None => AudioKind::All,
-                Some(name) if name.eq_ignore_ascii_case("diary") => AudioKind::Diary,
-                Some(name) if name.eq_ignore_ascii_case("comments") => AudioKind::Comments,
+                Some("diary") => AudioKind::Diary,
+                Some("comments") => AudioKind::Comments,
                 _ => return None,
             }
         } else {
@@ -190,9 +188,7 @@ impl<'a> AudioViewScope<'a> {
 pub fn audio_year(group: &str) -> Option<&str> {
     AudioScope::parse(group).map(AudioScope::year)
 }
-/// Explicit prefixes take precedence; old category directories remain readable.
-/// Unknown filenames in the flat audio directory belong only to the combined view.
-/// Classify a projected recording path using the same directory/prefix rules as the library.
+/// Classify a recording by its canonical audio/diary or audio/comments folder.
 pub fn recording_kind(path: &Path) -> Option<AudioKind> {
     let parent = path.parent()?;
     let parts: Vec<_> = parent.components().collect();
@@ -212,34 +208,9 @@ pub fn audio_kind(media: &crate::Media) -> Option<AudioKind> {
         return None;
     }
     let scope = AudioScope::parse(media.group())?;
-    let name = media.path().file_stem()?.to_str()?;
-    if scope.kind != AudioKind::All
-        && media
-            .group()
-            .split(std::path::MAIN_SEPARATOR)
-            .nth(1)
-            .is_some_and(|folder| folder.eq_ignore_ascii_case("audio"))
-    {
-        return Some(scope.kind);
-    }
-    if name
-        .get(..4)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("com_"))
-        || name
-            .get(..8)
-            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("comment_"))
-    {
-        Some(AudioKind::Comments)
-    } else if name
-        .get(..4)
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("aud_"))
-    {
-        Some(AudioKind::Diary)
-    } else {
-        match scope.kind {
-            AudioKind::All => None,
-            kind => Some(kind),
-        }
+    match scope.kind {
+        AudioKind::All => None,
+        kind => Some(kind),
     }
 }
 #[cfg(test)]
@@ -264,44 +235,28 @@ mod scope_tests {
         crate::Media::from_library_path(Path::new(group).join(name), group.into()).unwrap()
     }
     #[test]
-    fn flat_prefixes_separate_categories_and_combined_includes_unknown_names() {
-        let all = AudioScope::parse("2023/audio").unwrap();
+    fn only_canonical_folders_define_audio_categories() {
         let diary = AudioScope::parse("2023/audio/diary").unwrap();
-        let comments = AudioScope::parse("2023/audio/comments").unwrap();
-        for (name, expected) in [
-            ("aud_20231227_225132.wav", Some(AudioKind::Diary)),
-            ("COMMENT_20231227_225132_002.mp4", Some(AudioKind::Comments)),
-            ("recorder.wav", None),
-        ] {
-            let item = media(name, "2023/audio");
-            assert_eq!(audio_kind(&item), expected);
-            assert!(all.includes(&item));
-            assert_eq!(diary.includes(&item), expected == Some(AudioKind::Diary));
-            assert_eq!(
-                comments.includes(&item),
-                expected == Some(AudioKind::Comments)
-            );
-        }
-        assert!(!all.includes(&media("aud_20231227_225132.wav", "2024/audio")));
-        assert!(!all.includes(&media("aud_20231227_225132.wav", "2023/01")));
-    }
-    #[test]
-    fn legacy_directories_are_readable_and_explicit_prefix_wins() {
-        let diary = AudioScope::parse("2023/audio/diary").unwrap();
-        for group in ["2023/diary", "2023/audio/diary"] {
-            assert!(diary.includes(&media("old.wav", group)));
-        }
-        let comment = media("comment_20230101_120000.wav", "2023/diary");
-        assert!(!diary.includes(&comment));
-        assert_eq!(audio_kind(&comment), Some(AudioKind::Comments));
+        assert!(diary.includes(&media("arbitrary.wav", "2023/audio/diary")));
+        assert_eq!(
+            audio_kind(&media("aud_20230101_120000.wav", "2023/audio/comments")),
+            Some(AudioKind::Comments)
+        );
+        assert_eq!(
+            audio_kind(&media("comment_20230101_120000.wav", "2023/audio")),
+            None
+        );
         for invalid in [
+            "2023/diary",
+            "2023/audio/c",
+            "2023/audio/d",
+            "2023/Audio/diary",
             "0000/audio",
             "20230/audio",
             "2023/audio/other",
-            "2023/diary/other",
             "2023/audio/comments/other",
         ] {
-            assert!(AudioScope::parse(invalid).is_none());
+            assert!(AudioScope::parse(invalid).is_none(), "{invalid}");
         }
     }
 }

@@ -7,7 +7,7 @@
 
 PhotoSuite macht deine nach **Jahr und Monat** geordnete Sammlung durchsuchbar – ohne Cloud oder Konto. Originalmedien bleiben standardmäßig unverändert; Tags, Kommentare und Einstellungen liegen als lesbare YAML-Dateien in deiner Bibliothek.
 
-**Status:** Umfangreicher Rust-Prototyp für macOS. Noch keine öffentlich signierte oder notarisierte Distribution, kein App-Store-Download oder Homebrew-Cask. Screenshots folgen später.
+**Status:** Umfangreicher Rust-Prototyp für macOS. Unterstützt wird ausschließlich das aktuell dokumentierte Datenformat; ältere Prototypformate werden nicht automatisch übernommen. Noch keine öffentlich signierte oder notarisierte Distribution, kein App-Store-Download oder Homebrew-Cask. Screenshots folgen später.
 
 ## Funktionen
 

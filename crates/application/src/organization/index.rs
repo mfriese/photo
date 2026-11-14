@@ -19,13 +19,12 @@ fn tags(catalog: &TagCatalog, file: &LibraryFile) -> BTreeSet<String> {
 pub fn load(repository: &dyn CatalogRepository, root: &Path) -> Result<StoredCatalog, String> {
     load_cancel(repository, root, &AtomicBool::new(false))
 }
-fn load_cancel(
+pub(super) fn load_cancel(
     repository: &dyn CatalogRepository,
     root: &Path,
     cancel: &AtomicBool,
 ) -> Result<StoredCatalog, String> {
     check(cancel)?;
-    repository.prepare_metadata_layout(root, cancel)?;
     let stored = repository.load(root)?;
     if stored.revision.is_some() || !repository.supports_file_records() {
         return Ok(stored);
@@ -35,65 +34,13 @@ fn load_cancel(
         revision: None,
     })
 }
-/// One-time, explicitly supported upgrade of existing central memberships to per-file sources.
-pub fn load_with_backfill(
-    repository: &dyn CatalogRepository,
-    root: &Path,
-) -> Result<StoredCatalog, String> {
-    load_with_backfill_cancel(repository, root, &AtomicBool::new(false))
-}
-pub(super) fn load_with_backfill_cancel(
-    repository: &dyn CatalogRepository,
-    root: &Path,
-    cancel: &AtomicBool,
-) -> Result<StoredCatalog, String> {
-    let mut stored = load_cancel(repository, root, cancel)?;
-
-    if repository.supports_file_records()
-        && stored.revision.is_some()
-        && repository.load_definitions(root)?.revision.is_none()
-    {
-        let mut desired = stored.catalog.clone();
-        for record in repository.scan_file_tags(root, cancel)? {
-            if let Some(actual) = record.tags {
-                for old in tags(&desired, &record.file) {
-                    desired.assign(&old, record.file.clone(), false)?;
-                }
-                for name in actual {
-                    if !desired.tags().contains_key(&name) {
-                        desired.create(&name)?;
-                    }
-                    desired.assign(&name, record.file.clone(), true)?;
-                }
-            }
-        }
-        stored.revision = Some(save_cancel(
-            repository,
-            root,
-            &stored.catalog,
-            &desired,
-            stored.revision.as_deref(),
-            true,
-            cancel,
-        )?);
-        stored.catalog = desired;
-    }
-    Ok(stored)
-}
 fn from_records(
     repository: &dyn CatalogRepository,
     root: &Path,
     cancel: &AtomicBool,
 ) -> Result<TagCatalog, String> {
     let definitions = repository.load_definitions(root)?;
-    let mut catalog = if definitions.revision.is_none() {
-        repository
-            .load(root)
-            .map(|s| s.catalog.definitions())
-            .unwrap_or_default()
-    } else {
-        definitions.catalog.definitions()
-    };
+    let mut catalog = definitions.catalog.definitions();
     for record in repository.scan_file_tags(root, cancel)? {
         for name in record.tags.into_iter().flatten() {
             if !catalog.tags().contains_key(&name) {
@@ -110,7 +57,6 @@ pub fn save(
     previous: &TagCatalog,
     desired: &TagCatalog,
     revision: Option<&[u8]>,
-    seed: bool,
 ) -> Result<Vec<u8>, String> {
     save_cancel(
         repository,
@@ -118,18 +64,15 @@ pub fn save(
         previous,
         desired,
         revision,
-        seed,
         &AtomicBool::new(false),
     )
 }
-#[allow(clippy::too_many_arguments)]
 pub(super) fn save_cancel(
     repository: &dyn CatalogRepository,
     root: &Path,
     previous: &TagCatalog,
     desired: &TagCatalog,
     revision: Option<&[u8]>,
-    seed: bool,
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
     check(cancel)?;
@@ -139,41 +82,39 @@ pub(super) fn save_cancel(
     if repository.index_revision(root)?.as_deref() != revision {
         return Err("Tagindex wurde extern verändert; Einzeldateien bleiben erhalten".into());
     }
-    if repository.supports_file_records() {
-        let definitions = repository.load_definitions(root)?;
-        if definitions.revision.is_some()
-            && definitions.catalog != previous.definitions()
-            && definitions.catalog != desired.definitions()
-        {
-            return Err("Tagdefinitionen wurden extern verändert".into());
-        }
-        for file in previous.files().union(&desired.files()) {
-            check(cancel)?;
-            let old = tags(previous, file);
-            let new = tags(desired, file);
-            if !seed && old == new {
-                continue;
-            }
-            let current = repository.read_file_tags(root, file)?;
-            if let Some(actual) = &current.tags
-                && actual != &old
-                && actual != &new
-            {
-                return Err(format!(
-                    "Tags der Einzeldatei wurden extern verändert: {}",
-                    file.as_str()
-                ));
-            }
-            if current.tags.as_ref() != Some(&new) {
-                repository.write_file_tags(root, file, &new, current.revision.as_deref())?;
-            }
-        }
-        repository.save_definitions(
-            root,
-            &desired.definitions(),
-            definitions.revision.as_deref(),
-        )?;
+    let definitions = repository.load_definitions(root)?;
+    if definitions.revision.is_some()
+        && definitions.catalog != previous.definitions()
+        && definitions.catalog != desired.definitions()
+    {
+        return Err("Tagdefinitionen wurden extern verändert".into());
     }
+    for file in previous.files().union(&desired.files()) {
+        check(cancel)?;
+        let old = tags(previous, file);
+        let new = tags(desired, file);
+        if old == new {
+            continue;
+        }
+        let current = repository.read_file_tags(root, file)?;
+        if let Some(actual) = &current.tags
+            && actual != &old
+            && actual != &new
+        {
+            return Err(format!(
+                "Tags der Einzeldatei wurden extern verändert: {}",
+                file.as_str()
+            ));
+        }
+        if current.tags.as_ref() != Some(&new) {
+            repository.write_file_tags(root, file, &new, current.revision.as_deref())?;
+        }
+    }
+    repository.save_definitions(
+        root,
+        &desired.definitions(),
+        definitions.revision.as_deref(),
+    )?;
     check(cancel)?;
     repository.save(root, desired, revision)
 }
@@ -186,7 +127,6 @@ pub(super) fn rebuild_cancel(
     cancel: &AtomicBool,
 ) -> Result<StoredCatalog, String> {
     check(cancel)?;
-    repository.prepare_metadata_layout(root, cancel)?;
     let revision = repository.index_revision(root)?;
     let catalog = from_records(repository, root, cancel)?;
     check(cancel)?;
@@ -222,7 +162,7 @@ impl ImportTags {
             .iter()
             .map(|n| crate::domain::tags::normalize_tag_name(n))
             .collect::<Result<_, _>>()?;
-        let stored = load_with_backfill_cancel(repository.as_ref(), &root, cancel)?;
+        let stored = load_cancel(repository.as_ref(), &root, cancel)?;
         Ok(Self {
             repository,
             root,

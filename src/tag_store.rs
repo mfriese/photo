@@ -44,7 +44,7 @@ fn decode(bytes: &[u8]) -> Result<TagCatalog, String> {
             ));
         }
     }
-    if object.get("version").is_some_and(|v| v.as_u64() != Some(1)) {
+    if object.get("version").and_then(|v| v.as_u64()) != Some(1) {
         return Err("Unbekannte Tag-Version; Datei bleibt unverändert".into());
     }
     let tags: BTreeMap<String, Vec<String>> = object
@@ -78,13 +78,6 @@ fn encode(catalog: &TagCatalog) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 impl CatalogRepository for YamlTags {
-    fn prepare_metadata_layout(
-        &self,
-        root: &Path,
-        cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<(), String> {
-        crate::media_records_fs::prepare_layout(root, cancel, &self.priority)
-    }
     fn supports_file_records(&self) -> bool {
         true
     }
@@ -97,7 +90,7 @@ impl CatalogRepository for YamlTags {
         let revision = crate::media_records_fs::read(&path)?;
         let tags = if let Some(bytes) = &revision {
             let record = crate::media_records_fs::parse(bytes)?;
-            if record.photo != file.as_str() {
+            if record.file != file.as_str() {
                 return Err("Medien-YAML gehört zu einer anderen Datei".into());
             }
             record.tags
@@ -293,8 +286,9 @@ mod tests {
         for text in [
             "tags: [",
             "version: 2\ntags: {}\n",
-            "tags: {a: [../outside.jpg]}\nalbums: [a]\n",
-            "tags: {}\nalbums: [missing]\n",
+            "tags: {}\nalbums: []\n",
+            "version: 1\ntags: {a: [../outside.jpg]}\nalbums: [a]\n",
+            "version: 1\ntags: {}\nalbums: [missing]\n",
             "tags: {}\ncustom: true\n",
         ] {
             fs::write(dir.path().join(FILE), text).unwrap();
@@ -308,11 +302,11 @@ mod tests {
         }
         fs::write(
             dir.path().join(FILE),
-            "tags: {a: [2023/a.jpg]}\nalbums: [a]\n",
+            "version: 1\ntags: {a: [2023/a.jpg]}\nalbums: [a]\n",
         )
         .unwrap();
         let loaded = YamlTags::default().load(dir.path()).unwrap();
-        let external = "tags: {b: []}\nalbums: [b]\n";
+        let external = "version: 1\ntags: {b: []}\nalbums: [b]\n";
         fs::write(dir.path().join(FILE), external).unwrap();
         assert!(
             YamlTags::default()
@@ -363,7 +357,7 @@ mod file_record_tests {
         .unwrap()
     }
     #[test]
-    fn backfill_and_both_writers_preserve_tags_comments_and_rebuild_definitions() {
+    fn both_writers_preserve_tags_comments_and_rebuild_definitions() {
         let root = tempfile::tempdir().unwrap();
         let tags = YamlTags::default();
         let comments = crate::comments_fs::YamlComments {
@@ -374,11 +368,11 @@ mod file_record_tests {
         catalog.assign("scan", file(), true).unwrap();
         catalog.set_album("scan", true).unwrap();
         catalog.create("empty").unwrap();
-        tags.save(root.path(), &catalog, None).unwrap();
+        index::save(&tags, root.path(), &TagCatalog::default(), &catalog, None).unwrap();
         comments
             .write_photo_record(root.path(), &comment(1))
             .unwrap();
-        let stored = index::load_with_backfill(&tags, root.path()).unwrap();
+        let stored = index::load(&tags, root.path()).unwrap();
         assert_eq!(stored.catalog, catalog);
         let path = crate::media_records_fs::path(root.path(), &file(), false).unwrap();
         let record = crate::media_records_fs::parse(&fs::read(&path).unwrap()).unwrap();
@@ -424,7 +418,6 @@ mod file_record_tests {
             &catalog,
             &cleared,
             rebuilt.revision.as_deref(),
-            false,
         )
         .unwrap();
         let rebuilt = index::rebuild(&tags, root.path()).unwrap();

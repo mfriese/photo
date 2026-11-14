@@ -151,11 +151,11 @@ mod tests {
     #[test]
     fn appledouble_companions_are_not_media_but_other_hidden_media_remain_supported() {
         for name in ["._aud_20231227_225132.wav", "._photo.jpg", "._video.mp4"] {
-            assert!(Media::from_path(name.into(), "2023/diary".into()).is_none());
-            assert!(Media::from_library_path(name.into(), "2023/diary".into()).is_none());
-            assert!(Media::from_audio_asset(name.into(), "2023/diary".into()).is_none());
+            assert!(Media::from_path(name.into(), "2023/audio/diary".into()).is_none());
+            assert!(Media::from_library_path(name.into(), "2023/audio/diary".into()).is_none());
+            assert!(Media::from_audio_asset(name.into(), "2023/audio/diary".into()).is_none());
         }
-        assert!(Media::from_path(".recording.wav".into(), "2023/diary".into()).is_some());
+        assert!(Media::from_path(".recording.wav".into(), "2023/audio/diary".into()).is_some());
     }
     #[test]
     fn media_kind_cannot_disagree_with_supported_extension() {

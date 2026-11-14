@@ -1,7 +1,6 @@
-//! Shared outer-layer settings codec for legacy plist migration and YAML.
+//! Settings codec used by the current library YAML adapter.
 use photosuite_application::preferences::{Preferences, Shortcut};
 use plist::{Dictionary, Value};
-use std::path::PathBuf;
 pub(crate) fn encode(p: &Preferences) -> Value {
     let mut d = Dictionary::new();
     d.insert("version".into(), Value::Integer(1.into()));
@@ -18,12 +17,6 @@ pub(crate) fn encode(p: &Preferences) -> Value {
         "preview_size".into(),
         Value::Integer((p.preview_size as u64).into()),
     );
-    if let Some(path) = &p.last_library {
-        d.insert(
-            "last_library".into(),
-            Value::String(path.to_string_lossy().into_owned()),
-        );
-    }
     let mut bindings = Dictionary::new();
     for (command, shortcut) in &p.shortcuts {
         let value = if let Some(s) = shortcut {
@@ -51,9 +44,7 @@ pub(crate) fn decode(value: Value) -> Result<Preferences, String> {
     let d = value
         .into_dictionary()
         .ok_or("Preferences müssen eine Key-Value-Liste sein")?;
-    if let Some(version) = d.get("version")
-        && version.as_unsigned_integer() != Some(1)
-    {
+    if d.get("version").and_then(Value::as_unsigned_integer) != Some(1) {
         return Err("Unbekannte Preferences-Version; Datei bleibt unverändert".into());
     }
     let mut p = Preferences::default();
@@ -76,18 +67,24 @@ pub(crate) fn decode(value: Value) -> Result<Preferences, String> {
             .filter(|n| *n <= 4)
             .ok_or("preview_size muss zwischen 0 und 4 liegen")? as usize;
     }
-    if let Some(v) = d.get("last_library") {
-        p.last_library = Some(PathBuf::from(
-            v.as_string().ok_or("Ungültiger Bibliothekspfad")?,
-        ));
-    }
     if let Some(v) = d.get("shortcuts") {
         for (command, value) in v.as_dictionary().ok_or("Ungültige Tastenkürzelliste")? {
+            if !photosuite_domain::commands::ALL
+                .iter()
+                .any(|known| known.id() == command)
+            {
+                return Err(format!("Unbekannter Befehl in Tastenkürzeln: {command}"));
+            }
             if value.as_boolean() == Some(false) {
                 p.shortcuts.insert(command.clone(), None);
                 continue;
             }
             let b = value.as_dictionary().ok_or("Ungültiges Tastenkürzel")?;
+            if b.keys().any(|key| {
+                !["key", "alt", "ctrl", "shift", "command", "mac_cmd"].contains(&key.as_str())
+            }) {
+                return Err("Unbekanntes Feld im Tastenkürzel; Datei bleibt unverändert".into());
+            }
             let flag = |k: &str| -> Result<bool, String> {
                 b.get(k)
                     .map(|v| {

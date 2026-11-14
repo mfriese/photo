@@ -9,32 +9,63 @@ use std::{
 const SETTINGS: &str = "yaml/settings.yaml";
 const MAX_SETTINGS: u64 = 64 * 1024;
 pub struct LibraryPreferences {
-    legacy: std::sync::Arc<dyn PreferencesStore>,
     locator: PathBuf,
 }
 impl LibraryPreferences {
-    pub fn locator_path(legacy_path: &Path) -> PathBuf {
-        if legacy_path
-            .file_name()
-            .is_some_and(|n| n == "de.photosuite.PhotoSuite.settings.plist")
-        {
-            legacy_path.with_file_name("de.photosuite.PhotoSuite.library.plist")
-        } else {
-            legacy_path.with_extension("location.plist")
-        }
+    pub fn user_path() -> Result<PathBuf, String> {
+        let home = std::env::var_os("HOME").ok_or("Benutzerverzeichnis nicht verfügbar")?;
+        Ok(PathBuf::from(home).join("Library/Preferences/de.photosuite.PhotoSuite.library.plist"))
     }
-    pub fn new(locator: PathBuf, legacy: std::sync::Arc<dyn PreferencesStore>) -> Self {
-        Self { legacy, locator }
+    pub fn new(locator: PathBuf) -> Self {
+        Self { locator }
     }
     fn local(&self) -> Result<Preferences, String> {
         match fs::symlink_metadata(&self.locator) {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-                crate::preferences_codec::decode(
-                    plist::Value::from_file(&self.locator).map_err(|e| e.to_string())?,
-                )
+                let mut bytes = Vec::new();
+                fs::File::open(&self.locator)
+                    .map_err(|e| e.to_string())?
+                    .take(MAX_SETTINGS + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|e| e.to_string())?;
+                if bytes.len() as u64 > MAX_SETTINGS {
+                    return Err("Bibliotheks-Verweis überschreitet 64 KiB".into());
+                }
+                let value = plist::Value::from_reader(std::io::Cursor::new(bytes))
+                    .map_err(|e| e.to_string())?;
+                let dictionary = value
+                    .as_dictionary()
+                    .ok_or("Ungültiger Bibliotheks-Verweis")?;
+                if dictionary
+                    .get("version")
+                    .and_then(plist::Value::as_unsigned_integer)
+                    != Some(1)
+                    || dictionary
+                        .keys()
+                        .any(|k| !["version", "last_library"].contains(&k.as_str()))
+                {
+                    return Err(
+                        "Unbekanntes Format des Bibliotheks-Verweises; Datei bleibt unverändert"
+                            .into(),
+                    );
+                }
+                let last_library = dictionary
+                    .get("last_library")
+                    .map(|v| {
+                        let path = v
+                            .as_string()
+                            .filter(|s| !s.is_empty())
+                            .ok_or("Ungültiger Bibliothekspfad")?;
+                        Ok::<_, String>(PathBuf::from(path))
+                    })
+                    .transpose()?;
+                Ok(Preferences {
+                    last_library,
+                    ..Default::default()
+                })
             }
             Ok(_) => Err("Bibliotheks-Verweis ist keine reguläre Datei".into()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.legacy.load(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Preferences::default()),
             Err(e) => Err(e.to_string()),
         }
     }
@@ -119,8 +150,9 @@ fn read_yaml(root: &Path) -> Result<Option<Preferences>, String> {
     crate::preferences_codec::decode(plist).map(Some)
 }
 fn yaml(preferences: &Preferences) -> Result<String, String> {
-    let mut value = serde_json::to_value(crate::preferences_codec::encode(preferences))
-        .map_err(|e| e.to_string())?;
+    let encoded = crate::preferences_codec::encode(preferences);
+    crate::preferences_codec::decode(encoded.clone())?;
+    let mut value = serde_json::to_value(encoded).map_err(|e| e.to_string())?;
     let object = value
         .as_object_mut()
         .ok_or("Einstellungen sind keine Key-Value-Liste")?;
@@ -145,16 +177,9 @@ impl PreferencesStore for LibraryPreferences {
         self.initial(explicit)
     }
     fn load_library(&self, root: &Path) -> Result<Option<Preferences>, String> {
-        match read_yaml(root)? {
-            Some(p) => Ok(Some(p)),
-            None => {
-                let mut seed = self.legacy.load()?;
-                seed.last_library = None;
-                seed.library_scope = None;
-                Ok(Some(seed))
-            }
-        }
+        Ok(Some(read_yaml(root)?.unwrap_or_default()))
     }
+
     fn save(&self, preferences: &Preferences) -> Result<(), String> {
         if let Some(root) = &preferences.library_scope {
             // Validate existing content before any replacement, including unknown versions/keys.
@@ -176,6 +201,9 @@ impl PreferencesStore for LibraryPreferences {
             let mut dictionary = plist::Dictionary::new();
             dictionary.insert("version".into(), plist::Value::Integer(1.into()));
             if let Some(path) = &preferences.last_library {
+                if path.as_os_str().is_empty() {
+                    return Err("Ungültiger leerer Bibliothekspfad".into());
+                }
                 dictionary.insert(
                     "last_library".into(),
                     plist::Value::String(path.to_string_lossy().into_owned()),
@@ -185,6 +213,9 @@ impl PreferencesStore for LibraryPreferences {
             plist::Value::Dictionary(dictionary)
                 .to_writer_xml(&mut bytes)
                 .map_err(|e| e.to_string())?;
+            if bytes.len() as u64 > MAX_SETTINGS {
+                return Err("Bibliotheks-Verweis überschreitet 64 KiB".into());
+            }
             atomic_write(&self.locator, &bytes)
         }
     }
@@ -194,10 +225,7 @@ impl PreferencesStore for LibraryPreferences {
 mod tests {
     use super::*;
     fn store_at(path: PathBuf) -> LibraryPreferences {
-        LibraryPreferences::new(
-            LibraryPreferences::locator_path(&path),
-            std::sync::Arc::new(crate::preferences_fs::PlistPreferences::at(path)),
-        )
+        LibraryPreferences::new(path.with_extension("location.plist"))
     }
     use photosuite_application::preferences::Shortcut;
     #[test]
@@ -344,7 +372,7 @@ mod tests {
         assert_eq!(loaded.library_scope, Some(chosen));
     }
     #[test]
-    fn yaml_roundtrip_migrates_settings_but_only_locator_is_saved_locally() {
+    fn yaml_roundtrip_keeps_settings_in_library_and_only_locator_locally() {
         let directory = tempfile::tempdir().unwrap();
         let legacy_path = directory.path().join("prefs.plist");
         let root = directory.path().join("library");
@@ -371,11 +399,18 @@ mod tests {
                 mac_cmd: true,
             }),
         );
-        crate::preferences_fs::PlistPreferences::at(legacy_path.clone())
-            .save(&legacy)
-            .unwrap();
+        fs::write(&legacy_path, b"unsupported old preferences").unwrap();
         let original = fs::read(&legacy_path).unwrap();
         let store = store_at(legacy_path.clone());
+        let mut settings = legacy.clone();
+        settings.library_scope = Some(root.clone());
+        store.save(&settings).unwrap();
+        store
+            .save(&Preferences {
+                last_library: Some(root.clone()),
+                ..Default::default()
+            })
+            .unwrap();
         let (mut loaded, warning) = store.load_with_status().unwrap();
         assert!(warning.is_none());
         assert_eq!(loaded.preview_size, 4);
@@ -524,5 +559,55 @@ mod tests {
         fs::write(root.join(SETTINGS), b"").unwrap();
         assert!(store.save(&settings).is_err());
         assert!(fs::read(root.join(SETTINGS)).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod locator_validation_tests {
+    use super::*;
+    #[test]
+    fn unsupported_or_oversized_local_locator_is_preserved() {
+        let directory = tempfile::tempdir().unwrap();
+        let locator = directory.path().join("library.plist");
+        let store = LibraryPreferences::new(locator.clone());
+        for dictionary in [
+            "<dict><key>last_library</key><string>/Fotos</string></dict>",
+            "<dict><key>version</key><integer>1</integer><key>preview_size</key><integer>4</integer></dict>",
+            "<dict><key>version</key><integer>2</integer></dict>",
+            "<dict><key>version</key><integer>1</integer><key>last_library</key><string></string></dict>",
+        ] {
+            let bytes =
+                format!("<?xml version=\"1.0\"?><plist version=\"1.0\">{dictionary}</plist>")
+                    .into_bytes();
+            fs::write(&locator, &bytes).unwrap();
+            assert!(store.load().is_err());
+            assert!(store.save(&Preferences::default()).is_err());
+            assert_eq!(fs::read(&locator).unwrap(), bytes);
+        }
+        let bytes = vec![b' '; MAX_SETTINGS as usize + 1];
+        fs::write(&locator, &bytes).unwrap();
+        assert!(store.load().unwrap_err().contains("64 KiB"));
+        assert!(store.save(&Preferences::default()).is_err());
+        assert_eq!(fs::read(locator).unwrap(), bytes);
+    }
+    #[test]
+    fn unknown_shortcut_fields_are_not_silently_discarded() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("yaml")).unwrap();
+        let path = root.path().join(SETTINGS);
+        let bytes =
+            b"version: 1\nshortcuts:\n  rotate_left:\n    key: L\n    future_modifier: true\n";
+        fs::write(&path, bytes).unwrap();
+        let store = LibraryPreferences::new(root.path().join("library.plist"));
+        assert!(store.load_library(root.path()).is_err());
+        assert!(
+            store
+                .save(&Preferences {
+                    library_scope: Some(root.path().into()),
+                    ..Default::default()
+                })
+                .is_err()
+        );
+        assert_eq!(fs::read(path).unwrap(), bytes);
     }
 }

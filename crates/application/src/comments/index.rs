@@ -14,7 +14,6 @@ pub fn load<R: CommentRepository + ?Sized>(
     cancel: &AtomicBool,
 ) -> Result<StoredComments, String> {
     check_cancel(cancel)?;
-    repository.prepare_metadata_layout(root, cancel)?;
     match repository.read_cache(root)? {
         CommentCache::Current(stored) => {
             check_cancel(cancel)?;
@@ -32,19 +31,15 @@ pub fn load<R: CommentRepository + ?Sized>(
                 revision: None,
             })
         }
-        CommentCache::Obsolete => {
-            rebuild(repository, root, cancel, &|_| {}).map(|(stored, _)| stored)
-        }
     }
 }
-pub(super) fn rebuild<R: CommentRepository + ?Sized>(
+pub fn rebuild<R: CommentRepository + ?Sized>(
     repository: &R,
     root: &Path,
     cancel: &AtomicBool,
     progress: &dyn Fn(RebuildProgress),
 ) -> Result<(StoredComments, String), String> {
     check_cancel(cancel)?;
-    repository.prepare_metadata_layout(root, cancel)?;
     let base = repository.rebuild_base(root)?;
     let entries = repository.scan_photo_records(root, cancel, progress)?;
     let mut catalog = CommentCatalog::default();
@@ -98,7 +93,7 @@ mod tests {
     }
     impl CommentRepository for Repository {
         fn read_cache(&self, _: &Path) -> Result<CommentCache, String> {
-            Ok(CommentCache::Obsolete)
+            Ok(CommentCache::Missing)
         }
         fn write_photo_record(&self, _: &Path, _: &Comment) -> Result<CommentCatalog, String> {
             Ok(self.record.clone())

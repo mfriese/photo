@@ -50,11 +50,11 @@ mod tests {
     #[test]
     fn diary_audio_stays_out_of_photo_wall_and_video_filter_does_not_hide_diary() {
         let items = vec![
-            Media::from_path("a.wav".into(), "2026/diary".into()).unwrap(),
+            Media::from_path("a.wav".into(), "2026/audio/diary".into()).unwrap(),
             Media::from_path("a.jpg".into(), "2026/01".into()).unwrap(),
         ];
         assert_eq!(visible(&items, "", None, false), vec![1]);
-        assert_eq!(visible(&items, "", Some("2026/diary"), true), vec![0]);
+        assert_eq!(visible(&items, "", Some("2026/audio/diary"), true), vec![0]);
     }
     #[test]
     fn year_selection_includes_months_without_matching_other_years() {
@@ -98,7 +98,11 @@ mod photo_location_tests {
     fn contextual_photo_uses_its_own_year_and_rejects_nonphotos_or_stale_paths() {
         let items = vec![
             Media::from_path("/Photos/2021/12/a.jpg".into(), "2021/12".into()).unwrap(),
-            Media::from_path("/Photos/2023/diary/a.wav".into(), "2023/diary".into()).unwrap(),
+            Media::from_path(
+                "/Photos/2023/audio/diary/a.wav".into(),
+                "2023/audio/diary".into(),
+            )
+            .unwrap(),
         ];
         let location = locate_photo(&items, items[0].path()).unwrap();
         assert_eq!(location.year.as_deref(), Some("2021"));
@@ -119,12 +123,12 @@ mod photo_location_tests {
 mod flat_audio_tests {
     use super::*;
     #[test]
-    fn same_folder_is_filtered_by_kind_and_legacy_diary_is_included() {
+    fn canonical_folders_are_filtered_by_kind() {
         let items: Vec<_> = [
-            ("aud_20230101_120000.wav", "2023/audio"),
-            ("comment_20230101_120000.mp4", "2023/audio"),
+            ("aud_20230101_120000.wav", "2023/audio/diary"),
+            ("com_20230101_120000.mp4", "2023/audio/comments"),
             ("unknown.wav", "2023/audio"),
-            ("old.wav", "2023/diary"),
+            ("old.wav", "2023/audio/diary"),
             ("img_20230101_120000.jpg", "2023/01"),
         ]
         .into_iter()
@@ -144,10 +148,7 @@ mod flat_audio_tests {
             visible(&items, "", Some("2023/audio/comments"), false),
             vec![1]
         );
-        assert_eq!(
-            visible(&items, "comment", Some("2023/audio"), false),
-            vec![1]
-        );
+        assert_eq!(visible(&items, "com_", Some("2023/audio"), false), vec![1]);
         assert_eq!(visible(&items, "", Some("2023"), false), vec![4]);
     }
 }

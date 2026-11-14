@@ -141,7 +141,7 @@ impl Persistence {
             self.flush_current();
         }
     }
-    /// One replaceable pending snapshot per scope; unchanged startup snapshots include migration.
+    /// One replaceable pending snapshot per scope; unchanged startup snapshots are still persisted.
     pub fn flush_current(&mut self) {
         if self
             .worker

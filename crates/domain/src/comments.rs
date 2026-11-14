@@ -266,10 +266,13 @@ mod tests {
             c.recorded_at().target(Path::new("/library"), 1),
             PathBuf::from("/library/2026/audio/comments/com_20261112_153000_001.m4a")
         );
-        let m = Media::from_audio_asset(PathBuf::from(c.audio().as_str()), "2026/audio".into())
-            .unwrap()
-            .with_comment_recording(Some(&c));
-        assert_eq!(m.group(), "2026/audio");
+        let m = Media::from_audio_asset(
+            PathBuf::from(c.audio().as_str()),
+            "2026/audio/comments".into(),
+        )
+        .unwrap()
+        .with_comment_recording(Some(&c));
+        assert_eq!(m.group(), "2026/audio/comments");
         assert_eq!(m.recording_time().unwrap().stamp(), "20261112_153000");
         assert_eq!(
             crate::capture_from_filename(&m).unwrap().stamp(),

@@ -26,7 +26,6 @@ mod metadata_fs;
 mod muda_menu;
 mod options_ui;
 mod preferences_codec;
-mod preferences_fs;
 mod presentation;
 mod staging_fs;
 mod storyboard_ui;
@@ -65,7 +64,7 @@ fn main() -> eframe::Result {
     let preferences_path = match std::env::var_os("PHOTOSUITE_PREFERENCES_PATH")
         .map(std::path::PathBuf::from)
         .map(Ok)
-        .unwrap_or_else(preferences_fs::PlistPreferences::user_path)
+        .unwrap_or_else(library_preferences_fs::LibraryPreferences::user_path)
     {
         Ok(path) => path,
         Err(error) => {
@@ -102,8 +101,7 @@ fn main() -> eframe::Result {
         video_player: std::sync::Arc::new(video::NativeVideoPlayer),
         video_preview: video_preview.clone(),
         preferences: std::sync::Arc::new(library_preferences_fs::LibraryPreferences::new(
-            library_preferences_fs::LibraryPreferences::locator_path(&preferences_path),
-            std::sync::Arc::new(preferences_fs::PlistPreferences::at(preferences_path)),
+            preferences_path,
         )),
         import_cleanup: std::sync::Arc::new(import_cleanup_fs::SafeImportCleanup {
             trash: std::sync::Arc::new(import_cleanup_fs::NativeTrash),

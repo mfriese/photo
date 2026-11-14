@@ -223,11 +223,11 @@ mod tests {
         assert_eq!(bindings.export(), original);
     }
     #[test]
-    fn old_preferences_keep_space_for_playback() {
+    fn partial_preferences_keep_default_unassigned_commands() {
         let mut bindings = CommandBindings::default();
-        let mut legacy = bindings.export();
-        legacy.remove("play_video");
-        bindings.restore(&legacy).unwrap();
+        let mut partial = bindings.export();
+        partial.remove("play_video");
+        bindings.restore(&partial).unwrap();
         let shortcut = bindings.export()["play_video"].clone().unwrap();
         assert_eq!(shortcut.key, "Space");
         assert!(!shortcut.alt && !shortcut.command && !shortcut.ctrl);

@@ -104,22 +104,10 @@ fn encode(catalog: &CommentCatalog) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-/// Detect only obsolete cache versions; no legacy references are decoded or migrated.
-fn obsolete_cache(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(|text| serde_saphyr::from_str::<serde_json::Value>(text).ok())
-        .and_then(|value| value.get("version").and_then(serde_json::Value::as_u64))
-        .is_some_and(|version| [1, 2].contains(&version))
-}
 impl CommentRepository for YamlComments {
-    fn prepare_metadata_layout(&self, root: &Path, cancel: &AtomicBool) -> Result<(), String> {
-        crate::media_records_fs::prepare_layout(root, cancel, &self.priority)
-    }
     fn read_cache(&self, root: &Path) -> Result<CommentCache, String> {
         match read(root)? {
             None => Ok(CommentCache::Missing),
-            Some(bytes) if obsolete_cache(&bytes) => Ok(CommentCache::Obsolete),
             Some(bytes) => Ok(CommentCache::Current(StoredComments {
                 catalog: decode(&bytes)?,
                 revision: Some(bytes),
@@ -307,9 +295,7 @@ mod tests {
             )
             .unwrap();
             let before = stored.revision.unwrap();
-            // This test targets rebuilding an already upgraded library, not the first layout upgrade.
-            repo.prepare_metadata_layout(root.path(), &AtomicBool::new(false))
-                .unwrap();
+            // Cached references remain viewable; rebuilding still rejects symlinked sources.
             let moved = outside.path().join("held");
             fs::rename(root.path().join(ancestor), &moved).unwrap();
             std::os::unix::fs::symlink(&moved, root.path().join(ancestor)).unwrap();
@@ -339,7 +325,7 @@ mod tests {
         assert!(!root.path().join(comment.sidecar().as_str()).exists());
     }
     #[test]
-    fn obsolete_cache_never_blocks_photo_recording_and_rebuilds_only_new_sources() {
+    fn unsupported_cache_requires_explicit_rebuild_and_preserves_original_bytes() {
         let root = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
         let target = photo(root.path(), "2008/09/photo.jpg");
@@ -348,7 +334,10 @@ mod tests {
         repo.write_photo_record(root.path(), &comment).unwrap();
         let old=b"# old cache\nversion: 2\ncomments:\n  invalid-old-id:\n    audio: 2020/audio/comments/old.m4a\n";
         fs::write(root.path().join(FILE), old).unwrap();
-        let loaded = load_catalog(&repo, root.path(), &AtomicBool::new(false)).unwrap();
+        assert!(load_catalog(&repo, root.path(), &AtomicBool::new(false)).is_err());
+        assert_eq!(fs::read(root.path().join(FILE)).unwrap(), old);
+        let (loaded, _) =
+            rebuild_catalog(&repo, root.path(), &AtomicBool::new(false), &|_| {}).unwrap();
         assert_eq!(loaded.catalog.entries().len(), 1);
         assert!(loaded.catalog.by_audio(comment.audio()).is_some());
         assert!(
@@ -518,7 +507,9 @@ mod tests {
         );
         fs::create_dir_all(root.path().join("yaml")).unwrap();
         fs::write(root.path().join(FILE), b"version: 2\ncomments: {}\n").unwrap();
-        let rebuilt = load_catalog(&repo, root.path(), &AtomicBool::new(false)).unwrap();
+        assert!(load_catalog(&repo, root.path(), &AtomicBool::new(false)).is_err());
+        let (rebuilt, _) =
+            rebuild_catalog(&repo, root.path(), &AtomicBool::new(false), &|_| {}).unwrap();
         assert!(rebuilt.catalog.entries().is_empty());
         assert!(
             String::from_utf8(rebuilt.revision.unwrap())

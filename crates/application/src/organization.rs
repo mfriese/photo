@@ -18,14 +18,6 @@ pub struct FileTags {
 }
 pub trait CatalogRepository: Send + Sync + 'static {
     fn load(&self, root: &Path) -> Result<StoredCatalog, String>;
-    /// One-time physical metadata layout upgrade; never changes a media file or reference.
-    fn prepare_metadata_layout(
-        &self,
-        _root: &Path,
-        _cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<(), String> {
-        Ok(())
-    }
     fn supports_file_records(&self) -> bool {
         false
     }
@@ -851,7 +843,9 @@ mod tests {
         session
             .apply(Action::Assign {
                 tag: "Urlaub".into(),
-                file: session.file(Path::new("/photos/2023/diary/a.wav")).unwrap(),
+                file: session
+                    .file(Path::new("/photos/2023/audio/diary/a.wav"))
+                    .unwrap(),
                 present: true,
             })
             .unwrap();
@@ -859,7 +853,11 @@ mod tests {
         let items = vec![
             Media::from_path("/photos/2023/01/a.jpg".into(), "2023/01".into()).unwrap(),
             Media::from_path("/photos/2024/01/a.jpg".into(), "2024/01".into()).unwrap(),
-            Media::from_path("/photos/2023/diary/a.wav".into(), "2023/diary".into()).unwrap(),
+            Media::from_path(
+                "/photos/2023/audio/diary/a.wav".into(),
+                "2023/audio/diary".into(),
+            )
+            .unwrap(),
         ];
         assert_eq!(
             visible(

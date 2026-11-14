@@ -82,20 +82,12 @@ pub struct RebuildProgress {
     pub checked: usize,
     pub phase: String,
 }
-/// Technical cache state; obsolete data never carries legacy reference values.
+/// Current cache or absent derived index. Unsupported schemas are errors.
 pub enum CommentCache {
     Current(StoredComments),
     Missing,
-    Obsolete,
 }
 pub trait CommentRepository: Send + Sync + 'static {
-    fn prepare_metadata_layout(
-        &self,
-        _root: &Path,
-        _cancel: &std::sync::atomic::AtomicBool,
-    ) -> Result<(), String> {
-        Ok(())
-    }
     fn read_cache(&self, root: &Path) -> Result<CommentCache, String>;
     /// Return the complete authoritative photo record after the revision-guarded update.
     fn write_photo_record(&self, root: &Path, comment: &Comment) -> Result<CommentCatalog, String>;
@@ -103,9 +95,6 @@ pub trait CommentRepository: Send + Sync + 'static {
         let revision = match self.read_cache(root)? {
             CommentCache::Current(stored) => stored.revision,
             CommentCache::Missing => None,
-            CommentCache::Obsolete => {
-                return Err("Adapter benötigt die rohe Indexrevision zum Neuaufbau".into());
-            }
         };
         Ok(RebuildBase {
             revision,
@@ -145,7 +134,7 @@ pub trait CommentMediaStore: Send + Sync + 'static {
     fn copy_verified(&self, source: &Path, target: &Path) -> Result<(), String>;
 }
 mod index;
-pub use index::{commit as commit_comment, load as load_catalog};
+pub use index::{commit as commit_comment, load as load_catalog, rebuild as rebuild_catalog};
 mod publication;
 pub use publication::publish_comment;
 

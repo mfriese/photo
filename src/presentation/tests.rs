@@ -275,14 +275,17 @@ fn audio_photo_event_reveals_year_without_viewer_or_focus_change() {
     let ctx = egui::Context::default();
     let mut suite = test_suite();
     suite.items = [
-        ("/Photos/2023/diary/aud_20231227_225132.wav", "2023/diary"),
+        (
+            "/Photos/2023/audio/diary/aud_20231227_225132.wav",
+            "2023/audio/diary",
+        ),
         ("/Photos/2023/12/first.jpg", "2023/12"),
         ("/Photos/2023/12/second.jpg", "2023/12"),
     ]
     .into_iter()
     .map(|(path, group)| Media::from_path(path.into(), group.into()).unwrap())
     .collect();
-    suite.group = Some("2023/diary".into());
+    suite.group = Some("2023/audio/diary".into());
     suite.query = "aud_".into();
     suite.services.audio_player = Arc::new(PhotoClick(std::sync::Mutex::new(Some(
         suite.items[1].path().into(),
@@ -334,7 +337,7 @@ fn opening_library_persists_before_scan_finishes() {
         }
     }
     let dir = tempfile::tempdir().unwrap();
-    let store = Arc::new(crate::preferences_fs::PlistPreferences::at(
+    let store = Arc::new(crate::library_preferences_fs::LibraryPreferences::new(
         dir.path().join("prefs.plist"),
     ));
     let (release, wait) = mpsc::channel();
@@ -522,11 +525,11 @@ fn diary_file_view_remains_readable_at_supported_widths() {
         crate::theme::install(&ctx);
         let mut suite = test_suite();
         suite.root = Some("/Fotos".into());
-        suite.group = Some("2026/diary".into());
+        suite.group = Some("2026/audio/diary".into());
         suite.items = vec![
             Media::from_path(
-                "/Fotos/2026/diary/aud_20260916_035811.wav".into(),
-                "2026/diary".into(),
+                "/Fotos/2026/audio/diary/aud_20260916_035811.wav".into(),
+                "2026/audio/diary".into(),
             )
             .unwrap(),
         ];
@@ -895,8 +898,7 @@ fn library_switch_restores_yaml_and_keeps_previous_edits_in_previous_library() {
     std::fs::create_dir(&b).unwrap();
     let legacy_path = directory.path().join("prefs.plist");
     let store = Arc::new(crate::library_preferences_fs::LibraryPreferences::new(
-        crate::library_preferences_fs::LibraryPreferences::locator_path(&legacy_path),
-        Arc::new(crate::preferences_fs::PlistPreferences::at(legacy_path)),
+        legacy_path,
     ));
     store
         .save(&Preferences {
@@ -959,7 +961,11 @@ fn tag_cloud_includes_non_album_tags_and_preserves_year_navigation() {
     suite.items = vec![
         Media::from_path("/Fotos/2023/01/a.jpg".into(), "2023/01".into()).unwrap(),
         Media::from_path("/Fotos/2024/01/a.jpg".into(), "2024/01".into()).unwrap(),
-        Media::from_path("/Fotos/2023/diary/a.wav".into(), "2023/diary".into()).unwrap(),
+        Media::from_path(
+            "/Fotos/2023/audio/diary/a.wav".into(),
+            "2023/audio/diary".into(),
+        )
+        .unwrap(),
     ];
     let file = suite.organization.file(suite.items[0].path()).unwrap();
     suite
@@ -1116,7 +1122,11 @@ fn tag_dialog_fits_narrow_windows_and_mixed_albums_do_not_send_audio_to_image_vi
         }
         suite.items = vec![
             Media::from_path("/Fotos/2023/01/a.jpg".into(), "2023/01".into()).unwrap(),
-            Media::from_path("/Fotos/2023/diary/a.wav".into(), "2023/diary".into()).unwrap(),
+            Media::from_path(
+                "/Fotos/2023/audio/diary/a.wav".into(),
+                "2023/audio/diary".into(),
+            )
+            .unwrap(),
         ];
         suite.selected = Some(0);
         assert_eq!(suite.viewer_items(&[0, 1]), vec![0]);
