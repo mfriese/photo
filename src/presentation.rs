@@ -133,11 +133,15 @@ impl Suite {
         let Some(index) = self.selected else {
             return;
         };
+        let Some(media) = self.items.get(index) else {
+            self.selected = None;
+            self.storyboard.clear();
+            return;
+        };
         if command == crate::commands::Command::PlayVideo {
-            if let Err(error) = photosuite_application::playback::play(
-                &self.items[index],
-                self.services.video_player.as_ref(),
-            ) {
+            if let Err(error) =
+                photosuite_application::playback::play(media, self.services.video_player.as_ref())
+            {
                 self.status = error;
             }
             return;
@@ -145,7 +149,7 @@ impl Suite {
         let context = ctx.clone();
         match self.editor.execute(
             command,
-            &self.items[index],
+            media,
             self.write_exif,
             self.services.orientation_writer.clone(),
             move || context.request_repaint(),
@@ -487,6 +491,7 @@ impl eframe::App for Suite {
             self.options_open = true;
         }
         self.poll_menu(ctx);
+        self.gallery_actions(ctx);
         self.window_title(ctx);
         self.search_dialog(ctx);
         self.status_bar(ctx);
@@ -494,7 +499,6 @@ impl eframe::App for Suite {
         self.prepare_tag_cloud();
         let visible = self.visible();
         self.photo_wall(ctx, &visible);
-        self.gallery_actions(ctx);
         let viewer_visible = self.viewer_items(&visible);
         self.media_viewer(ctx, &viewer_visible, &mut pending);
         if self.selected.is_none() {

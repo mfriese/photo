@@ -9,6 +9,11 @@ impl super::Suite {
         pending: &mut Vec<crate::commands::Command>,
     ) {
         if let Some(index) = self.selected {
+            let Some(m) = self.items.get(index).cloned() else {
+                self.selected = None;
+                self.storyboard.clear();
+                return;
+            };
             if !self.comments.is_open()
                 && !self.options_open
                 && !self.tag_view.open
@@ -23,7 +28,6 @@ impl super::Suite {
             let mut next = false;
             let mut previous = false;
             let mut open = true;
-            let m = self.items[index].clone();
             let (date, clock, date_detail) = super::captions::text(&mut self.media_dates, &m);
             egui::Window::new(format!("Großansicht · {date} {clock}"))
                 .id(egui::Id::new("media_viewer"))
@@ -257,14 +261,14 @@ impl super::Suite {
     pub(super) fn viewer_items(&self, visible: &[usize]) -> Vec<usize> {
         if let Some(index) = self.selected
             && !visible.contains(&index)
-            && self.items[index].is_photo()
+            && let Some(media) = self.items.get(index).filter(|media| media.is_photo())
         {
-            crate::application::visible(&self.items, "", Some(self.items[index].group()), false)
+            crate::application::visible(&self.items, "", Some(media.group()), false)
         } else {
             visible
                 .iter()
                 .copied()
-                .filter(|&index| !self.items[index].is_audio())
+                .filter(|&index| self.items.get(index).is_some_and(|media| !media.is_audio()))
                 .collect()
         }
     }

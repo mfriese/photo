@@ -2143,3 +2143,50 @@ impl photosuite_application::media_trash::MediaTrash for UnusedAdapters {
         panic!("UI test must not trash files")
     }
 }
+
+#[test]
+fn trash_refresh_discards_old_viewer_indices_without_panicking_or_dispatching_actions() {
+    struct Empty;
+    impl crate::ports::MediaRepository for Empty {
+        fn scan(&self, _: &std::path::Path) -> (Vec<Media>, usize) {
+            (vec![], 0)
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let mut suite = test_suite();
+    suite.services.repository = Arc::new(Empty);
+    suite.root = Some(directory.path().into());
+    suite.group = Some("2026".into());
+    suite.items =
+        vec![Media::from_path(directory.path().join("2026/11/a.jpg"), "2026/11".into()).unwrap()];
+    suite.selected = Some(0);
+    let old_visible = vec![0, 3928];
+    suite.gallery.refresh = Some(directory.path().into());
+    let ctx = egui::Context::default();
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        suite.gallery_actions(ctx);
+        assert!(suite.items.is_empty());
+        assert!(suite.visible().is_empty());
+        assert!(suite.viewer_items(&old_visible).is_empty());
+        assert_eq!(suite.group.as_deref(), Some("2026"));
+        // Also guard a stale selection arriving independently of the visible-list snapshot.
+        suite.selected = Some(3928);
+        assert!(suite.viewer_items(&old_visible).is_empty());
+        suite.media_viewer(ctx, &old_visible, &mut vec![]);
+        assert!(suite.selected.is_none());
+        suite.selected = Some(3928);
+        suite.execute(crate::commands::Command::RotateRight, ctx);
+        assert!(suite.selected.is_none());
+    });
+}
+
+#[test]
+fn viewer_projection_ignores_invalid_entries_and_audio_in_an_old_snapshot() {
+    let mut suite = test_suite();
+    suite.items = vec![
+        Media::from_path("2026/11/a.jpg".into(), "2026/11".into()).unwrap(),
+        Media::from_path("2026/audio/diary/a.wav".into(), "2026/audio/diary".into()).unwrap(),
+    ];
+    suite.selected = Some(3928);
+    assert_eq!(suite.viewer_items(&[3928, 0, 1]), vec![0]);
+}
