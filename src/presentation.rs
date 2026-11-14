@@ -4,6 +4,7 @@ mod captions;
 mod chrome;
 mod comments;
 mod diary;
+mod gallery;
 mod icons;
 mod library;
 mod menu;
@@ -17,6 +18,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc;
 pub struct Suite {
+    gallery: gallery::GalleryState,
     comments: photosuite_application::comments::CommentSession,
     comment_view: comments::CommentView,
     record_photo: Option<usize>,
@@ -117,6 +119,7 @@ impl Suite {
         }
         self.root = Some(path);
         self.items.clear();
+        self.gallery.selection.clear();
         self.known_media.clear();
         self.media_dates.clear();
         self.media_counts = Default::default();
@@ -421,6 +424,9 @@ impl eframe::App for Suite {
                     && !self.import_panel.visible
                     && !self.comments.is_open()
                     && !self.tag_view.open
+                    && self.gallery.pending.is_none()
+                    && !self.gallery.job.running()
+                    && self.gallery.report.is_none()
                     && self.settings_ready(),
             )
         };
@@ -488,6 +494,7 @@ impl eframe::App for Suite {
         self.prepare_tag_cloud();
         let visible = self.visible();
         self.photo_wall(ctx, &visible);
+        self.gallery_actions(ctx);
         let viewer_visible = self.viewer_items(&visible);
         self.media_viewer(ctx, &viewer_visible, &mut pending);
         if self.selected.is_none() {
@@ -549,6 +556,7 @@ pub fn create(
         std::env::args_os().skip(1).collect(),
     );
     Suite {
+        gallery: Default::default(),
         comments: photosuite_application::comments::CommentSession::new(
             services.comments.clone(),
             services.recorder.clone(),

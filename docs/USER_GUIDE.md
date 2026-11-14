@@ -71,7 +71,7 @@ Für Videofunktionen werden direkt verlinkte AVFoundation-/AVKit-Systemframework
 
 Mit **File → Open Library…** einen Ordner öffnen, Jahre aufklappen und ganze Jahre oder vorhandene Monate auswählen. **Edit → Find… (⌘F)** filtert Pfade/Dateinamen, **View → Videos Only** filtert Videos. Die Fotowand rendert nur sichtbare Zeilen. Fünf Vorschaugrößen unter **View → Thumbnail Size** nutzen die gesamte Breite; die letzte Zeile behält dieselbe Kachelgröße. „Quadratische Vorschau“ schaltet zwischen zentriertem Beschnitt und vollständigem Bild im Seitenverhältnis um. Die Jahresnavigation lässt sich ausblenden.
 
-Ein Klick öffnet die Großansicht. Pfeiltasten wechseln Medien; Escape schließt sie. Videos zeigen ein Vorschaubild aus dem ersten verfügbaren Frame mit beachteter Track-Ausrichtung und maximal 640 × 640 Pixeln; Wiedergabe kann im eigenen nativen Player oder im Standardprogramm erfolgen. Unterstützte Bildformate: JPEG, PNG, WebP, TIFF, GIF, BMP. Erkannte Videos: MP4, MOV, M4V, MKV, AVI, WebM; Erkennung garantiert keinen verfügbaren Decoder.
+Ein Doppelklick öffnet die Großansicht; ein Klick wählt die Datei aus. Pfeiltasten wechseln Medien; Escape schließt sie. Videos zeigen ein Vorschaubild aus dem ersten verfügbaren Frame mit beachteter Track-Ausrichtung und maximal 640 × 640 Pixeln; Wiedergabe kann im eigenen nativen Player oder im Standardprogramm erfolgen. Unterstützte Bildformate: JPEG, PNG, WebP, TIFF, GIF, BMP. Erkannte Videos: MP4, MOV, M4V, MKV, AVI, WebM; Erkennung garantiert keinen verfügbaren Decoder.
 
 ## Import Schritt für Schritt
 
@@ -311,7 +311,7 @@ Audio-Kategorien verwenden ausschließlich Jahr/audio/diary und Jahr/audio/comme
 Ein aufgeklapptes Jahr zeigt direkt alle Monate. Der Jahresklick wählt die Jahresfotowand. Die obere Hörleiste öffnet die Jahreswiedergabe; im Playerfenster kann zwischen Tagebuch, Kommentare und Beide gewählt werden. Kontextfotos aus der Audiowiedergabe öffnen bei Bedarf das betreffende Jahr und markieren das Bild in der Fotowand. Keine zusätzliche Photos-Ebene.
 
 ### Tagwolke, Aufnahmedaten und Audioüberschrift
-Die linke Spalte beginnt mit „Alles“, danach folgen die Jahre. Unter ihnen zeigt Tags alle Tags als Wolke; kurze Namen teilen eine Zeile, längere werden umgebrochen beziehungsweise bei Platzmangel mit Tooltip gekürzt. Anklicken wählt einen Tag, erneutes Anklicken entfernt den Filter. Verwalten und Konfigurieren über Edit → Tags and Albums…; bestehende Kontextaktionen an einzelnen Medien bleiben verfügbar.
+Die linke Spalte beginnt mit „Alles“, danach folgen die Jahre. Unter ihnen zeigt Tags alle Tags alphabetisch untereinander; lange Namen werden bei Platzmangel mit Tooltip gekürzt. Anklicken wählt einen Tag, erneutes Anklicken entfernt den Filter. Verwalten und Konfigurieren über Edit → Tags and Albums…; bestehende Kontextaktionen an einzelnen Medien bleiben verfügbar.
 
 Unter Fotos stehen Datum und Uhrzeit statt des Dateinamens. Für korrekt benannte Dateien sofort, für andere nach kurzer Hintergrundprüfung. Ohne gültige Metadaten wird kein Datum geraten. Name, Pfad, Datumsquelle und Fehler finden sich im Tooltip. Neben der Datums-/Monats-/Jahresüberschrift steht nur noch Play/Pause und die Audioachse. Den separaten Player öffnet Window → Audio Player; einen anderen aktuellen Audiobereich startet View → Play Audio for Current View.
 
@@ -410,3 +410,18 @@ Alle dateibezogenen YAMLs liegen unter `yaml/Jahr/Monat/<vollständiger Dateinam
 Das Feld file und die Kommentarverweise bleiben vollständige bibliotheksrelative Medienpfade. Echte Medien bleiben unverändert unter Jahr/Monat beziehungsweise Jahr/audio/diary und Jahr/audio/comments. Globale Einstellungen, Definitionen und Indizes bleiben direkt unter yaml/.
 
 Keine automatische YAML-Umsortierung, Schemaerweiterung oder layout.yaml-Markierung. Nur das aktuelle Format und die aktuelle Ablage unterstützen. Falsch abgelegte Quellen beim Neuaufbau als Fehler melden und unverändert erhalten; keine echten Medien verschieben oder löschen.
+
+## Mehrfachauswahl und Papierkorb im Fotoraster
+Die Sidebar zeigt große Überschriften Jahre und Tags. Tags stehen alphabetisch in einzelnen vollbreiten Zeilen; die Tagwolke über dem Raster bleibt erhalten.
+
+Ein Klick markiert eine Datei. Cmd-Klick (auch Ctrl-Klick) ergänzt oder entfernt einzelne Dateien, Shift-Klick wählt einen zusammenhängenden Bereich in der aktuellen Ansicht. Edit → Select All / Cmd+A wählt ohne Textfokus alle sichtbaren Dateien. Doppelklick öffnet ein Foto/Video. Ein Rechtsklick innerhalb einer Auswahl erhält alle markierten Dateien; auf einer anderen Datei startet er eine Einzelauswahl.
+
+Tags bearbeiten gilt für alle ausgewählten Dateien. Das Häkchen ist gesetzt, wenn alle den Tag haben; eine teilweise Zuordnung wird beispielsweise als 2/3 angezeigt. Anklicken weist den Tag allen zu, Abwählen entfernt ihn von allen. Neue Tags lassen sich direkt der gesamten Auswahl zuweisen.
+
+Bild/Video/Auswahl löschen ist rot dargestellt und öffnet zunächst eine Dateiliste zur Bestätigung. Erst In den Papierkorb startet das Verschieben. Es gibt keine endgültige Löschung. Fehler bleiben pro Datei sichtbar; Abbrechen verhindert weitere Dateischritte, bereits verschobene Dateien bleiben im Papierkorb. Tags, einzelne YAMLs und Kommentaraufnahmen werden nicht mit entfernt. Nach Abschluss wird die aktuelle Bibliothek unter Beibehaltung des Jahres-/Monatsbereichs aktualisiert. Laufende Speicherstände oder ungespeicherte Aufnahmen dürfen dabei nicht verworfen werden.
+
+
+## Fotos in einen Scan-Ordner importieren
+Im Importdialog unter Fotoablage zwischen Jahr/Monat (Standard) und Jahr/scans wählen. Im zweiten Modus werden ausschließlich Fotos ohne weitere Unterordner direkt unter dem jeweiligen Jahr in scans gespeichert, beispielsweise 2026/scans/img_20261114_121314.jpg. Das Jahr stammt wie bisher aus den vorhandenen Datumsinformationen; der Dateiname bleibt unverändert nach dem Importmuster aufgebaut. Fehlende Fotodatumsangaben werden weiterhin als Fehler gemeldet. Die App verändert keine Quelldaten oder EXIF-Datumsfelder.
+
+Videos behalten Jahr/Monat und Audio Jahr/audio/diary. Prüflauf und tatsächlicher Import verwenden dieselbe gewählte Ablage mit derselben Kollisionsprüfung: identische Bilder überspringen, unterschiedliche Inhalte mit Nummernzusatz kopieren. Tags wie scan oder dia können über die bestehende Import-Tagauswahl vergeben werden. Nach dem Import erscheint Scans unter dem betreffenden Jahr; Monatsansichten bleiben getrennt. Die Hörleiste in Scans enthält den Audiobereich des Jahres. Einzeldatei-YAMLs liegen weiterhin unter yaml/Jahr/Monat, auch wenn das Bild im scans-Ordner liegt.

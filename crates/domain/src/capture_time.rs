@@ -1,5 +1,12 @@
 use crate::Media;
 use std::path::{Path, PathBuf};
+/// Physical photo placement only; naming and capture-time selection stay unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PhotoImportLayout {
+    #[default]
+    YearMonth,
+    Scans,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CaptureTime {
     stamp: String,
@@ -131,6 +138,15 @@ impl CaptureTime {
         )
     }
     pub fn target(&self, root: &Path, media: &Media, suffix: usize) -> PathBuf {
+        self.target_with_layout(root, media, suffix, PhotoImportLayout::YearMonth)
+    }
+    pub fn target_with_layout(
+        &self,
+        root: &Path,
+        media: &Media,
+        suffix: usize,
+        layout: PhotoImportLayout,
+    ) -> PathBuf {
         let ext = media
             .path()
             .extension()
@@ -145,6 +161,8 @@ impl CaptureTime {
         };
         let (folder, prefix) = if media.is_audio() {
             ("audio/diary", "aud")
+        } else if media.is_photo() && layout == PhotoImportLayout::Scans {
+            ("scans", "img")
         } else {
             (self.month.as_str(), "img")
         };
@@ -184,5 +202,41 @@ mod tests {
         assert!(CaptureTime::parse("2009:02:29 03:58:11", "EXIF").is_err());
         assert!(CaptureTime::parse("0000:01:01 00:00:00", "EXIF").is_err());
         assert!(CaptureTime::parse("2008:02:29 03:58:11", "EXIF").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod scan_layout_tests {
+    use super::*;
+    #[test]
+    fn scans_changes_only_photo_folder_and_retains_date_name_format_and_suffix() {
+        let date = CaptureTime::parse("2026:11:14 12:13:14", "EXIF").unwrap();
+        let root = Path::new("library");
+        let photo = Media::from_path("source.JPEG".into(), String::new()).unwrap();
+        assert_eq!(
+            date.target_with_layout(root, &photo, 0, PhotoImportLayout::Scans),
+            Path::new("library/2026/scans/img_20261114_121314.jpg")
+        );
+        assert_eq!(
+            date.target_with_layout(root, &photo, 2, PhotoImportLayout::Scans),
+            Path::new("library/2026/scans/img_20261114_121314_002.jpg")
+        );
+        assert_eq!(
+            date.target(root, &photo, 0),
+            Path::new("library/2026/11/img_20261114_121314.jpg")
+        );
+        for name in ["video.mp4", "diary.wav"] {
+            let media = Media::from_path(name.into(), String::new()).unwrap();
+            assert_eq!(
+                date.target_with_layout(root, &media, 0, PhotoImportLayout::Scans),
+                date.target(root, &media, 0)
+            );
+        }
+        let file =
+            crate::tags::LibraryFile::new("2026/scans/img_20261114_121314.jpg".into()).unwrap();
+        assert_eq!(
+            file.metadata_path().unwrap(),
+            "yaml/2026/11/img_20261114_121314.jpg.yaml"
+        );
     }
 }

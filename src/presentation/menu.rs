@@ -20,7 +20,10 @@ impl Suite {
             || self.import_panel.visible
             || self.tag_view.open
             || self.bindings.visible
-            || self.search_open;
+            || self.search_open
+            || self.gallery.pending.is_some()
+            || self.gallery.job.running()
+            || self.gallery.report.is_some();
         let ready = self.settings_ready() && !blocked;
         let editing = ready
             && !ctx.wants_keyboard_input()
@@ -111,7 +114,16 @@ impl Suite {
         ] {
             entries.push(Entry {
                 action,
-                enabled: ctx.wants_keyboard_input() && ctx.input(|i| i.focused),
+                enabled: ctx.input(|i| i.focused)
+                    && (ctx.wants_keyboard_input()
+                        || (action == Action::SelectAll
+                            && ready
+                            && self.root.is_some()
+                            && self.selected.is_none()
+                            && crate::domain::diary::audio_year(
+                                self.group.as_deref().unwrap_or(""),
+                            )
+                            .is_none())),
                 checked: None,
                 shortcut: shortcut(key, shift),
             });
@@ -182,6 +194,14 @@ impl Suite {
     }
     fn menu_action(&mut self, action: Action, ctx: &egui::Context) {
         match action {
+            Action::SelectAll if !ctx.wants_keyboard_input() => {
+                self.prepare_gallery_selection();
+                self.gallery.selection.paths = self
+                    .visible()
+                    .into_iter()
+                    .map(|index| self.items[index].path().to_path_buf())
+                    .collect();
+            }
             Action::Cut => ctx.send_viewport_cmd(egui::ViewportCommand::RequestCut),
             Action::Copy => ctx.send_viewport_cmd(egui::ViewportCommand::RequestCopy),
             Action::Paste => ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste),
@@ -236,7 +256,7 @@ impl Suite {
                         Err(error) => self.status = error,
                     }
                 } else {
-                    self.tag_view.file = None;
+                    self.tag_view.files.clear();
                     self.tag_view.open = true;
                 }
             }

@@ -13,6 +13,7 @@ pub struct ImportPanel {
     tags: std::collections::BTreeSet<String>,
     new_tag: String,
     include_identical: bool,
+    photo_layout: import::PhotoImportLayout,
     start_error: Option<String>,
 }
 impl ImportPanel {
@@ -72,6 +73,13 @@ impl ImportPanel {
                         ui.add(egui::Label::new(&text).truncate()).on_hover_text(text);
                         ui.small("Beim Import bleiben Quelldateien unverändert.");
                     });
+                    crate::options_ui::section(ui, "Fotoablage", |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.radio_value(&mut self.photo_layout, import::PhotoImportLayout::YearMonth, "Jahr/Monat");
+                            ui.radio_value(&mut self.photo_layout, import::PhotoImportLayout::Scans, "Jahr/scans");
+                        });
+                        ui.small("Dateinamen bleiben img_JJJJMMTT_HHMMSS.ext. Das Jahr stammt aus den Datumsinformationen. Videos bleiben in Jahr/Monat, Audio in Jahr/audio/diary.");
+                    });
                     crate::options_ui::section(ui,"Tags für diesen Import",|ui|{
                         if !tag_choices.is_empty(){
                             let choices=&tag_choices;
@@ -90,7 +98,7 @@ impl ImportPanel {
                         let ready = self.source.is_some() && self.target.is_some();
                         for (title, preview) in [("1. Prüflauf", true), ("2. Import starten", false)] {
                             if ui.add_enabled(ready, egui::Button::new(title)).clicked() {
-                                self.start_error=self.session.start_tagged(adapter.clone(),self.source.clone().unwrap(),self.target.clone().unwrap(),preview,(!self.tags.is_empty()).then(||import::TaggingOptions {repository:services.organization.clone(),tags:self.tags.iter().cloned().collect(),include_identical:self.include_identical})).err();
+                                self.start_error=self.session.start_configured(adapter.clone(),self.source.clone().unwrap(),self.target.clone().unwrap(),import::ImportOptions {preview,photo_layout:self.photo_layout,tagging:(!self.tags.is_empty()).then(||import::TaggingOptions {repository:services.organization.clone(),tags:self.tags.iter().cloned().collect(),include_identical:self.include_identical})}).err();
                             }
                         }
                     });

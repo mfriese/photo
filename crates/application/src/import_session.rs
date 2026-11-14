@@ -50,7 +50,30 @@ impl ImportSession {
         preview: bool,
         tagging: Option<import::TaggingOptions>,
     ) -> Result<(), String> {
-        if let Some(options) = &tagging {
+        self.start_configured(
+            adapter,
+            source,
+            target,
+            import::ImportOptions {
+                preview,
+                tagging,
+                ..Default::default()
+            },
+        )
+    }
+    pub fn start_configured(
+        &mut self,
+        adapter: Arc<dyn ImportAdapter>,
+        source: PathBuf,
+        target: PathBuf,
+        options: import::ImportOptions,
+    ) -> Result<(), String> {
+        let import::ImportOptions {
+            preview,
+            ref tagging,
+            ..
+        } = options;
+        if let Some(options) = tagging {
             for name in &options.tags {
                 crate::domain::tags::normalize_tag_name(name)?;
             }
@@ -67,9 +90,7 @@ impl ImportSession {
         self.target = Some(target.clone());
         self.source = Some(source.clone());
         self.preview = preview;
-        self.job = Some(import::start_tagged(
-            adapter, source, target, preview, tagging,
-        ));
+        self.job = Some(import::start_with_options(adapter, source, target, options));
         Ok(())
     }
     pub fn can_cleanup(&self) -> bool {

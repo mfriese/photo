@@ -27,9 +27,7 @@ pub struct Proof {
     pub source_root_id: (u64, u64),
     pub target_root_id: (u64, u64),
 }
-pub trait Trash: Send + Sync + 'static {
-    fn move_to_trash(&self, path: &Path) -> Result<(), String>;
-}
+pub use crate::ports::Trash;
 pub trait CleanupPort: Send + Sync + 'static {
     fn check(
         &self,

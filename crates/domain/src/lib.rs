@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 mod capture_time;
-pub use capture_time::CaptureTime;
+pub use capture_time::{CaptureTime, PhotoImportLayout};
 pub mod audio_edit;
 pub mod commands;
 pub mod comments;

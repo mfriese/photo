@@ -168,6 +168,7 @@ impl photosuite_application::organization::CatalogRepository for UnusedAdapters 
 pub(super) fn test_suite() -> Suite {
     let adapters = Arc::new(UnusedAdapters);
     Suite {
+        gallery: Default::default(),
         comments: photosuite_application::comments::CommentSession::new(
             adapters.clone(),
             adapters.clone(),
@@ -206,6 +207,7 @@ pub(super) fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            media_trash: adapters.clone(),
             comments: adapters.clone(),
             comment_media: adapters.clone(),
             recorder: adapters.clone(),
@@ -947,7 +949,7 @@ fn library_switch_restores_yaml_and_keeps_previous_edits_in_previous_library() {
 }
 
 #[test]
-fn tag_cloud_includes_non_album_tags_and_preserves_year_navigation() {
+fn sidebar_lists_all_tags_alphabetically_on_separate_rows() {
     use photosuite_application::organization::Action;
     let mut suite = test_suite();
     suite.root = Some("/Fotos".into());
@@ -1011,10 +1013,15 @@ fn tag_cloud_includes_non_album_tags_and_preserves_year_navigation() {
     }
     let bounds = |label| texts.iter().find(|(text, _)| *text == label).unwrap().1;
     assert!(bounds("Alles").bottom() < bounds("2023").top());
-    assert!(bounds("Tags").top() > bounds("2023").bottom());
+    assert!(bounds("Jahre").top() - bounds("Alles").bottom() >= 8.);
+    assert!(bounds("2024").top() - bounds("Jahre").bottom() >= 8.);
+    assert!(bounds("Tags").top() - bounds("2023").bottom() >= 12.);
+    for heading in ["Tags", "Jahre"] {
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text==heading && text.galley.job.sections.iter().all(|section|section.format.font_id.size>=18.))));
+    }
     assert!(
-        (bounds("a").bottom() - bounds("b").bottom()).abs() < 2.,
-        "short tags should share a row"
+        bounds("a").bottom() < bounds("b").top() && bounds("b").bottom() < bounds("c").top(),
+        "alphabetical tags must occupy separate rows"
     );
     let target = output
         .shapes
@@ -2125,4 +2132,14 @@ fn import_completion_reloads_existing_tag_catalog_and_memberships() {
     assert!(catalog.tags().contains_key("scan"));
     assert_eq!(catalog.tags_for(&file), vec!["scan"]);
     assert_eq!(suite.root, Some(path));
+}
+
+impl photosuite_application::media_trash::MediaTrash for UnusedAdapters {
+    fn trash(
+        &self,
+        _: &std::path::Path,
+        _: &crate::domain::tags::LibraryFile,
+    ) -> Result<(), String> {
+        panic!("UI test must not trash files")
+    }
 }

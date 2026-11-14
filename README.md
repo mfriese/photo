@@ -16,7 +16,7 @@ PhotoSuite macht deine nach **Jahr und Monat** geordnete Sammlung durchsuchbar �
 - **Audio-Diary:** gemeinsame Zeitachse mit Abschnitten proportional zur Aufnahmedauer, Hintergrundprüfung und fünf zeitlich passenden Fotos.
 - **Gesprochene Kommentare:** direkt zum Foto aufnehmen, Mikrofon wählen, Pegel beobachten und vor dem Speichern vorhören.
 - **Tags und virtuelle Alben:** mehrere Tags pro Datei, Tagwolken zum Filtern und Tags bereits beim Import. Neue Zuordnungen erscheinen automatisch.
-- **Kontrollierter Import:** Prüflauf, kompakte Ergebnisse, datumsbasierte Namen, Kollisionsprüfung und separate Prüfung von Bildduplikaten.
+- **Kontrollierter Import:** Prüflauf, kompakte Ergebnisse, datumsbasierte Namen, optionale Fotoablage unter `Jahr/scans`, Kollisionsprüfung und separate Prüfung von Bildduplikaten.
 - **Native Bedienung:** macOS-Menüs, Tastenkürzel und bibliotheksbezogene Einstellungen; die letzte Bibliothek wird beim Start wieder geöffnet.
 
 Die Hörleiste folgt der Auswahl **Alles / Jahr / Monat**. Tagebucheinträge erscheinen zu ihrer Aufnahmezeit, Fotokommentare zur Zeit des zugehörigen Fotos. Im Player kannst du Tagebuch, Kommentare oder beides hören.
@@ -45,11 +45,11 @@ Weitere Installationsmöglichkeiten stehen im [Benutzerhandbuch](docs/USER_GUIDE
 
 1. **File → Open Library…** öffnet deine Sammlung. Der Pfad steht im Fenstertitel.
 2. Links ein Jahr oder einen Monat wählen; **Edit → Find… (⌘F)** öffnet die Suche.
-3. Ein Foto anklicken: **← / →** wechseln das Medium, **Escape** schließt die Großansicht. Bei Videos startet **Leertaste** die Wiedergabe.
+3. Ein Foto doppelklicken: **← / →** wechseln das Medium, **Escape** schließt die Großansicht. Bei Videos startet **Leertaste** die Wiedergabe.
 4. **View** enthält Vorschaugröße und Beschnitt, **Edit → Tags and Albums…** die Tagverwaltung.
 5. **File → Import…** importiert in die geöffnete Bibliothek; **PhotoSuite → Settings… (⌘,)** öffnet die Einstellungen.
 
-In der Tagwolke zeigt keine Auswahl alle Medien; mehrere ausgewählte Tags werden mit **ODER** verknüpft. **Reset** hebt den Filter auf.
+In der Tagwolke zeigt keine Auswahl alle Medien; mehrere ausgewählte Tags werden mit **ODER** verknüpft. **Reset** hebt den Filter auf. Links stehen die Tags alphabetisch untereinander. Im Raster wählt ein Klick, Cmd-Klick ergänzt die Auswahl und Shift-Klick markiert einen Bereich. Das Kontextmenü bearbeitet Tags für die gesamte Auswahl oder verschiebt sie nach Bestätigung in den macOS-Papierkorb.
 
 ## Deine Dateien bleiben zugänglich
 

@@ -1,6 +1,7 @@
 //! Import application service: naming and collision policy independent of GUI/storage.
 use crate::domain::CaptureTime;
 use crate::domain::Media;
+pub use crate::domain::PhotoImportLayout;
 use std::{
     path::{Path, PathBuf},
     sync::{
@@ -129,6 +130,34 @@ pub fn start_tagged(
     preview: bool,
     tagging: Option<TaggingOptions>,
 ) -> Job {
+    start_with_options(
+        adapter,
+        source,
+        target,
+        ImportOptions {
+            preview,
+            tagging,
+            ..Default::default()
+        },
+    )
+}
+#[derive(Clone, Default)]
+pub struct ImportOptions {
+    pub preview: bool,
+    pub tagging: Option<TaggingOptions>,
+    pub photo_layout: PhotoImportLayout,
+}
+pub fn start_with_options(
+    adapter: Arc<dyn ImportAdapter>,
+    source: PathBuf,
+    target: PathBuf,
+    options: ImportOptions,
+) -> Job {
+    let ImportOptions {
+        preview,
+        tagging,
+        photo_layout,
+    } = options;
     let (tx, events) = mpsc::sync_channel(128);
     let cancel = Arc::new(AtomicBool::new(false));
     let stop = cancel.clone();
@@ -151,6 +180,15 @@ pub fn start_tagged(
                 source.display(),
                 target.display()
             ),
+        );
+        emit(
+            0,
+            0,
+            match photo_layout {
+                PhotoImportLayout::YearMonth => "Fotoablage: Jahr/Monat",
+                PhotoImportLayout::Scans => "Fotoablage: Jahr/scans (ohne weitere Unterordner)",
+            }
+            .into(),
         );
         let result = (|| {
             adapter.validate(&source, &target)?;
@@ -227,7 +265,8 @@ pub fn start_tagged(
                         if stop.load(Ordering::Relaxed) {
                             return Err("Abgebrochen".into());
                         }
-                        let candidate = time.target(&target, media, suffix);
+                        let candidate =
+                            time.target_with_layout(&target, media, suffix, photo_layout);
                         report.target = Some(candidate.clone());
                         log(format!("Ziel prüfen: {}", candidate.display()));
                         if !planned.contains_key(&candidate) && !adapter.exists(&candidate)? {

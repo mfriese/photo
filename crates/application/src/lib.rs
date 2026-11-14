@@ -29,3 +29,5 @@ pub mod media_dates;
 pub mod comments;
 
 pub mod diary_preparation;
+
+pub mod media_trash;

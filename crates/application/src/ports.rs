@@ -99,6 +99,11 @@ pub trait VideoPlayer: Send + Sync + 'static {
     fn play(&self, path: &std::path::Path) -> Result<(), String>;
 }
 
+/// Reversible OS operation; callers provide their workflow-specific verification.
+pub trait Trash: Send + Sync + 'static {
+    fn move_to_trash(&self, path: &std::path::Path) -> Result<(), String>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

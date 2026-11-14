@@ -498,6 +498,129 @@ mod tests {
         events
     }
     #[test]
+    fn scans_import_is_flat_repeatable_verified_and_browsable_without_changing_sources() {
+        use crate::ports::MediaRepository;
+        let source = tempfile::tempdir().unwrap();
+        let target = tempfile::tempdir().unwrap();
+        photo(&source.path().join("a.jpg"), 10);
+        fs::copy(source.path().join("a.jpg"), source.path().join("b.jpg")).unwrap();
+        photo(&source.path().join("c.jpg"), 220);
+        let originals: Vec<_> = ["a.jpg", "b.jpg", "c.jpg"]
+            .into_iter()
+            .map(|name| (name, fs::read(source.path().join(name)).unwrap()))
+            .collect();
+        let run_scans = |preview| {
+            let job = import::start_with_options(
+                Arc::new(adapter()),
+                source.path().into(),
+                target.path().into(),
+                import::ImportOptions {
+                    preview,
+                    photo_layout: import::PhotoImportLayout::Scans,
+                    ..Default::default()
+                },
+            );
+            let mut reports = vec![];
+            loop {
+                let event = job
+                    .events
+                    .recv_timeout(std::time::Duration::from_secs(20))
+                    .unwrap();
+                if let Some(report) = event.file_report {
+                    reports.push(report);
+                }
+                if let Some(import::ImportOutcome::Completed(summary)) = event.outcome {
+                    break (reports, summary);
+                }
+                if let Some(import::ImportOutcome::Failed(error)) = event.outcome {
+                    panic!("{error}");
+                }
+            }
+        };
+        let (reports, summary) = run_scans(true);
+        assert_eq!((summary.copied, summary.skipped, summary.failed), (2, 1, 0));
+        assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+        assert!(reports.iter().all(|r| r.target.as_ref().unwrap().parent()
+            == Some(target.path().join("2008/scans").as_path())));
+        let (_, summary) = run_scans(false);
+        assert_eq!((summary.copied, summary.skipped, summary.failed), (2, 1, 0));
+        let base = target.path().join("2008/scans/img_20080916_035811.jpg");
+        assert_eq!(fs::read(&base).unwrap(), originals[0].1);
+        assert!(
+            target
+                .path()
+                .join("2008/scans/img_20080916_035811_001.jpg")
+                .is_file()
+        );
+        assert!(!target.path().join("2008/09").exists());
+        assert!(
+            fs::read_dir(base.parent().unwrap())
+                .unwrap()
+                .all(|entry| entry.unwrap().file_type().unwrap().is_file())
+        );
+        let (_, summary) = run_scans(false);
+        assert_eq!((summary.copied, summary.skipped, summary.failed), (0, 3, 0));
+        for (name, bytes) in originals {
+            assert_eq!(fs::read(source.path().join(name)).unwrap(), bytes);
+        }
+        // Tags still use flat year/month YAMLs and reference the actual scans media path.
+        let tags = Arc::new(crate::tag_store::YamlTags::default());
+        let job = import::start_with_options(
+            Arc::new(adapter()),
+            source.path().into(),
+            target.path().into(),
+            import::ImportOptions {
+                photo_layout: import::PhotoImportLayout::Scans,
+                tagging: Some(import::TaggingOptions {
+                    repository: tags.clone(),
+                    tags: vec!["scan".into()],
+                    include_identical: true,
+                }),
+                ..Default::default()
+            },
+        );
+        loop {
+            let event = job
+                .events
+                .recv_timeout(std::time::Duration::from_secs(20))
+                .unwrap();
+            match event.outcome {
+                Some(import::ImportOutcome::Completed(summary)) => {
+                    assert_eq!((summary.copied, summary.skipped, summary.failed), (0, 3, 0));
+                    break;
+                }
+                Some(import::ImportOutcome::Failed(error)) => panic!("{error}"),
+                None => {}
+            }
+        }
+        use photosuite_application::organization::CatalogRepository;
+        let catalog = tags.load(target.path()).unwrap().catalog;
+        assert!(catalog.contains("scan", "2008/scans/img_20080916_035811.jpg"));
+        let yaml = target
+            .path()
+            .join("yaml/2008/09/img_20080916_035811.jpg.yaml");
+        let record = crate::media_records_fs::parse(&fs::read(yaml).unwrap()).unwrap();
+        assert_eq!(record.file, "2008/scans/img_20080916_035811.jpg");
+        let repo = crate::infrastructure::FileSystemRepository {
+            priority: Default::default(),
+            audio: Arc::new(crate::audio::NativeAudioSource {
+                tool: crate::exiftool::ExifTool::development(),
+            }),
+        };
+        let (items, errors) = repo.scan(target.path());
+        assert_eq!(errors, 0);
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            crate::application::visible(&items, "", Some("2008/scans"), false).len(),
+            2
+        );
+        assert!(crate::application::visible(&items, "", Some("2008/09"), false).is_empty());
+        assert_eq!(
+            photosuite_application::diary::header_audio_group(&items, Some("2008/scans")),
+            "2008/audio"
+        );
+    }
+    #[test]
     fn import_exif_paths_duplicates_collision_and_repeat() {
         let src = tempfile::tempdir().unwrap();
         let dst = tempfile::tempdir().unwrap();

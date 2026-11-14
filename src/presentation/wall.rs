@@ -55,6 +55,7 @@ impl super::Suite {
                 let title = self.tag_view.active.clone().unwrap_or_else(|| {
                     let group = self.group.as_deref().unwrap_or("Sammlung");
                     match group.split_once(std::path::MAIN_SEPARATOR) {
+                        Some((year, "scans")) => format!("Scans {year}"),
                         Some((year, month)) if month.len() == 2 => {
                             format!("{} {year}", super::library::month_label(month))
                         }
@@ -63,6 +64,8 @@ impl super::Suite {
                 });
                 self.page_heading(ui, &title);
                 let visible = self.tag_cloud(ui, visible);
+                self.prepare_gallery_selection();
+                ui.small(format!("{} ausgewählt · Cmd-Klick: Mehrfachauswahl · Shift-Klick: Bereich · Doppelklick: Öffnen", self.gallery.selection.paths.len()));
                 ui.add_space(4.);
                 if visible.is_empty() && !self.collection.is_loading() {
                     ui.add_space(16.);
@@ -182,16 +185,23 @@ impl super::Suite {
                                             );
                                             let highlighted =
                                                 self.highlighted_photo.as_deref() == Some(m.path());
-                                            if response.hovered() || highlighted {
+                                            let selected = self.gallery.selection.paths.contains(m.path());
+                                            if response.hovered() || highlighted || selected {
                                                 ui.painter().rect_stroke(
                                                     rect.shrink(1.),
                                                     8.,
                                                     egui::Stroke::new(
-                                                        if highlighted { 3_f32 } else { 2_f32 },
+                                                        if highlighted || selected { 3_f32 } else { 2_f32 },
                                                         theme::ACCENT,
                                                     ),
                                                     egui::StrokeKind::Inside,
                                                 );
+                                            }
+                                            if selected {
+                                                let center = rect.right_top() + egui::vec2(-12.,12.);
+                                                ui.painter().circle_filled(center,8.,theme::ACCENT);
+                                                ui.painter().line_segment([center+egui::vec2(-4.,0.),center+egui::vec2(-1.,3.)],egui::Stroke::new(2_f32,theme::CANVAS));
+                                                ui.painter().line_segment([center+egui::vec2(-1.,3.),center+egui::vec2(4.,-3.)],egui::Stroke::new(2_f32,theme::CANVAS));
                                             }
                                             let mut badges = Vec::with_capacity(tags.len() + 1);
                                             if m.is_video() {
@@ -201,22 +211,40 @@ impl super::Suite {
                                             super::badges::paint_cloud(ui, paint_rect, &badges);
                                             response.on_hover_cursor(egui::CursorIcon::PointingHand)
                                         };
+                                        if response.secondary_clicked() {self.gallery.selection.context(m.path());}
                                         response.context_menu(|ui| {
-                                            if m.is_photo()
+                                            self.gallery.selection.context(m.path());
+                                            let count=self.gallery.selection.paths.len();
+                                            if count==1 && m.is_photo()
                                                 && ui.button("Audiokommentar …").clicked()
                                             {
                                                 self.record_photo = Some(index);
                                                 ui.close();
                                             }
-                                            if ui.button("Tags bearbeiten …").clicked() {
-                                                match self.organization.file(m.path()) {
-                                                    Ok(file) => self.tag_view.edit(file),
-                                                    Err(error) => self.status = error,
+                                            if ui.button(format!("Tags bearbeiten … ({count})")).clicked() {
+                                                let files:Result<Vec<_>,_>=self.gallery.selection.paths.iter().map(|path|self.organization.file(path)).collect();
+                                                match files {Ok(files)=>self.tag_view.edit_many(files),Err(error)=>self.status=error}
+                                                ui.close();
+                                            }
+                                            ui.separator();
+                                            let label=if count>1 {format!("Auswahl löschen … ({count})")}else if m.is_video(){"Video löschen …".into()}else{"Bild löschen …".into()};
+                                            if ui.add_enabled(!self.gallery.job.running() && !self.comments.is_open() && !self.editor.is_saving(),egui::Button::new(egui::RichText::new(label).color(theme::DANGER))).clicked(){
+                                                if let Some(root)=&self.root {
+                                                    let files:Result<Vec<_>,_>=self.gallery.selection.paths.iter().map(|path|self.organization.file(path)).collect();
+                                                    match files {Ok(files)=>self.gallery.pending=Some((root.clone(),files)),Err(error)=>self.status=error}
                                                 }
                                                 ui.close();
                                             }
                                         });
-                                        if response.on_hover_text(&tooltip).clicked() {
+                                        let clicked=response.clicked();
+                                        let double_clicked=response.double_clicked();
+                                        response.on_hover_text(&tooltip);
+                                        if clicked {
+                                            let modifiers=ui.input(|i|i.modifiers);
+                                            let ordered:Vec<_>=visible.iter().map(|&index|self.items[index].path().to_path_buf()).collect();
+                                            self.gallery.selection.click(m.path(),&ordered,modifiers.command || modifiers.ctrl,modifiers.shift);
+                                        }
+                                        if double_clicked && !ui.input(|i|i.modifiers.command || i.modifiers.ctrl || i.modifiers.shift) {
                                             if m.is_audio() {
                                                 if let Err(error) = self.diary.start(
                                                     &self.items,

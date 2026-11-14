@@ -21,6 +21,7 @@ mod import_ui;
 mod infrastructure;
 mod library_preferences_fs;
 mod media_records_fs;
+mod media_trash_fs;
 mod metadata_fs;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod muda_menu;
@@ -103,6 +104,9 @@ fn main() -> eframe::Result {
         preferences: std::sync::Arc::new(library_preferences_fs::LibraryPreferences::new(
             preferences_path,
         )),
+        media_trash: std::sync::Arc::new(media_trash_fs::LibraryTrash {
+            trash: std::sync::Arc::new(import_cleanup_fs::NativeTrash),
+        }),
         import_cleanup: std::sync::Arc::new(import_cleanup_fs::SafeImportCleanup {
             trash: std::sync::Arc::new(import_cleanup_fs::NativeTrash),
         }),

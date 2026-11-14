@@ -75,6 +75,15 @@ pub trait CatalogRepository: Send + Sync + 'static {
     ) -> Result<Vec<u8>, String>;
 }
 pub enum Action {
+    CreateMany {
+        name: String,
+        files: Vec<LibraryFile>,
+    },
+    AssignMany {
+        tag: String,
+        files: Vec<LibraryFile>,
+        present: bool,
+    },
     Create {
         name: String,
         file: Option<LibraryFile>,
@@ -214,6 +223,23 @@ impl OrganizationSession {
             .ok_or("Tags werden noch geladen oder konnten nicht geladen werden")?
             .clone();
         let change = match action {
+            Action::CreateMany { name, files } => {
+                let name = catalog.create(&name)?;
+                for file in files {
+                    catalog.assign(&name, file, true)?;
+                }
+                Change::Created(name)
+            }
+            Action::AssignMany {
+                tag,
+                files,
+                present,
+            } => {
+                for file in files {
+                    catalog.assign(&tag, file, present)?;
+                }
+                Change::Updated
+            }
             Action::Create { name, file } => {
                 let name = catalog.create(&name)?;
                 if let Some(file) = file {
@@ -568,6 +594,62 @@ mod tests {
             session.poll();
             assert!(Instant::now() < deadline);
             thread::yield_now();
+        }
+    }
+    #[test]
+    fn batch_tag_actions_assign_create_and_remove_on_every_selected_file() {
+        let repository = Arc::new(Memory::default());
+        let mut session = OrganizationSession::new(repository.clone());
+        session.open("/library".into()).unwrap();
+        wait(&mut session, |s| s.catalog().is_some());
+        let files: Vec<_> = ["2026/11/a.jpg", "2026/11/b.jpg"]
+            .into_iter()
+            .map(|p| LibraryFile::new(p.into()).unwrap())
+            .collect();
+        session
+            .apply(Action::CreateMany {
+                name: "Urlaub".into(),
+                files: files.clone(),
+            })
+            .unwrap();
+        for file in &files {
+            assert!(session.catalog().unwrap().contains("urlaub", file.as_str()));
+        }
+        session
+            .apply(Action::AssignMany {
+                tag: "urlaub".into(),
+                files: files.clone(),
+                present: false,
+            })
+            .unwrap();
+        assert!(session.catalog().unwrap().files().is_empty());
+        let version = session.version();
+        assert!(
+            session
+                .apply(Action::AssignMany {
+                    tag: "missing".into(),
+                    files: files.clone(),
+                    present: true
+                })
+                .is_err()
+        );
+        assert_eq!(session.version(), version);
+        session
+            .apply(Action::AssignMany {
+                tag: "URLAUB".into(),
+                files: files.clone(),
+                present: true,
+            })
+            .unwrap();
+        wait(&mut session, |s| !s.saving());
+        for file in files {
+            assert!(
+                repository
+                    .catalog
+                    .lock()
+                    .unwrap()
+                    .contains("urlaub", file.as_str())
+            );
         }
     }
     #[test]

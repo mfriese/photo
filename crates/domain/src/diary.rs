@@ -128,7 +128,7 @@ impl<'a> AudioViewScope<'a> {
         }
         let mut parts = group.split(std::path::MAIN_SEPARATOR);
         let year = parts.next()?;
-        let month = parts.next();
+        let month = parts.next().filter(|folder| *folder != "scans");
         if parts.next().is_some() {
             return None;
         }

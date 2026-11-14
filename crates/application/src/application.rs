@@ -71,6 +71,7 @@ mod tests {
 /// Ports are supplied exclusively by the composition root.
 #[derive(Clone)]
 pub struct Services {
+    pub media_trash: std::sync::Arc<dyn crate::media_trash::MediaTrash>,
     pub comment_media: std::sync::Arc<dyn crate::comments::CommentMediaStore>,
     pub comments: std::sync::Arc<dyn crate::comments::CommentRepository>,
     pub recorder: std::sync::Arc<dyn crate::comments::CommentRecorder>,

@@ -14,7 +14,7 @@ pub(super) struct TagView {
     pub filters: std::collections::BTreeSet<String>,
     pub cloud_scope: Option<(Option<std::path::PathBuf>, Option<String>, Option<String>)>,
     pub active: Option<String>,
-    pub file: Option<LibraryFile>,
+    pub files: Vec<LibraryFile>,
     selected: Option<String>,
     new_name: String,
     rename: String,
@@ -28,7 +28,11 @@ impl TagView {
     }
     pub fn edit(&mut self, file: LibraryFile) {
         self.open = true;
-        self.file = Some(file);
+        self.edit_many(vec![file]);
+    }
+    pub fn edit_many(&mut self, files: Vec<LibraryFile>) {
+        self.open = true;
+        self.files = files;
         self.selected = None;
         self.error.clear();
     }
@@ -43,26 +47,28 @@ impl TagView {
                 crate::options_ui::spacing(ui);
                 ui.label("Tags ordnen Dateien zu. Ein als Album markierter Tag erscheint links.");
                 ui.small("Originaldateien bleiben unverändert. Tags in Medien-YAMLs speichern; yaml/tags.yaml ist der schnelle Index.");
-                if let Some(file)=&self.file{
-                    ui.add(egui::Label::new(file.as_str()).truncate()).on_hover_text(file.as_str());
-                    if ui.small_button("Alle Tags verwalten").clicked(){self.file=None;}
+                if !self.files.is_empty(){
+                    ui.label(format!("{} Datei(en) ausgewählt",self.files.len()));
+                    if self.files.len()==1 {ui.add(egui::Label::new(self.files[0].as_str()).truncate()).on_hover_text(self.files[0].as_str());}
+                    if ui.small_button("Alle Tags verwalten").clicked(){self.files.clear();}
                 }
                 if session.loading(){ui.horizontal(|ui|{ui.spinner();ui.label("Tags werden geladen …");if ui.small_button("Abbrechen").clicked(){cancel_loading=true;}});}
                 if session.saving(){ui.label("Änderungen werden gespeichert …");}
                 let rows:Vec<_>=session.catalog().map(|c|c.tags().iter().map(|(name,files)|
-                    (name.clone(),files.len(),c.albums().contains(name),self.file.as_ref().is_some_and(|file|files.contains(file))))
+                    (name.clone(),files.len(),c.albums().contains(name),self.files.iter().filter(|file|files.contains(*file)).count()))
                     .collect()).unwrap_or_default();
                 ui.add_enabled_ui(session.catalog().is_some(),|ui|{
                     ui.horizontal_wrapped(|ui|{
                         ui.add(egui::TextEdit::singleline(&mut self.new_name).hint_text("Neuer Tag").desired_width(180.));
-                        if ui.button("Tag anlegen").clicked(){actions.push(Action::Create{name:self.new_name.clone(),file:self.file.clone()});}
+                        if ui.button("Tag anlegen").clicked(){actions.push(Action::CreateMany{name:self.new_name.clone(),files:self.files.clone()});}
                     });
                     egui::ScrollArea::vertical().id_salt("tag_rows").max_height(280.).auto_shrink([false,true]).show(ui,|ui|{
                         if rows.is_empty(){ui.label("Noch keine Tags. Einen Tag anlegen und Dateien zuordnen.");}
-                        for (name,count,mut album,mut assigned) in rows{
+                        for (name,count,mut album,assigned_count) in rows{
+                            let mut assigned=assigned_count==self.files.len();
                             ui.horizontal_wrapped(|ui|{
-                                if self.file.is_some(){
-                                    if ui.checkbox(&mut assigned,&name).changed(){actions.push(Action::Assign{tag:name.clone(),file:self.file.clone().unwrap(),present:assigned});}
+                                if !self.files.is_empty(){
+                                    if ui.checkbox(&mut assigned,if assigned_count>0 && assigned_count<self.files.len(){format!("{name} ({assigned_count}/{})",self.files.len())}else{name.clone()}).changed(){actions.push(Action::AssignMany{tag:name.clone(),files:self.files.clone(),present:assigned});}
                                 }else if ui.selectable_label(self.selected.as_ref()==Some(&name),&name).clicked(){self.selected=Some(name.clone());self.rename=name.clone();}
                                 ui.label(format!("({count})"));
                                 if ui.checkbox(&mut album,"Album").changed(){actions.push(Action::Album{tag:name.clone(),enabled:album});}
