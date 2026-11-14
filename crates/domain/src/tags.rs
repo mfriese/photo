@@ -227,9 +227,9 @@ mod tests {
         };
         let photo = LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap();
         let comment_audio =
-            LibraryFile::new("2026/audio/c/com_20261113_120000.m4a".into()).unwrap();
-        let diary = LibraryFile::new("2026/audio/d/aud_20261113_130000.wav".into()).unwrap();
-        let old = LibraryFile::new("2025/audio/d/aud_20251113_130000.wav".into()).unwrap();
+            LibraryFile::new("2026/audio/comments/com_20261113_120000.m4a".into()).unwrap();
+        let diary = LibraryFile::new("2026/audio/diary/aud_20261113_130000.wav".into()).unwrap();
+        let old = LibraryFile::new("2025/audio/diary/aud_20251113_130000.wav".into()).unwrap();
         let mut comments = CommentCatalog::default();
         comments
             .insert(

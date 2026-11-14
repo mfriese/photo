@@ -324,7 +324,7 @@ mod tests {
         let target = photo(root.path(), "2008/09/photo.jpg");
         let comment = Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
-            LibraryFile::new("2026/audio/c/com_20261113_120000.m4a".into()).unwrap(),
+            LibraryFile::new("2026/audio/comments/com_20261113_120000.m4a".into()).unwrap(),
             target.file,
         )
         .unwrap();
@@ -340,7 +340,7 @@ mod tests {
         let repo = store();
         let comment = publish_comment(&adapter(), &target, &take(source.path(), 1, 2026)).unwrap();
         repo.write_photo_record(root.path(), &comment).unwrap();
-        let old=b"# old cache\nversion: 2\ncomments:\n  invalid-old-id:\n    audio: 2020/audio/c/old.m4a\n";
+        let old=b"# old cache\nversion: 2\ncomments:\n  invalid-old-id:\n    audio: 2020/audio/comments/old.m4a\n";
         fs::write(root.path().join(FILE), old).unwrap();
         let loaded = load_catalog(&repo, root.path(), &AtomicBool::new(false)).unwrap();
         assert_eq!(loaded.catalog.entries().len(), 1);
@@ -436,7 +436,9 @@ mod tests {
         }
         let sidecar = library.path().join("yaml/2008/09/photo.jpg.yaml");
         let text = fs::read_to_string(&sidecar).unwrap();
-        assert!(text.contains("2025/audio/c/com_") && text.contains("2026/audio/c/com_"));
+        assert!(
+            text.contains("2025/audio/comments/com_") && text.contains("2026/audio/comments/com_")
+        );
         assert!(!text.contains("recorded_at") && !text.contains("photo_taken_at"));
         assert_eq!(fs::read_dir(sidecar.parent().unwrap()).unwrap().count(), 1);
         fs::remove_file(library.path().join(FILE)).unwrap();

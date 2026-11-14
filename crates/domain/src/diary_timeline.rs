@@ -452,14 +452,17 @@ mod comment_tests {
     fn comment_keeps_photo_reference_time_while_duration_is_refined() {
         let comment = crate::comments::Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
-            crate::tags::LibraryFile::new("2026/audio/c/com_20261113_120000.m4a".into()).unwrap(),
+            crate::tags::LibraryFile::new("2026/audio/comments/com_20261113_120000.m4a".into())
+                .unwrap(),
             crate::tags::LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
         )
         .unwrap();
-        let media =
-            crate::Media::from_audio_asset(comment.audio().as_str().into(), "2026/audio/c".into())
-                .unwrap()
-                .with_comment_recording(Some(&comment));
+        let media = crate::Media::from_audio_asset(
+            comment.audio().as_str().into(),
+            "2026/audio/comments".into(),
+        )
+        .unwrap()
+        .with_comment_recording(Some(&comment));
         let mut timeline =
             DiaryTimeline::new("2026".into(), vec![DiaryClip::from_media(&media)]).unwrap();
         timeline
@@ -477,6 +480,6 @@ mod comment_tests {
             "20080916_035811"
         );
         assert_eq!(timeline.clips()[0].duration(), Some(15.));
-        assert_eq!(media.group(), "2026/audio/c");
+        assert_eq!(media.group(), "2026/audio/comments");
     }
 }

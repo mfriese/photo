@@ -151,7 +151,7 @@ Die Fotosuche beginnt erst, wenn Audio tatsächlich wiedergegeben wird. Datumsin
 
 ### Datum und Audio-Import
 
-Audio wird ohne Umwandlung als **`Jahr/audio/d/aud_JJJJMMTT_HHMMSS.ext`** kopiert. Datumsquellen werden in dieser Reihenfolge geprüft:
+Audio wird ohne Umwandlung als **`Jahr/audio/diary/aud_JJJJMMTT_HHMMSS.ext`** kopiert. Datumsquellen werden in dieser Reihenfolge geprüft:
 
 1. Eingebettete Aufnahmezeit: BWF/RIFF `DateTimeOriginal`, ID3 `RecordingTime`, XMP `DateTimeOriginal`.
 2. Inhaltserstellungsdatum: QuickTime/Keys `CreationDate`, vollständiges RIFF `DateCreated` plus `TimeCreated`.
@@ -247,7 +247,7 @@ Jahres- und Monatsansichten zeigen eine kompakte Jahres-Audioleiste: Play/Pause 
 **Window → Audio Player** zeigt denselben laufenden Player ohne Neustart. Das Schließen dieses Fensters lässt die Wiedergabe weiterlaufen. ▶ startet die Wiedergabe und wechselt dabei zu ⏸ zum Pausieren; ein separater Stop-Button entfällt. Jahres-/Monatswechsel unterbrechen die Wiedergabe nicht, ein Bibliothekswechsel stoppt sie. Die Anwendung hält den Zeitachsenentwurf und die Auswahl im Anwendungskern; die Oberfläche steuert denselben nativen Transport über einen frameworkunabhängigen Port.
 
 ### Getrennte Ablage, gemeinsame Audioansichten
-Neue Tagebuchimporte landen direkt unter **`Jahr/audio/d/aud_JJJJMMTT_HHMMSS.ext`**. Kommentare liegen unter **`Jahr/audio/c/com_JJJJMMTT_HHMMSS.m4a`**, ihre einzelnen Zuordnungsdateien unter **`yaml/Jahr`**. Die obere Hörleiste öffnet die gemeinsame Wiedergabe; im Player gibt es die Filter **Tagebuch**, **Kommentare** und **Beide**. Die physische Trennung ist für die gemeinsame Wiedergabe transparent. Jahres-/Monats-Hörleisten spielen alle Kategorien; Kategorieansichten spielen nur ihre Art. Die Abschnitte werden weiterhin im Hintergrund auf ihre echte Dauer korrigiert.
+Neue Tagebuchimporte landen direkt unter **`Jahr/audio/diary/aud_JJJJMMTT_HHMMSS.ext`**. Kommentare liegen unter **`Jahr/audio/comments/com_JJJJMMTT_HHMMSS.m4a`**, ihre einzelnen Zuordnungsdateien unter **`yaml/Jahr`**. Die obere Hörleiste öffnet die gemeinsame Wiedergabe; im Player gibt es die Filter **Tagebuch**, **Kommentare** und **Beide**. Die physische Trennung ist für die gemeinsame Wiedergabe transparent. Jahres-/Monats-Hörleisten spielen alle Kategorien; Kategorieansichten spielen nur ihre Art. Die Abschnitte werden weiterhin im Hintergrund auf ihre echte Dauer korrigiert.
 
 Unbekannte Audionamen bleiben in der kombinierten Playeransicht sichtbar. Audiokommentare werden nach dem Bezugsdatum ihres verknüpften Fotos eingeordnet; das tatsächliche Aufnahmedatum bleibt getrennt erhalten. Alte `Jahr/diary`-Ordner und bereits vorhandene Kategorieunterordner bleiben ohne Umbenennen/Verschieben lesbar. Neue Importe bleiben Tagebuchaufnahmen; Audiokommentare lassen sich direkt am Foto aufnehmen; es gibt keine automatische Migration. Die Kollisionsprüfung bezieht sich auf das jeweilige Importziel; ältere Bestände werden nicht automatisch zusammengeführt oder dedupliziert.
 
@@ -292,8 +292,8 @@ Aufnahme und Pause blenden keine kurzzeitigen Vorbereitungstexte mehr ein; Fehle
 ```text
 2008/09/img_20080916_035811.jpg
 yaml/2008/09/img_20080916_035811.jpg.yaml
-2026/audio/c/com_20261113_143000.m4a
-2027/audio/c/com_20270102_100000.m4a
+2026/audio/comments/com_20261113_143000.m4a
+2027/audio/comments/com_20270102_100000.m4a
 ```
 Ein Foto-YAML (Version 2) enthält alle zugehörigen Kommentare als GUID → Audiopfad. Aufnahmedatum und Uhrzeit stehen ausschließlich im Audiodateinamen. Kommentare bleiben in der Baumauswahl und Jahreswiedergabe im tatsächlichen Aufnahmejahr; es gibt kein Umsortieren zum Fotojahr.
 
@@ -333,6 +333,8 @@ Der geöffnete Player folgt der Navigation in der Fotowand. Sein Kopf zeigt Jahr
 Beim Öffnen und erneuten Einblenden des Players, Clipwechsel und Seek werden die fünf Kontextfotos zur bereiten Bezugsposition geladen, auch bei Pause und vor der ersten Wiedergabe. Die Audio-Bereitschaft und tatsächlicher Wiedergabestart sind getrennte Zustände: Bereitstehen gibt die Hintergrundpriorität für Fotos frei; gründliche Audio-Metadatenprüfung wartet weiterhin auf tatsächliche Wiedergabe. Keine sekündlichen Neuanfragen. Unbekannte Bezugszeiten und leere Filter entfernen alte Fotos und deaktivieren deren Aktionen. Zwischen Zeitraum-/Kategorienzeile und genauer Datumszeile liegen mindestens zwölf Punkte Abstand. Native Regressionen prüfen Öffnen ohne Play, Seek, verspätete Ergebnisse, unbekannte Zeiten, leere Auswahl und Geometrie.
 
 ### Zentrale YAML-Ablage
-Alle bibliotheksbezogenen YAML-Dateien liegen ausschließlich unter `yaml/`: `yaml/settings.yaml`, `yaml/tags.yaml`, `yaml/comments-index.yaml`. Dateibezogene Quellen spiegeln den gesamten Medienpfad mit angehängtem `.yaml`, etwa `1980/09/img_19800916_035811.jpg` → `yaml/1980/09/img_19800916_035811.jpg.yaml`. Interne Foto-/Audioverweise bleiben relativ zur Bibliothekswurzel, nicht zum YAML-Verzeichnis. Audio bleibt unter Aufnahmejahr/audio/d beziehungsweise audio/c.
+Alle bibliotheksbezogenen YAML-Dateien liegen ausschließlich unter `yaml/`: `yaml/settings.yaml`, `yaml/tags.yaml`, `yaml/comments-index.yaml`. Dateibezogene Quellen spiegeln den gesamten Medienpfad mit angehängtem `.yaml`, etwa `1980/09/img_19800916_035811.jpg` → `yaml/1980/09/img_19800916_035811.jpg.yaml`. Interne Foto-/Audioverweise bleiben relativ zur Bibliothekswurzel, nicht zum YAML-Verzeichnis. Audio bleibt unter Aufnahmejahr/audio/diary beziehungsweise audio/comments.
 
 Kein Einlesen, Migrieren oder automatisches Entfernen alter Ablageorte. Den zuletzt geöffneten Bibliothekspfad weiterhin lokal in macOS-Preferences halten. Leser erzeugen keine Verzeichnisse; Schreiboperationen legen nötige YAML-Unterordner nach Prüfung an. Gemeinsame Verzeichnisprüfung in metadata_fs; Symlinks und nicht reguläre Vorfahren ablehnen. Medienbaum und Medienscans lassen den reservierten yaml-Zweig aus. Kommentar-Neuaufbau liest ausschließlich Foto-YAMLs unter yaml/<Jahr>, überspringt Konfigurationen/Index/Recovery-Dateien und traversiert keine Medienzweige. Beschädigte Quellen ersetzen keinen gültigen Index; Sicherungen eines beschädigten Index bleiben ebenfalls unter yaml/.
+
+Die kanonischen Audioordner heißen `Jahr/audio/diary` und `Jahr/audio/comments`. Dateinamen bleiben `aud_JJJJMMTT_HHMMSS.ext` beziehungsweise `com_JJJJMMTT_HHMMSS[_NNN].m4a`. Import, Aufnahme, YAML-Verweise und Wiedergabe verwenden diese ausgeschriebenen Namen. Keine automatische Umbenennung bestehender Benutzerdateien oder Migration aus den ehemaligen Kurzordnern. YAML bleibt unverändert zentral unter yaml/.

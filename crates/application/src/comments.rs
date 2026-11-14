@@ -1108,7 +1108,7 @@ mod tests {
             let comment = Comment::new(
                 format!("12345678-1234-1234-1234-{n:012}"),
                 LibraryFile::new(format!(
-                    "{}/audio/c/com_{}1113_120000_{n:03}.m4a",
+                    "{}/audio/comments/com_{}1113_120000_{n:03}.m4a",
                     2024 + n,
                     2024 + n
                 ))
@@ -1130,7 +1130,7 @@ mod tests {
             audio
                 .items
                 .iter()
-                .all(|m| m.group().ends_with("/audio/c") && m.has_recording_time())
+                .all(|m| m.group().ends_with("/audio/comments") && m.has_recording_time())
         );
         let mut draft = crate::diary::GalleryAudio::default();
         draft.ensure(&audio.items, Path::new("/library"), &audio.group);
@@ -1206,7 +1206,7 @@ mod tests {
         assert!(!session.has_unsaved());
         assert_eq!(fake.copies.load(Ordering::SeqCst), 1);
         assert_eq!(session.catalog.entries().len(), 1);
-        assert_eq!(session.comment_media()[0].group(), "2026/audio/c");
+        assert_eq!(session.comment_media()[0].group(), "2026/audio/comments");
     }
     #[test]
     fn root_changes_discard_stale_load_results() {
@@ -1295,7 +1295,7 @@ mod tests {
         let comment = publish_comment(&store, &target, &take).unwrap();
         assert_eq!(
             comment.audio().as_str(),
-            "2026/audio/c/com_20261112_153000_002.m4a"
+            "2026/audio/comments/com_20261112_153000_002.m4a"
         );
 
         assert_eq!(comment.photo_year(), "2008");

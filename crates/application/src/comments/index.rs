@@ -126,7 +126,7 @@ mod tests {
     fn comment() -> Comment {
         Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
-            LibraryFile::new("2026/audio/c/com_20261113_120000.m4a".into()).unwrap(),
+            LibraryFile::new("2026/audio/comments/com_20261113_120000.m4a".into()).unwrap(),
             LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
         )
         .unwrap()

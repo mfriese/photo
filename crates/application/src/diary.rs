@@ -965,21 +965,21 @@ mod tests {
         let mut items = mixed_recording_time_items();
         items.push(
             Media::from_audio_asset(
-                "/library/2026/audio/d/aud_20261114_120000.wav".into(),
-                "2026/audio/d".into(),
+                "/library/2026/audio/diary/aud_20261114_120000.wav".into(),
+                "2026/audio/diary".into(),
             )
             .unwrap(),
         );
         let comment = Comment::new(
             "12345678-1234-1234-1234-123456789abd".into(),
-            LibraryFile::new("2026/audio/c/com_20261114_130000.m4a".into()).unwrap(),
+            LibraryFile::new("2026/audio/comments/com_20261114_130000.m4a".into()).unwrap(),
             LibraryFile::new("1980/09/img_19800916_035811.jpg".into()).unwrap(),
         )
         .unwrap();
         items.push(
             Media::from_audio_asset(
                 Path::new("/library").join(comment.audio().as_str()),
-                "2026/audio/c".into(),
+                "2026/audio/comments".into(),
             )
             .unwrap()
             .with_comment_recording(Some(&comment)),
@@ -1038,8 +1038,10 @@ mod tests {
             }
         }
         let items = vec![
-            Media::from_audio_asset("2026/audio/d/a.wav".into(), "2026/audio/d".into()).unwrap(),
-            Media::from_audio_asset("2026/audio/d/b.wav".into(), "2026/audio/d".into()).unwrap(),
+            Media::from_audio_asset("2026/audio/diary/a.wav".into(), "2026/audio/diary".into())
+                .unwrap(),
+            Media::from_audio_asset("2026/audio/diary/b.wav".into(), "2026/audio/diary".into())
+                .unwrap(),
         ];
         let mut session = DiarySession::default();
         let player = Player::default();
@@ -1095,8 +1097,8 @@ mod tests {
         }
         let items = vec![
             Media::from_audio_asset(
-                "2026/audio/d/aud_20261114_120000.wav".into(),
-                "2026/audio/d".into(),
+                "2026/audio/diary/aud_20261114_120000.wav".into(),
+                "2026/audio/diary".into(),
             )
             .unwrap(),
         ];
@@ -1406,7 +1408,7 @@ mod tests {
                 let c = crate::domain::comments::Comment::new(
                     format!("12345678-1234-1234-1234-{year:012}"),
                     crate::domain::tags::LibraryFile::new(format!(
-                        "{year}/audio/c/com_{year}1113_120000.m4a"
+                        "{year}/audio/comments/com_{year}1113_120000.m4a"
                     ))
                     .unwrap(),
                     crate::domain::tags::LibraryFile::new("2008/09/img_20080916_035811.jpg".into())
@@ -1415,7 +1417,7 @@ mod tests {
                 .unwrap();
                 Media::from_audio_asset(
                     Path::new("/library").join(c.audio().as_str()),
-                    format!("{year}/audio/c"),
+                    format!("{year}/audio/comments"),
                 )
                 .unwrap()
                 .with_comment_recording(Some(&c))
@@ -1449,25 +1451,25 @@ mod tests {
         use crate::domain::{comments::Comment, tags::LibraryFile};
         let comment = Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
-            LibraryFile::new("2008/audio/c/com_20080916_035811.m4a".into()).unwrap(),
+            LibraryFile::new("2008/audio/comments/com_20080916_035811.m4a".into()).unwrap(),
             LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
         )
         .unwrap();
         vec![
             Media::from_library_path(
-                "/library/2008/audio/d/aud_20080916_035820.wav".into(),
-                "2008/audio/d".into(),
+                "/library/2008/audio/diary/aud_20080916_035820.wav".into(),
+                "2008/audio/diary".into(),
             )
             .unwrap(),
             Media::from_audio_asset(
                 Path::new("/library").join(comment.audio().as_str()),
-                "2008/audio/c".into(),
+                "2008/audio/comments".into(),
             )
             .unwrap()
             .with_comment_recording(Some(&comment)),
             Media::from_library_path(
-                "/library/2008/audio/d/aud_20080916_035800.wav".into(),
-                "2008/audio/d".into(),
+                "/library/2008/audio/diary/aud_20080916_035800.wav".into(),
+                "2008/audio/diary".into(),
             )
             .unwrap(),
         ]
@@ -1513,8 +1515,8 @@ mod tests {
             let mut changed = items.clone();
             changed.push(
                 Media::from_library_path(
-                    "/library/2008/audio/d/aud_20080916_040000.wav".into(),
-                    "2008/audio/d".into(),
+                    "/library/2008/audio/diary/aud_20080916_040000.wav".into(),
+                    "2008/audio/diary".into(),
                 )
                 .unwrap(),
             );
@@ -1578,8 +1580,8 @@ mod tests {
         let mut items = mixed_recording_time_items();
         items.push(
             Media::from_library_path(
-                "/library/2008/audio/d/aud_20081001_120000.wav".into(),
-                "2008/audio/d".into(),
+                "/library/2008/audio/diary/aud_20081001_120000.wav".into(),
+                "2008/audio/diary".into(),
             )
             .unwrap(),
         );
@@ -1793,13 +1795,13 @@ mod reference_period_tests {
         use crate::domain::{comments::Comment, tags::LibraryFile};
         let c = Comment::new(
             "12345678-1234-1234-1234-123456789abc".into(),
-            LibraryFile::new("2026/audio/c/com_20261114_120000.m4a".into()).unwrap(),
+            LibraryFile::new("2026/audio/comments/com_20261114_120000.m4a".into()).unwrap(),
             LibraryFile::new("1980/09/img_19800916_035811.jpg".into()).unwrap(),
         )
         .unwrap();
         let m = Media::from_audio_asset(
-            "/library/2026/audio/c/com_20261114_120000.m4a".into(),
-            "2026/audio/c".into(),
+            "/library/2026/audio/comments/com_20261114_120000.m4a".into(),
+            "2026/audio/comments".into(),
         )
         .unwrap()
         .with_comment_recording(Some(&c));

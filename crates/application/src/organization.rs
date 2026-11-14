@@ -447,7 +447,7 @@ mod tests {
         original
             .assign(
                 "diary",
-                LibraryFile::new("2025/audio/d/aud_20251113_120000.wav".into()).unwrap(),
+                LibraryFile::new("2025/audio/diary/aud_20251113_120000.wav".into()).unwrap(),
                 true,
             )
             .unwrap();
@@ -458,13 +458,13 @@ mod tests {
         session.begin_media_scan(Path::new("/library"));
         let audio = vec![
             Media::from_audio_asset(
-                "/library/2026/audio/d/aud_20261113_120000.wav".into(),
-                "2026/audio/d".into(),
+                "/library/2026/audio/diary/aud_20261113_120000.wav".into(),
+                "2026/audio/diary".into(),
             )
             .unwrap(),
             Media::from_audio_asset(
-                "/library/2026/audio/c/com_20261113_130000.m4a".into(),
-                "2026/audio/c".into(),
+                "/library/2026/audio/comments/com_20261113_130000.m4a".into(),
+                "2026/audio/comments".into(),
             )
             .unwrap(),
         ];
@@ -475,13 +475,13 @@ mod tests {
             session
                 .catalog()
                 .unwrap()
-                .contains("diary", "2025/audio/d/aud_20251113_120000.wav")
+                .contains("diary", "2025/audio/diary/aud_20251113_120000.wav")
         );
         assert!(
             session
                 .catalog()
                 .unwrap()
-                .contains("comment", "2026/audio/c/com_20261113_130000.m4a")
+                .contains("comment", "2026/audio/comments/com_20261113_130000.m4a")
         );
         session.observe_media(Path::new("/library"), &[], true);
         session.poll();
@@ -490,14 +490,14 @@ mod tests {
             !session
                 .catalog()
                 .unwrap()
-                .contains("diary", "2025/audio/d/aud_20251113_120000.wav")
+                .contains("diary", "2025/audio/diary/aud_20251113_120000.wav")
         );
         assert!(
             repository
                 .catalog
                 .lock()
                 .unwrap()
-                .contains("diary", "2026/audio/d/aud_20261113_120000.wav")
+                .contains("diary", "2026/audio/diary/aud_20261113_120000.wav")
         );
     }
     #[test]
@@ -521,8 +521,10 @@ mod tests {
                 .insert(
                     Comment::new(
                         format!("12345678-1234-1234-1234-{n:012}"),
-                        LibraryFile::new(format!("2026/audio/c/com_20261113_120000_{n:03}.m4a"))
-                            .unwrap(),
+                        LibraryFile::new(format!(
+                            "2026/audio/comments/com_20261113_120000_{n:03}.m4a"
+                        ))
+                        .unwrap(),
                         photo.clone(),
                     )
                     .unwrap(),

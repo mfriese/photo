@@ -235,7 +235,7 @@ impl ImportAdapter for FileImportAdapter {
         regular(source)?;
         let parent = target.parent().ok_or("Ziel ohne Verzeichnis")?;
         // Build missing descendants from the closest existing directory. Validate every
-        // ancestor before creating anything; never traverse a symlink (including audio/d,c,y).
+        // ancestor before creating anything; never traverse a symlink (including audio/diary and audio/comments).
         let mut missing = Vec::new();
         let mut ancestor = parent;
         loop {
@@ -481,14 +481,16 @@ mod tests {
                 .message
                 .contains("2 kopiert, 1 übersprungen, 0 Fehler")
         );
-        let first = target.path().join("2008/audio/d/aud_20080916_035811.wav");
+        let first = target
+            .path()
+            .join("2008/audio/diary/aud_20080916_035811.wav");
         assert_eq!(fs::read(first).unwrap(), before);
-        assert!(!target.path().join("2008/audio/diary").exists());
+        assert!(!target.path().join("2008/audio/d").exists());
         assert!(!target.path().join("2008/audio/comments").exists());
         assert!(
             target
                 .path()
-                .join("2008/audio/d/aud_20080916_035811_001.wav")
+                .join("2008/audio/diary/aud_20080916_035811_001.wav")
                 .exists()
         );
         assert_eq!(fs::read(source.path().join("a.wav")).unwrap(), before);
@@ -524,7 +526,9 @@ mod tests {
                 .message
                 .contains("1 kopiert, 0 übersprungen, 0 Fehler")
         );
-        let imported = target.path().join("2008/audio/d/aud_20080916_035811.wav");
+        let imported = target
+            .path()
+            .join("2008/audio/diary/aud_20080916_035811.wav");
         let date = crate::audio::NativeAudioSource {
             tool: crate::exiftool::ExifTool::development(),
         }
@@ -551,7 +555,7 @@ mod tests {
         assert!(preview.iter().any(|event| {
             event
                 .message
-                .contains("2023/audio/d/aud_20231227_225132.wav")
+                .contains("2023/audio/diary/aud_20231227_225132.wav")
         }));
         assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
         let result = run(source.path(), target.path(), false);
@@ -563,7 +567,12 @@ mod tests {
                 .contains("1 kopiert, 0 übersprungen, 0 Fehler")
         );
         assert_eq!(
-            fs::read(target.path().join("2023/audio/d/aud_20231227_225132.wav")).unwrap(),
+            fs::read(
+                target
+                    .path()
+                    .join("2023/audio/diary/aud_20231227_225132.wav")
+            )
+            .unwrap(),
             original
         );
         assert_eq!(fs::read(path).unwrap(), original);

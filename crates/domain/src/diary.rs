@@ -56,17 +56,8 @@ impl<'a> AudioScope<'a> {
         } else if folder.eq_ignore_ascii_case("audio") {
             match parts.next() {
                 None => AudioKind::All,
-                Some(name)
-                    if (name.eq_ignore_ascii_case("diary") || name.eq_ignore_ascii_case("d")) =>
-                {
-                    AudioKind::Diary
-                }
-                Some(name)
-                    if (name.eq_ignore_ascii_case("comments")
-                        || name.eq_ignore_ascii_case("c")) =>
-                {
-                    AudioKind::Comments
-                }
+                Some(name) if name.eq_ignore_ascii_case("diary") => AudioKind::Diary,
+                Some(name) if name.eq_ignore_ascii_case("comments") => AudioKind::Comments,
                 _ => return None,
             }
         } else {
@@ -226,10 +217,8 @@ pub fn audio_kind(media: &crate::Media) -> Option<AudioKind> {
         && media
             .group()
             .split(std::path::MAIN_SEPARATOR)
-            .next_back()
-            .is_some_and(|folder| {
-                folder.eq_ignore_ascii_case("d") || folder.eq_ignore_ascii_case("c")
-            })
+            .nth(1)
+            .is_some_and(|folder| folder.eq_ignore_ascii_case("audio"))
     {
         return Some(scope.kind);
     }
@@ -321,15 +310,19 @@ mod scope_tests {
 mod dedicated_audio_tests {
     use super::*;
     #[test]
-    fn short_folders_and_new_prefix_preserve_legacy_category_views() {
+    fn descriptive_folders_define_categories_and_combined_playback() {
         for (folder, name, kind) in [
-            ("2026/audio/d", "aud_20261113_120000.mp4", AudioKind::Diary),
             (
-                "2026/audio/c",
+                "2026/audio/diary",
+                "aud_20261113_120000.mp4",
+                AudioKind::Diary,
+            ),
+            (
+                "2026/audio/comments",
                 "com_20261113_130000.m4a",
                 AudioKind::Comments,
             ),
-            ("2026/audio/d", "old.wav", AudioKind::Diary),
+            ("2026/audio/diary", "old.wav", AudioKind::Diary),
         ] {
             let m = crate::Media::from_library_path(Path::new(folder).join(name), folder.into())
                 .unwrap();
@@ -338,7 +331,9 @@ mod dedicated_audio_tests {
             assert!(AudioScope::parse("2026/audio").unwrap().includes(&m));
             assert_eq!(AudioScope::parse(folder).unwrap().kind(), kind);
         }
-        assert!(AudioScope::parse("2026/audio/y").is_none());
+        for obsolete in ["2026/audio/d", "2026/audio/c", "2026/audio/y"] {
+            assert!(AudioScope::parse(obsolete).is_none());
+        }
         assert_eq!(
             crate::audio_date::date_from_filename("com_20261113_130000_002")
                 .unwrap()
@@ -377,11 +372,11 @@ mod projected_kind_tests {
     #[test]
     fn projected_paths_use_domain_category_rules_without_io() {
         assert_eq!(
-            recording_kind(Path::new("/Fotos/2026/audio/d/aud_20261113_120000.wav")),
+            recording_kind(Path::new("/Fotos/2026/audio/diary/aud_20261113_120000.wav")),
             Some(AudioKind::Diary)
         );
         assert_eq!(
-            recording_kind(Path::new("2026/audio/c/com_20261113_120000.m4a")),
+            recording_kind(Path::new("2026/audio/comments/com_20261113_120000.m4a")),
             Some(AudioKind::Comments)
         );
         assert_eq!(recording_kind(Path::new("2026/audio/unknown.wav")), None);

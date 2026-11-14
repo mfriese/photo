@@ -1808,8 +1808,8 @@ fn changing_page_prepares_audio_ratios_without_play_or_date_io() {
         .into_iter()
         .map(|(year, time)| {
             Media::from_audio_asset(
-                format!("/library/{year}/audio/d/aud_{year}1113_{time}.wav").into(),
-                format!("{year}/audio/d"),
+                format!("/library/{year}/audio/diary/aud_{year}1113_{time}.wav").into(),
+                format!("{year}/audio/diary"),
             )
             .unwrap()
         })
