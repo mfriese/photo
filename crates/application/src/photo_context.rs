@@ -121,7 +121,7 @@ impl PhotoContext {
         let halted = stop.clone();
         let latest = generation.clone();
         std::thread::spawn(move || {
-            // Waiting for the native player request is intentional: no photo I/O before playback.
+            // Waiting for the native player request is intentional: no photo I/O before the selected audio position is ready.
             let Ok(mut request) = requests.recv() else {
                 return;
             };

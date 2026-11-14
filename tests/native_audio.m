@@ -117,10 +117,12 @@ int main(int argc,char **argv) {
         assert(fabs(CMTimeGetSeconds(controller.transport.player.currentTime)-1.5)<0.03);
         assert([controller.titleLabel.stringValue isEqualToString:@"Audio"]);
         assert([controller.detailLabel.stringValue isEqualToString:@"28.12.2023  00:00:00"]);
-        assert(controller.photoRequest==0 && photosuite_audio_state(42)==1);
+        assert(controller.photoRequest==1 && (photosuite_audio_state(42)&3)==1);
+        assert((photosuite_audio_state(42)&16)!=0);
+        assert(!controller.transport.hasStarted && controller.transport.player.rate==0);
         controller.transport.wantsPlay=YES;[controller.transport.player play];pump(0.25);[controller tick:nil];
         assert(CMTimeGetSeconds(controller.transport.player.currentTime)>1.55);
-        assert(controller.transport.hasStarted && controller.photoRequest==1 && photosuite_audio_state(42)==3);
+        assert(controller.transport.hasStarted && controller.photoRequest==1 && (photosuite_audio_state(42)&3)==3);
         [controller tick:nil];assert(controller.photoRequest==1);
         controller.transport.wantsPlay=NO;[controller.transport.player pause];
         double paused=CMTimeGetSeconds(controller.transport.player.currentTime);AVPlayerItem *item=controller.transport.player.currentItem;
@@ -154,6 +156,7 @@ int main(int argc,char **argv) {
         photosuite_audio_context_caption(42,request-1,2,"stale","stale");
         assert([controller.contextPhotos.slots[2].dateText isEqualToString:@"27.12.2023"]);
         photosuite_audio_context_status(42,request-1,"stale");assert(![controller.contextPhotos.statusText isEqualToString:@"stale"]);
+        photosuite_audio_context_status(42,request,"");
         controller.contextPhotos.onSelect(2);unsigned int clicked=0;
         assert(photosuite_audio_context_click(&session,&request,&clicked)==1 && clicked==2);
         assert(photosuite_audio_context_click(&session,&request,&clicked)==0);
@@ -173,13 +176,24 @@ int main(int argc,char **argv) {
         unsigned long long embedded=0;
         assert(photosuite_audio_open_mode(paths,labels,weights,dates,durations,states,2,"2023",argv[2],&embedded,0)==0);
         PSAudioController *compact=PSAudio;assert(!compact.window.visible);
+        assert(photosuite_audio_control(embedded,5,0)==0);
+        loaded(compact);
+        assert(!compact.transport.hasStarted&&compact.transport.player.rate==0);
+        assert(compact.photosStarted&&compact.photoRequest==1);
+        unsigned long long previewSession=0,previewRequest=0;double previewTime=0;
+        assert(photosuite_audio_context_state(&previewSession,&previewRequest,&previewTime)==3);
+        assert(previewSession==embedded&&isfinite(previewTime));
+        assert(photosuite_audio_context_state(&previewSession,&previewRequest,&previewTime)==1);
+        assert(photosuite_audio_control(embedded,0,0)==0);
         loaded(compact);NSDate *started=[NSDate dateWithTimeIntervalSinceNow:5];
         while(!compact.transport.hasStarted){pump(0.02);[compact tick:nil];assert(started.timeIntervalSinceNow>0);}
         assert(photosuite_audio_control(embedded,0,0)==0);
         AVPlayerItem *shared=compact.transport.player.currentItem;
         double position=0,currentDate=0;
         assert(photosuite_audio_transport_state(embedded,&position,&currentDate)&1);
+        unsigned long long requestBeforeOpening=compact.photoRequest;
         assert(photosuite_audio_control(embedded,2,0)==0 && compact.window.visible);
+        assert(compact.photoRequest==requestBeforeOpening+1&&!compact.transport.wantsPlay);
         assert(compact.transport.player.currentItem==shared);
         [compact.window performClose:nil];pump(0.02);
         assert(!compact.window.visible && compact.transport.player.currentItem==shared);
@@ -187,9 +201,11 @@ int main(int argc,char **argv) {
         assert(photosuite_audio_control(embedded,1,0.5)==0);loaded(compact);
         // Native symbol controls remain centered and retain equal dimensions.
         for(NSNumber *width in @[@440,@740,@1600]){
-            [compact.window setContentSize:NSMakeSize(width.doubleValue,550)];[compact.window.contentView layoutSubtreeIfNeeded];
+            [compact.window setContentSize:NSMakeSize(width.doubleValue,560)];[compact.window.contentView layoutSubtreeIfNeeded];
             assert(fabs(NSMidX(compact.controlGroup.frame)-compact.window.contentView.bounds.size.width/2)<.5);
             assert(compact.controlGroup.arrangedSubviews.count==4);
+            assert(NSMinY(compact.categoryControl.frame)-NSMaxY(compact.detailLabel.frame)>=12);
+            assert(NSMinY(compact.titleLabel.frame)-NSMaxY(compact.detailLabel.frame)>=12);
             assert(NSMinY(compact.controlGroup.frame)>=0);
             assert(NSMaxY(compact.controlGroup.frame)<=NSMinY(compact.contextPhotos.frame));
             for(NSView *button in compact.controlGroup.arrangedSubviews){
@@ -232,6 +248,7 @@ int main(int argc,char **argv) {
         assert(compact.timeline.clips.count==0&&!compact.transport.wantsPlay);
         assert([compact numberOfRowsInTableView:compact.fileTable]==0);
         assert(!compact.playButton.enabled&&!compact.recordButton.enabled);
+        assert(compact.playButton.image==PSAudioSymbolImage(PSAudioPlay));
         assert((photosuite_audio_state(embedded)&8)!=0);
         assert(photosuite_audio_control(embedded,4,0)==0);
         assert(compact.category==0&&compact.timeline.clips.count==compact.sourceClips.count);
@@ -245,6 +262,19 @@ int main(int argc,char **argv) {
         masks[0]=0;
         assert(photosuite_audio_visibility(embedded,masks,compact.sourceClips.count)!=0);
         assert(compact.timeline.clips.count==compact.sourceClips.count);
+        // Missing reference dates invalidate old photos and never leave an endless spinner.
+        compact.contextPhotos.slots[2].image=[[NSImage alloc] initWithSize:NSMakeSize(8,8)];
+        compact.contextPhotos.slots[2].dateText=@"stale";
+        unsigned long long oldPhotoRequest=compact.photoRequest;
+        double unknownDates[]={NAN,NAN};
+        assert(photosuite_audio_revise(embedded,paths,labels,weights,unknownDates,durations,states,2,"unknown reference")==0);
+        assert(!compact.contextPhotos.slots[2].image&&compact.contextPhotos.slots[2].dateText.length==0);
+        assert(!compact.contextPhotos.loading&&!compact.recordButton.enabled);
+        unsigned long long unknownRequest=compact.photoRequest;[compact tick:nil];assert(compact.photoRequest==unknownRequest);
+        photosuite_audio_context_caption(embedded,oldPhotoRequest,2,"stale","stale");
+        assert(compact.contextPhotos.slots[2].dateText.length==0);
+        assert(photosuite_audio_revise(embedded,paths,labels,weights,dates,durations,states,2,"reference restored")==0);
+        assert(compact.photosStarted&&compact.photoRequest>unknownRequest);
         assert(photosuite_audio_control(embedded,3,0)==0);
         assert(!compact.transport.player.currentItem && photosuite_audio_state(embedded)==0);
         puts("Native audio: provisional weights/colors, real playback, in-place reorder, position preservation, seeks, corrected auto-advance, photo clicks and cancellation OK");

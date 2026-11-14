@@ -49,6 +49,8 @@ pub struct AudioPlaybackState {
     pub has_started: bool,
     pub failed: bool,
     pub empty_selection: bool,
+    /// Selected asset is ready, including when paused before its first playback.
+    pub ready_for_context: bool,
 }
 #[derive(Clone, Default)]
 pub struct VerificationProgress {
@@ -508,7 +510,9 @@ impl DiarySession {
                     let _ = gate.send(true);
                 }
                 self.status = "Aufnahmedaten und Dauern werden im Hintergrund geprüft …".into();
-            } else if state.empty_selection && !pending.priority_released {
+            } else if (state.empty_selection || state.ready_for_context)
+                && !pending.priority_released
+            {
                 if let Some(gate) = &pending.gate {
                     let _ = gate.send(false);
                 }
@@ -838,6 +842,7 @@ mod tests {
         opened: Mutex<Option<(DiaryTimeline, PathBuf)>>,
         revisions: Mutex<Vec<(DiaryTimeline, VerificationProgress)>>,
         started: AtomicBool,
+        ready: AtomicBool,
         closed: AtomicBool,
         modes: Mutex<Vec<bool>>,
         controls: Mutex<Vec<AudioControl>>,
@@ -889,6 +894,7 @@ mod tests {
                 has_started: self.started.load(Ordering::Relaxed),
                 failed: false,
                 empty_selection: false,
+                ready_for_context: self.ready.load(Ordering::Relaxed),
             }
         }
     }
@@ -1075,6 +1081,45 @@ mod tests {
         assert!(!catalog.is_loading());
         catalog.cancel();
         assert!(catalog.date(Path::new("a.wav")).is_none());
+    }
+    #[test]
+    fn paused_ready_audio_releases_photo_priority_without_starting_full_verification() {
+        struct NoReads;
+        impl AudioSource for NoReads {
+            fn probe(&self, _: &Path) -> Result<AudioProbe, String> {
+                panic!("paused opening must not start full audio verification")
+            }
+            fn capture_time(&self, _: &Path) -> Result<CaptureTime, String> {
+                panic!("paused opening must not inspect metadata")
+            }
+        }
+        let items = vec![
+            Media::from_audio_asset(
+                "2026/audio/d/aud_20261114_120000.wav".into(),
+                "2026/audio/d".into(),
+            )
+            .unwrap(),
+        ];
+        let priority = Arc::new(crate::work_priority::WorkPriority::default());
+        let mut session = DiarySession::with_priority(priority.clone());
+        let player = Player::default();
+        session
+            .start_embedded(&items, &items[0], Arc::new(NoReads), "2026")
+            .unwrap();
+        until(&mut session, &player, |s, _| s.timeline().is_some());
+        assert!(priority.audio_active());
+        player.ready.store(true, Ordering::Relaxed);
+        session.poll(&player);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while priority.audio_active() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(!player.state().has_started);
+        assert_eq!(session.progress().checked, 0);
+        assert!(!session.timeline().unwrap().clips()[0].is_verified());
+        session.cancel();
+        until(&mut session, &player, |s, _| !s.is_loading());
     }
     #[test]
     fn named_diary_grid_needs_no_metadata_and_audio_priority_is_released_after_start_or_cancel() {

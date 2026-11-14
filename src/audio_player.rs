@@ -204,6 +204,7 @@ impl AudioPlayer for NativeAudioPlayer {
                 has_started: flags & 2 != 0,
                 failed: flags & 4 != 0,
                 empty_selection: flags & 8 != 0,
+                ready_for_context: flags & 16 != 0,
             }
         }
         #[cfg(not(target_os = "macos"))]

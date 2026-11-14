@@ -149,6 +149,23 @@ pub fn panel(fill: Color32, margin: i8) -> egui::Frame {
         .fill(fill)
         .inner_margin(egui::Margin::same(margin))
 }
+/// Top-level library action, framed and aligned like the year headers even when inactive.
+pub fn root_navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding.x = ui.spacing().indent;
+        ui.add_sized(
+            [ui.available_width(), 20.],
+            egui::Button::new(RichText::new(label).size(14.).strong().color(TEXT))
+                .right_text("")
+                .selected(selected)
+                .frame(true)
+                .wrap_mode(egui::TextWrapMode::Truncate),
+        )
+    })
+    .inner
+    .on_hover_text(label)
+}
+
 pub fn navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
     ui.add_sized(
         [ui.available_width(), 20.],

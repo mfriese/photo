@@ -29,7 +29,7 @@ impl super::Suite {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    if theme::navigation(ui,self.group.is_none() && self.tag_view.active.is_none(),"Alles").clicked() {
+                    if theme::root_navigation(ui,self.group.is_none() && self.tag_view.active.is_none(),"Alles").clicked() {
                         self.group=None;self.tag_view.active=None;
                     }
                     theme::eyebrow(ui,"Jahre");ui.add_space(2.);
@@ -46,9 +46,7 @@ impl super::Suite {
                                     }
                                 }
                             });
-                        if response.header_response.clicked()
-                            && egui::collapsing_header::CollapsingState::load(ctx, response.header_response.id)
-                                .is_some_and(|state| state.is_open()) {
+                        if response.header_response.clicked() {
                             self.collection.prioritize(&year);
                             self.group = Some(year.clone());self.tag_view.active=None;
                         }

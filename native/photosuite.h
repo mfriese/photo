@@ -15,7 +15,7 @@ int photosuite_audio_probe(const char *path, double *duration, int *audioOnly, c
 // Dates are civil clock seconds (no implicit timezone shift), NAN when not yet known.
 // States: 0 pending, 1 verified, 2 failed. Only the selected asset loads at open.
 int photosuite_audio_open(const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *year,const char *selected,unsigned long long *session);
-// Read-only flags: 1 open, 2 has actually played, 4 transport error, 8 empty selection. Session guards replacement.
+// Read-only flags: 1 open, 2 has actually played, 4 transport error, 8 empty selection, 16 selected asset ready (also paused). Session guards replacement.
 int photosuite_audio_state(unsigned long long session);
 // Reorder/resize the same file set, without replacing or seeking the active AVPlayerItem.
 int photosuite_audio_revise(unsigned long long session,const char **paths,const char **labels,const double *weights,const double *dates,const double *durations,const unsigned int *states,size_t count,const char *status);

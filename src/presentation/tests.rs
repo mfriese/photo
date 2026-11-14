@@ -499,7 +499,11 @@ fn library_years_start_collapsed_and_expand_on_click() {
         .1
         .center();
     draw(click(month));
-    assert_eq!(suite.group.as_deref(), Some("2026/09"));
+    // Closing the expanded year must select it, even after a month was selected.
+    draw(click(header));
+    let collapsed = draw(vec![]);
+    assert!(!collapsed.iter().any(|(text, _)| text == "September"));
+    assert_eq!(suite.group.as_deref(), Some("2026"));
 }
 #[test]
 fn importing_elsewhere_keeps_the_open_photo_library_and_saved_path() {
@@ -1838,5 +1842,44 @@ fn changing_page_prepares_audio_ratios_without_play_or_date_io() {
             );
         }
         assert!(suite.diary.timeline().is_none());
+    }
+}
+
+#[test]
+fn unselected_all_has_the_same_framed_background_and_type_size_as_years() {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut suite = test_suite();
+    suite.root = Some("/Fotos".into());
+    suite.group = Some("2026/09".into());
+    suite.items = vec![Media::from_path("/Fotos/2026/09/a.jpg".into(), "2026/09".into()).unwrap()];
+    let output = ctx.run(
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800., 600.),
+            )),
+            ..Default::default()
+        },
+        |ctx| suite.library_sidebar(ctx),
+    );
+    let text = |label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.job.text == label => Some(t),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let all = text("Alles");
+    let year = text("2026");
+    assert_eq!(
+        all.galley.job.sections[0].format.font_id.size,
+        year.galley.job.sections[0].format.font_id.size
+    );
+    for text in [all, year] {
+        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(r) if r.rect.contains_rect(text.visual_bounding_rect()) && r.fill==crate::theme::RAISED)));
     }
 }
