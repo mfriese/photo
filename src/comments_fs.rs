@@ -113,6 +113,9 @@ fn obsolete_cache(bytes: &[u8]) -> bool {
         .is_some_and(|version| [1, 2].contains(&version))
 }
 impl CommentRepository for YamlComments {
+    fn prepare_metadata_layout(&self, root: &Path, cancel: &AtomicBool) -> Result<(), String> {
+        crate::media_records_fs::prepare_layout(root, cancel, &self.priority)
+    }
     fn read_cache(&self, root: &Path) -> Result<CommentCache, String> {
         match read(root)? {
             None => Ok(CommentCache::Missing),
@@ -304,6 +307,9 @@ mod tests {
             )
             .unwrap();
             let before = stored.revision.unwrap();
+            // This test targets rebuilding an already upgraded library, not the first layout upgrade.
+            repo.prepare_metadata_layout(root.path(), &AtomicBool::new(false))
+                .unwrap();
             let moved = outside.path().join("held");
             fs::rename(root.path().join(ancestor), &moved).unwrap();
             std::os::unix::fs::symlink(&moved, root.path().join(ancestor)).unwrap();

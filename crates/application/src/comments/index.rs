@@ -14,6 +14,7 @@ pub fn load<R: CommentRepository + ?Sized>(
     cancel: &AtomicBool,
 ) -> Result<StoredComments, String> {
     check_cancel(cancel)?;
+    repository.prepare_metadata_layout(root, cancel)?;
     match repository.read_cache(root)? {
         CommentCache::Current(stored) => {
             check_cancel(cancel)?;
@@ -43,6 +44,7 @@ pub(super) fn rebuild<R: CommentRepository + ?Sized>(
     progress: &dyn Fn(RebuildProgress),
 ) -> Result<(StoredComments, String), String> {
     check_cancel(cancel)?;
+    repository.prepare_metadata_layout(root, cancel)?;
     let base = repository.rebuild_base(root)?;
     let entries = repository.scan_photo_records(root, cancel, progress)?;
     let mut catalog = CommentCatalog::default();

@@ -100,7 +100,7 @@ impl Comment {
             recorded_at,
         })
     }
-    /// Mirror the full library-relative image path under yaml, keeping its extension.
+    /// Place image metadata in yaml/year/month, retaining the entire filename and extension.
     pub fn metadata_path(photo: &LibraryFile) -> Result<LibraryFile, String> {
         if !Media::from_path(photo.as_str().into(), String::new()).is_some_and(|m| m.is_photo()) {
             return Err("Foto-Metadaten benötigen einen Bildverweis".into());

@@ -18,6 +18,14 @@ pub struct FileTags {
 }
 pub trait CatalogRepository: Send + Sync + 'static {
     fn load(&self, root: &Path) -> Result<StoredCatalog, String>;
+    /// One-time physical metadata layout upgrade; never changes a media file or reference.
+    fn prepare_metadata_layout(
+        &self,
+        _root: &Path,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn supports_file_records(&self) -> bool {
         false
     }

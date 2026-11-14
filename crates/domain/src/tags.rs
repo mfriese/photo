@@ -32,7 +32,35 @@ impl LibraryFile {
         {
             return Err("Metadaten benötigen einen relativen Medienpfad".into());
         }
-        Ok(format!("yaml/{}.yaml", self.0))
+        let path = Path::new(&self.0);
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Medienname ist nicht darstellbar")?;
+        let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+        // Audio always uses its own recording filename, never a linked photo's reference time.
+        let date = crate::CaptureTime::from_photo_filename(stem)
+            .or_else(|| crate::audio_date::date_from_filename(stem));
+        let parts: Vec<_> = self.0.split(std::path::MAIN_SEPARATOR).collect();
+        let year = date
+            .as_ref()
+            .map(|d| d.year())
+            .or_else(|| {
+                parts.first().copied().filter(|year| {
+                    crate::diary::AudioScope::for_year(year, crate::diary::AudioKind::All).is_some()
+                })
+            })
+            .unwrap_or("unbekannt");
+        let month = date
+            .as_ref()
+            .map(|d| d.month())
+            .or_else(|| {
+                parts.get(1).copied().filter(|m| {
+                    m.len() == 2 && m.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n))
+                })
+            })
+            .unwrap_or("unbekannt");
+        Ok(format!("yaml/{year}/{month}/{name}.yaml"))
     }
     pub fn as_str(&self) -> &str {
         &self.0
@@ -372,5 +400,45 @@ mod tests {
         catalog.create("b").unwrap();
         assert!(catalog.rename("a", "b").is_err());
         assert_eq!(catalog.tags().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod metadata_layout_tests {
+    use super::*;
+    #[test]
+    fn photo_video_diary_and_comment_metadata_share_only_year_and_month() {
+        for (media, expected) in [
+            (
+                "1980/09/img_19800916_035811.jpg",
+                "yaml/1980/09/img_19800916_035811.jpg.yaml",
+            ),
+            (
+                "2026/11/img_20261114_110000.mp4",
+                "yaml/2026/11/img_20261114_110000.mp4.yaml",
+            ),
+            (
+                "2026/audio/diary/aud_20261114_120000.wav",
+                "yaml/2026/11/aud_20261114_120000.wav.yaml",
+            ),
+            (
+                "2026/audio/comments/com_20261114_130000.m4a",
+                "yaml/2026/11/com_20261114_130000.m4a.yaml",
+            ),
+            ("2026/11/nested/photo.png", "yaml/2026/11/photo.png.yaml"),
+            (
+                "2026/audio/diary/interview.wav",
+                "yaml/2026/unbekannt/interview.wav.yaml",
+            ),
+            ("photo.jpg", "yaml/unbekannt/unbekannt/photo.jpg.yaml"),
+        ] {
+            assert_eq!(
+                LibraryFile::new(media.into())
+                    .unwrap()
+                    .metadata_path()
+                    .unwrap(),
+                expected
+            );
+        }
     }
 }

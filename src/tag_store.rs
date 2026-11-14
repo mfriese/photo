@@ -78,6 +78,13 @@ fn encode(catalog: &TagCatalog) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 impl CatalogRepository for YamlTags {
+    fn prepare_metadata_layout(
+        &self,
+        root: &Path,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String> {
+        crate::media_records_fs::prepare_layout(root, cancel, &self.priority)
+    }
     fn supports_file_records(&self) -> bool {
         true
     }

@@ -25,6 +25,7 @@ fn load_cancel(
     cancel: &AtomicBool,
 ) -> Result<StoredCatalog, String> {
     check(cancel)?;
+    repository.prepare_metadata_layout(root, cancel)?;
     let stored = repository.load(root)?;
     if stored.revision.is_some() || !repository.supports_file_records() {
         return Ok(stored);
@@ -185,6 +186,7 @@ pub(super) fn rebuild_cancel(
     cancel: &AtomicBool,
 ) -> Result<StoredCatalog, String> {
     check(cancel)?;
+    repository.prepare_metadata_layout(root, cancel)?;
     let revision = repository.index_revision(root)?;
     let catalog = from_records(repository, root, cancel)?;
     check(cancel)?;

@@ -89,6 +89,13 @@ pub enum CommentCache {
     Obsolete,
 }
 pub trait CommentRepository: Send + Sync + 'static {
+    fn prepare_metadata_layout(
+        &self,
+        _root: &Path,
+        _cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn read_cache(&self, root: &Path) -> Result<CommentCache, String>;
     /// Return the complete authoritative photo record after the revision-guarded update.
     fn write_photo_record(&self, root: &Path, comment: &Comment) -> Result<CommentCatalog, String>;
