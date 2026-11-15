@@ -6,6 +6,7 @@ use photosuite_application::comments::{
 };
 #[derive(Default)]
 pub(super) struct CommentView {
+    pub(super) inline: bool,
     confirm_close: bool,
     confirm_quit: bool,
     allow_quit: bool,
@@ -14,7 +15,18 @@ pub(super) struct CommentView {
 impl Suite {
     pub(super) fn poll_comments(&mut self, ctx: &egui::Context) {
         self.comments.poll();
-        if !self.comments.is_open() && !self.comments.error().is_empty() {
+        if self.comment_view.awaiting_save
+            && !self.comments.is_saving()
+            && !self.comments.is_save_pending()
+        {
+            self.comment_view.awaiting_save = false;
+            if !self.comments.has_unsaved() {
+                self.finish_comment_close(ctx);
+            }
+        }
+        if (!self.comments.is_open() || self.comment_view.inline)
+            && !self.comments.error().is_empty()
+        {
             self.status = format!("Audiokommentare: {}", self.comments.error());
         }
 
@@ -44,6 +56,7 @@ impl Suite {
             && (self.comments.has_unsaved() || self.comments.is_saving())
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.comment_view.inline = false;
             self.comment_view.confirm_quit = true;
             self.comments.show();
         }
@@ -58,13 +71,18 @@ impl Suite {
                     .ok_or("Foto nicht mehr verfügbar")?;
                 let root = self.root.clone().ok_or("Keine Bibliothek geöffnet")?;
                 let file = self.organization.file(media.path())?;
-                self.comments.open_photo(PhotoTarget { root, file })
+                self.comment_view.inline = false;
+                self.comments.show_photo(PhotoTarget { root, file })
             })();
             if let Err(error) = result {
                 self.status = error;
             }
         }
-        if !self.comments.is_open() {
+        if !self.comments.is_open()
+            || (self.comment_view.inline
+                && !self.comment_view.confirm_close
+                && !self.comment_view.confirm_quit)
+        {
             return;
         }
         let mut close = false;
@@ -189,15 +207,6 @@ impl Suite {
                 self.comments.discard();
             }
         }
-        if self.comment_view.awaiting_save
-            && !self.comments.is_saving()
-            && !self.comments.is_save_pending()
-        {
-            self.comment_view.awaiting_save = false;
-            if !self.comments.has_unsaved() {
-                self.finish_comment_close(ctx);
-            }
-        }
         if self.comment_view.confirm_close || self.comment_view.confirm_quit {
             egui::Modal::new(egui::Id::new("discard_photo_comment")).show(ctx, |ui| {
                 let busy = self.comments.is_saving() || self.comments.is_save_pending();
@@ -217,8 +226,30 @@ impl Suite {
     }
 }
 impl Suite {
+    pub(super) fn request_inline_save(&mut self) {
+        match self.comments.request_save() {
+            Ok(()) => self.comment_view.awaiting_save = true,
+            Err(error) => self.comments.report_error(error),
+        }
+    }
+    /// Navigation/closing must never silently discard the take owned by the viewer.
+    pub(super) fn leave_inline_recording(&mut self) -> bool {
+        if !self.comment_view.inline {
+            return true;
+        }
+        if self.comments.has_unsaved() || self.comments.is_saving() {
+            self.comment_view.inline = false;
+            self.comment_view.confirm_close = true;
+            self.comments.show();
+            return false;
+        }
+        self.comments.discard();
+        self.comment_view.inline = false;
+        true
+    }
     fn finish_comment_close(&mut self, ctx: &egui::Context) {
         self.comments.discard();
+        self.comment_view.inline = false;
         self.comment_view.confirm_close = false;
         self.comment_view.awaiting_save = false;
         if self.comment_view.confirm_quit {
@@ -533,7 +564,15 @@ fn recording_waveform(
     snapshot: &photosuite_application::comments::CaptureSnapshot,
     seekable: bool,
 ) -> Option<f64> {
-    let (rect, response) = waveform(ui, &snapshot.wave);
+    recording_waveform_sized(ui, snapshot, seekable, 68.)
+}
+pub(super) fn recording_waveform_sized(
+    ui: &mut egui::Ui,
+    snapshot: &photosuite_application::comments::CaptureSnapshot,
+    seekable: bool,
+    height: f32,
+) -> Option<f64> {
+    let (rect, response) = waveform_sized(ui, &snapshot.wave, height);
     let span = snapshot.wave_span.max(0.001);
     let fraction = ((snapshot.position - snapshot.wave_start) / span).clamp(0., 1.) as f32;
     let x = rect.left() + rect.width() * fraction;
@@ -555,7 +594,7 @@ fn recording_waveform(
     response.on_hover_text(if seekable {"Klicken oder ziehen: Abspielposition wählen. Play hört ab dort vor; Aufnahme ersetzt den Rest ab der Markierung."}else{"Während der Aufnahme ist die Position gesperrt. Zum Vorhören oder Ersetzen pausieren."});
     result
 }
-fn microphone_picker(
+pub(super) fn microphone_picker(
     ui: &mut egui::Ui,
     session: &mut photosuite_application::comments::CommentSession,
     enabled: bool,
@@ -614,7 +653,12 @@ fn capture_details(
     }
 }
 // Draw transport shapes instead of font glyphs, keeping size and alignment stable.
-fn transport_button(ui: &mut egui::Ui, pause: bool, enabled: bool, stop: bool) -> egui::Response {
+pub(super) fn transport_button(
+    ui: &mut egui::Ui,
+    pause: bool,
+    enabled: bool,
+    stop: bool,
+) -> egui::Response {
     let response = crate::theme::transport_button(ui, enabled, egui::vec2(34., 34.), "");
     let center = response.rect.center();
     let color = crate::theme::transport_symbol(enabled, !pause && !stop);
@@ -705,6 +749,32 @@ fn level_meter(ui: &mut egui::Ui, amplitude: f32, peak: f32) {
     }
     response.on_hover_text("Pegel in dBFS: Ziel für Sprachpegel ungefähr −18 bis −6 dBFS. Oberhalb der roten Linie bleiben 6 dB Reserve bis zur digitalen Grenze bei 0 dBFS. Weißer Strich: Spitzenpegel. Keine automatische Lautstärkeänderung.");
 }
+pub(super) fn compact_level(ui: &mut egui::Ui, amplitude: f32, peak: f32) {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 3., crate::theme::CANVAS);
+    let end = rect.left() + rect.width() * amplitude_position(amplitude);
+    if end > rect.left() {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(rect.min, egui::pos2(end, rect.bottom())),
+            2.,
+            wave_color(amplitude),
+        );
+    }
+    for (db, color) in [
+        (YELLOW_DB, crate::theme::LEVEL_YELLOW),
+        (RED_DB, crate::theme::LEVEL_RED),
+    ] {
+        let x = rect.left() + rect.width() * db_position(db);
+        ui.painter().line_segment(
+            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+            egui::Stroke::new(1. / ui.ctx().pixels_per_point(), color.gamma_multiply(0.45)),
+        );
+    }
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "Aufnahmepegel"));
+    response.on_hover_text(format!("Aufnahmepegel · Spitze {peak:.1} dBFS · Sprachpegel etwa −18 bis −6 dBFS; 6 dB Reserve über Rot."));
+}
 fn wave_color(amplitude: f32) -> egui::Color32 {
     let position = amplitude_position(amplitude);
     if position > db_position(RED_DB) {
@@ -732,9 +802,13 @@ fn wave_column(values: &[f32], column: usize, columns: usize) -> f32 {
         .filter(|n| n.is_finite())
         .fold(0., f32::max)
 }
+#[cfg(test)]
 fn waveform(ui: &mut egui::Ui, values: &[f32]) -> (egui::Rect, egui::Response) {
+    waveform_sized(ui, values, 68.)
+}
+fn waveform_sized(ui: &mut egui::Ui, values: &[f32], height: f32) -> (egui::Rect, egui::Response) {
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 68.),
+        egui::vec2(ui.available_width(), height),
         egui::Sense::click_and_drag(),
     );
     response.clone().on_hover_text("Pegelverlauf: ungefähr 32 Sekunden. Bewegung auf ein Achtel verlangsamt; kurze Ausschläge bleiben sichtbar.");

@@ -64,7 +64,7 @@ pub trait CommentRecorder: Send + Sync + 'static {
     fn command(&self, command: CaptureCommand) -> Result<(), String>;
     fn snapshot(&self) -> CaptureSnapshot;
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PhotoTarget {
     pub root: PathBuf,
     pub file: LibraryFile,
@@ -499,6 +499,30 @@ impl CommentSession {
         self.published = None;
         self.message.clear();
         self.refresh_devices();
+        Ok(())
+    }
+    /// Switch between compact and full views without resetting an owned take.
+    pub fn show_photo(&mut self, target: PhotoTarget) -> Result<(), String> {
+        if self.target.as_ref() == Some(&target) && self.open {
+            return Ok(());
+        }
+        self.open_photo(target)
+    }
+    /// One recording action shared by the compact viewer; session owns target/phase transitions.
+    pub fn toggle_photo_recording(
+        &mut self,
+        target: PhotoTarget,
+        player: &dyn crate::diary::AudioPlayer,
+    ) -> Result<(), String> {
+        self.show_photo(target)?;
+        if self.is_saving() || self.is_save_pending() {
+            return Err("Aufnahme wird gespeichert".into());
+        }
+        match self.snapshot.phase {
+            CapturePhase::Recording => self.command(CaptureCommand::Pause),
+            CapturePhase::Paused => self.command(CaptureCommand::Resume),
+            _ => self.start(player)?,
+        }
         Ok(())
     }
     pub fn refresh_devices(&mut self) {
@@ -1496,5 +1520,57 @@ mod tests {
         assert!(session.request_save().is_err());
         assert_eq!(fake.copies.load(Ordering::SeqCst), 0);
         assert!(session.has_unsaved());
+    }
+    #[test]
+    fn compact_recording_and_full_dialog_share_target_take_and_pause_resume_commands() {
+        let fake = Arc::new(Fake::default());
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
+        session.load("/library".into());
+        wait(&mut session);
+        let target = PhotoTarget {
+            root: "/library".into(),
+            file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+        };
+        session
+            .toggle_photo_recording(target.clone(), fake.as_ref())
+            .unwrap();
+        assert!(session.has_unsaved());
+        let commands = fake.commands.load(Ordering::SeqCst);
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Recording,
+            id: "new".into(),
+            seconds: 3.,
+            ..Default::default()
+        };
+        session.poll();
+        session.show_photo(target.clone()).unwrap();
+        assert_eq!(
+            fake.commands.load(Ordering::SeqCst),
+            commands,
+            "switching view must not discard"
+        );
+        assert_eq!(session.snapshot.phase, CapturePhase::Recording);
+        session
+            .toggle_photo_recording(target.clone(), fake.as_ref())
+            .unwrap();
+        assert_eq!(fake.commands.load(Ordering::SeqCst), commands + 1);
+        fake.snapshot.lock().unwrap().phase = CapturePhase::Paused;
+        session.poll();
+        session
+            .toggle_photo_recording(target.clone(), fake.as_ref())
+            .unwrap();
+        assert_eq!(fake.commands.load(Ordering::SeqCst), commands + 2);
+        let other = PhotoTarget {
+            root: "/library".into(),
+            file: LibraryFile::new("2008/09/b.jpg".into()).unwrap(),
+        };
+        assert!(
+            session
+                .toggle_photo_recording(other, fake.as_ref())
+                .is_err()
+        );
+        assert_eq!(session.target(), Some(&target));
+        assert!(session.has_unsaved());
+        assert_eq!(fake.commands.load(Ordering::SeqCst), commands + 2);
     }
 }

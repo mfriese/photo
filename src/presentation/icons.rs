@@ -6,18 +6,19 @@ pub(super) enum Icon {
     Next,
     Reveal,
     Tag,
-    Record,
     RotateLeft,
     RotateRight,
     Reset,
     Play,
     Reload,
+    Microphone,
+    Save,
 }
 pub(super) fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, help: &str) -> egui::Response {
     let response = theme::transport_button(ui, enabled, egui::vec2(34., 34.), "");
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, help));
     let c = response.rect.center();
-    let color = theme::transport_symbol(enabled, matches!(icon, Icon::Record));
+    let color = theme::transport_symbol(enabled, false);
     let p = ui.painter();
     let stroke = egui::Stroke::new(1.5_f32, color);
     let point = |x, y| c + egui::vec2(x, y);
@@ -34,8 +35,30 @@ pub(super) fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, help: &str) -
                 egui::Stroke::NONE,
             ));
         }
-        Icon::Record => {
-            p.circle_filled(c, 6., color);
+        Icon::Save => {
+            p.line_segment([point(-7., 0.), point(-2., 5.)], stroke);
+            p.line_segment([point(-2., 5.), point(8., -6.)], stroke);
+        }
+        Icon::Microphone => {
+            p.rect_stroke(
+                egui::Rect::from_center_size(c + egui::vec2(0., -2.), egui::vec2(6., 11.)),
+                3.,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            p.add(egui::Shape::line(
+                vec![
+                    point(-6., -1.),
+                    point(-6., 3.),
+                    point(-3., 6.),
+                    point(3., 6.),
+                    point(6., 3.),
+                    point(6., -1.),
+                ],
+                stroke,
+            ));
+            p.line_segment([point(0., 6.), point(0., 9.)], stroke);
+            p.line_segment([point(-4., 9.), point(4., 9.)], stroke);
         }
         Icon::Tag => {
             p.add(egui::Shape::closed_line(

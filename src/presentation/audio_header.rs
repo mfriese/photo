@@ -15,7 +15,6 @@ pub(super) struct AudioHeader {
 struct Actions {
     start: bool,
     window: bool,
-    record: bool,
     control: Option<AudioControl>,
 }
 fn controls(
@@ -38,7 +37,6 @@ fn controls(
             can_start,
             can_window: state.active || can_start,
             size: egui::vec2(28., 22.),
-            record: None,
         },
     )
 }
@@ -47,7 +45,6 @@ struct ControlStyle {
     can_start: bool,
     can_window: bool,
     size: egui::Vec2,
-    record: Option<bool>,
 }
 fn controls_sized(
     ui: &mut egui::Ui,
@@ -62,7 +59,6 @@ fn controls_sized(
         can_start,
         can_window,
         size: button_size,
-        record,
     } = style;
     let mut actions = Actions::default();
     let width = ui.available_width();
@@ -95,17 +91,7 @@ fn controls_sized(
                     actions.start = true;
                 }
             }
-            if let Some(enabled) = record {
-                actions.record = super::icons::button(
-                    ui,
-                    super::icons::Icon::Record,
-                    enabled,
-                    "Audiokommentar zu diesem Foto aufnehmen",
-                )
-                .clicked();
-            }
-            let button_count = if record.is_some() { 3. } else { 2. };
-            let bar_width = (width - button_size.x * button_count - 6. * button_count).max(1.);
+            let bar_width = (width - button_size.x * 2. - 12.).max(1.);
             let (rect, response) = ui.allocate_exact_size(
                 egui::vec2(bar_width, button_size.y),
                 egui::Sense::click_and_drag(),
@@ -428,24 +414,29 @@ impl super::Suite {
         if !matches {
             self.viewer_audio.drag = None;
         }
-        let actions = controls_sized(
-            ui,
-            timeline,
-            &state,
-            if matches {
-                self.diary.progress()
-            } else {
-                &empty
-            },
-            &mut self.viewer_audio.drag,
-            ControlStyle {
-                preparing,
-                can_start: self.viewer_audio.draft.selected().is_some() && !preparing,
-                can_window: self.viewer_audio.year_draft.selected().is_some(),
-                size: egui::vec2(34., 34.),
-                record: Some(can_record),
-            },
-        );
+        let recording = self.comments.has_unsaved();
+        let actions = ui
+            .vertical(|ui| {
+                controls_sized(
+                    ui,
+                    timeline,
+                    &state,
+                    if matches {
+                        self.diary.progress()
+                    } else {
+                        &empty
+                    },
+                    &mut self.viewer_audio.drag,
+                    ControlStyle {
+                        preparing: preparing || recording,
+                        can_start: self.viewer_audio.draft.selected().is_some() && !preparing,
+                        can_window: self.viewer_audio.year_draft.selected().is_some(),
+                        size: egui::vec2(34., 34.),
+                    },
+                )
+            })
+            .inner;
+        let open_recorder = self.inline_recording_row(ui, photo, can_record);
         if let Some(command) = actions.control
             && let Err(error) = self.services.audio_player.control(command)
         {
@@ -502,7 +493,7 @@ impl super::Suite {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
-        actions.record
+        open_recorder
     }
     pub(super) fn start_audio_for_view(&mut self) {
         let Some(root) = &self.root else {

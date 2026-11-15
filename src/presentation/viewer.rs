@@ -20,8 +20,10 @@ impl super::Suite {
                 && !self.bindings.visible
                 && ctx.input(|i| i.key_pressed(egui::Key::Escape))
             {
-                self.selected = None;
-                self.storyboard.clear();
+                if self.leave_inline_recording() {
+                    self.selected = None;
+                    self.storyboard.clear();
+                }
                 return;
             }
             let position = visible.iter().position(|&i| i == index);
@@ -87,6 +89,10 @@ impl super::Suite {
                 next |= ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
                 previous |= ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
             }
+            if (next || previous) && !self.leave_inline_recording() {
+                next = false;
+                previous = false;
+            }
             if let Some(p) = position {
                 if next && p + 1 < visible.len() {
                     self.selected = Some(visible[p + 1]);
@@ -95,7 +101,7 @@ impl super::Suite {
                     self.selected = Some(visible[p - 1]);
                 }
             }
-            if !open {
+            if !open && self.leave_inline_recording() {
                 self.selected = None;
             }
         }
@@ -112,6 +118,7 @@ struct ViewerActions {
     tags: bool,
     command: Option<crate::commands::Command>,
 }
+#[derive(Clone, Copy)]
 struct ViewerState {
     video: bool,
     position: Option<usize>,
@@ -124,6 +131,23 @@ fn viewer_controls(
     state: ViewerState,
     audio: impl FnOnce(&mut egui::Ui) -> bool,
 ) -> ViewerActions {
+    let mut actions = ViewerActions::default();
+    ui.spacing_mut().item_spacing = egui::vec2(6., 4.);
+    if ui.available_width() < 560. {
+        ui.horizontal(|ui| leading_controls(ui, state, &mut actions));
+        let width = (ui.available_width() - 14.).max(1.);
+        actions.record = control_group(ui, width, egui::Layout::top_down(egui::Align::Min), audio);
+    } else {
+        ui.horizontal(|ui| {
+            leading_controls(ui, state, &mut actions);
+            let width = (ui.available_width() - 14.).max(1.);
+            actions.record =
+                control_group(ui, width, egui::Layout::top_down(egui::Align::Min), audio);
+        });
+    }
+    actions
+}
+fn leading_controls(ui: &mut egui::Ui, state: ViewerState, actions: &mut ViewerActions) {
     let ViewerState {
         video,
         position,
@@ -132,83 +156,71 @@ fn viewer_controls(
         write_exif,
     } = state;
     use crate::commands::Command;
-    let mut actions = ViewerActions::default();
-    ui.spacing_mut().item_spacing.x = 6.;
-    ui.horizontal(|ui| {
-        control_group(ui, 114., egui::Layout::top_down(egui::Align::Min), |ui| {
-            ui.horizontal(|ui| {
-                actions.previous = button(
+    control_group(ui, 114., egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.horizontal(|ui| {
+            actions.previous = button(
+                ui,
+                Icon::Previous,
+                position.is_some_and(|p| p > 0),
+                "Vorheriges Medium · Pfeiltaste links",
+            )
+            .clicked();
+            actions.next = button(
+                ui,
+                Icon::Next,
+                position.is_some_and(|p| p + 1 < total),
+                "Nächstes Medium · Pfeiltaste rechts",
+            )
+            .clicked();
+        });
+        ui.horizontal(|ui| {
+            if video {
+                if button(ui, Icon::Play, true, "Video abspielen · Leertaste").clicked() {
+                    actions.command = Some(Command::PlayVideo);
+                }
+                actions.reload = button(
                     ui,
-                    Icon::Previous,
-                    position.is_some_and(|p| p > 0),
-                    "Vorheriges Medium · Pfeiltaste links",
+                    Icon::Reload,
+                    true,
+                    "Sechs Videovorschaubilder erneut laden",
                 )
                 .clicked();
-                actions.next = button(
-                    ui,
-                    Icon::Next,
-                    position.is_some_and(|p| p + 1 < total),
-                    "Nächstes Medium · Pfeiltaste rechts",
-                )
-                .clicked();
-            });
-            ui.horizontal(|ui| {
-                if video {
-                    if button(ui, Icon::Play, true, "Video abspielen · Leertaste").clicked() {
-                        actions.command = Some(Command::PlayVideo);
-                    }
-                    actions.reload = button(
-                        ui,
-                        Icon::Reload,
-                        true,
-                        "Sechs Videovorschaubilder erneut laden",
-                    )
-                    .clicked();
-                } else {
-                    for (command, icon, help) in [
-                        (
-                            Command::RotateLeft,
-                            Icon::RotateLeft,
-                            "90° gegen den Uhrzeigersinn drehen",
-                        ),
-                        (
-                            Command::RotateRight,
-                            Icon::RotateRight,
-                            "90° im Uhrzeigersinn drehen",
-                        ),
-                        (
-                            Command::ResetRotation,
-                            Icon::Reset,
-                            "Sitzungsdrehung zurücksetzen",
-                        ),
-                    ] {
-                        let mode = if saving {
-                            "Speichert …"
-                        } else if write_exif {
-                            "EXIF-Schreiben aktiviert: neue Drehungen ändern die JPEG-Datei"
-                        } else {
-                            "Nur Sitzungsdrehung · Original unverändert"
-                        };
-                        if button(ui, icon, !saving, &format!("{help}\n{mode}")).clicked() {
-                            actions.command = Some(command);
-                        }
+            } else {
+                for (command, icon, help) in [
+                    (
+                        Command::RotateLeft,
+                        Icon::RotateLeft,
+                        "90° gegen den Uhrzeigersinn drehen",
+                    ),
+                    (
+                        Command::RotateRight,
+                        Icon::RotateRight,
+                        "90° im Uhrzeigersinn drehen",
+                    ),
+                    (
+                        Command::ResetRotation,
+                        Icon::Reset,
+                        "Sitzungsdrehung zurücksetzen",
+                    ),
+                ] {
+                    let mode = if saving {
+                        "Speichert …"
+                    } else if write_exif {
+                        "EXIF-Schreiben aktiviert: neue Drehungen ändern die JPEG-Datei"
+                    } else {
+                        "Nur Sitzungsdrehung · Original unverändert"
+                    };
+                    if button(ui, icon, !saving, &format!("{help}\n{mode}")).clicked() {
+                        actions.command = Some(command);
                     }
                 }
-            });
+            }
         });
-        control_group(ui, 34., egui::Layout::top_down(egui::Align::Min), |ui| {
-            actions.tags = button(ui, Icon::Tag, true, "Tags bearbeiten").clicked();
-            actions.reveal = button(ui, Icon::Reveal, true, "Im Finder anzeigen").clicked();
-        });
-        let width = (ui.available_width() - 14.).max(1.);
-        actions.record = control_group(
-            ui,
-            width,
-            egui::Layout::left_to_right(egui::Align::Center),
-            audio,
-        );
     });
-    actions
+    control_group(ui, 34., egui::Layout::top_down(egui::Align::Min), |ui| {
+        actions.tags = button(ui, Icon::Tag, true, "Tags bearbeiten").clicked();
+        actions.reveal = button(ui, Icon::Reveal, true, "Im Finder anzeigen").clicked();
+    });
 }
 /// Three equally high presentation groups with shared theme surfaces and borders.
 fn control_group<R>(
@@ -325,36 +337,30 @@ mod tests {
                     .shapes
                     .iter()
                     .find_map(|s| match &s.shape {
-                        egui::Shape::Circle(circle) if circle.fill == crate::theme::RECORD_RED => {
+                        egui::Shape::Circle(circle) if (circle.radius - 6.).abs() < 0.01 => {
                             Some(circle.center)
                         }
                         _ => None,
                     })
                     .expect("record symbol");
-                let row: Vec<_> = output
+                let play = output
                     .shapes
                     .iter()
                     .filter_map(|s| match &s.shape {
                         egui::Shape::Rect(rect)
                             if rect.rect.size() == egui::vec2(34., 34.)
-                                && (rect.rect.center().y - record.y).abs() < 0.5 =>
+                                && (rect.rect.center().x - record.x).abs() < 0.5
+                                && rect.rect.center().y < record.y =>
                         {
-                            Some(rect.rect)
+                            Some(rect.rect.center())
                         }
                         _ => None,
                     })
-                    .collect();
-                assert_eq!(
-                    row.len(),
-                    3,
-                    "Play, Record and year button share a centered row"
-                );
-                assert!(
-                    row.iter()
-                        .any(|rect| (rect.center().x - (record.x - 40.)).abs() < 0.5),
-                    "Play directly precedes Record"
-                );
-                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(rect) if (rect.rect.height()-26.).abs()<0.1 && rect.fill==crate::theme::DISABLED_BG && (rect.rect.center().y-record.y).abs()<0.5)),"track vertically centered");
+                    .max_by(|a, b| a.y.total_cmp(&b.y))
+                    .expect("play directly above recording");
+                assert!((record.y - play.y - 38.).abs() < 0.5);
+                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(rect) if (rect.rect.height()-26.).abs()<0.1 && rect.fill==crate::theme::DISABLED_BG && (rect.rect.center().y-play.y).abs()<0.5)),"playback track centered in top row");
+                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(rect) if (rect.rect.height()-26.).abs()<0.1 && rect.fill==crate::theme::CANVAS && (rect.rect.center().y-record.y).abs()<0.5)),"recording waveform matches playback track height");
                 let mut groups: Vec<_> = output
                     .shapes
                     .iter()
@@ -370,11 +376,34 @@ mod tests {
                         _ => None,
                     })
                     .collect();
-                groups.sort_by(|a, b| a.left().total_cmp(&b.left()));
+                groups.sort_by(|a, b| {
+                    a.top()
+                        .total_cmp(&b.top())
+                        .then(a.left().total_cmp(&b.left()))
+                });
                 assert_eq!(groups.len(), 3, "three visible control groups");
-                for group in &groups {
-                    assert!((group.center().y - record.y).abs() < 0.5);
-                }
+                assert!(groups[2].contains(play) && groups[2].contains(record));
+                let dialog = output
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Rect(rect)
+                            if rect.rect.size() == egui::vec2(34., 34.)
+                                && (rect.rect.center().y - record.y).abs() < 0.5
+                                && groups[2].contains(rect.rect.center()) =>
+                        {
+                            Some(rect.rect)
+                        }
+                        _ => None,
+                    })
+                    .max_by(|a, b| a.right().total_cmp(&b.right()))
+                    .unwrap();
+                assert!(
+                    (dialog.right() - (groups[2].right() - 7.)).abs() < 2.,
+                    "width={width} dialog={dialog:?} group={:?}",
+                    groups[2]
+                );
+
                 let file_buttons: Vec<_> = output
                     .shapes
                     .iter()
@@ -480,9 +509,9 @@ mod tests {
         }
     }
     #[test]
-    fn controls_keep_two_rows_across_media_states_and_widths() {
-        let mut expected_height: Option<f32> = None;
+    fn controls_keep_two_rows_per_group_and_stable_height_across_media_states() {
         for width in [280., 360., 600., 950.] {
+            let mut expected_height: Option<f32> = None;
             for video in [false, true] {
                 for (saving, write_exif, position) in [
                     (false, false, Some(0)),
@@ -522,7 +551,10 @@ mod tests {
                             });
                         },
                     );
-                    assert!(height < 110., "Controls exceed two rows: {height}");
+                    assert!(
+                        height < if width < 576. { 190. } else { 110. },
+                        "Control groups exceed responsive row height: {height}"
+                    );
                     for shape in output.shapes {
                         if let egui::Shape::Text(text) = shape.shape {
                             if text.galley.job.text.is_empty() {

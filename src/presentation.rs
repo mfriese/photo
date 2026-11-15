@@ -6,6 +6,7 @@ mod comments;
 mod diary;
 mod gallery;
 mod icons;
+mod inline_recording;
 mod library;
 mod menu;
 mod startup;

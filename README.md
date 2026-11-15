@@ -14,7 +14,7 @@ PhotoSuite macht deine nach **Jahr und Monat** geordnete Sammlung durchsuchbar �
 - **Fotowand:** virtualisiertes Raster, fünf Vorschaugrößen, optional quadratischer Beschnitt, Jahres-/Monatsnavigation und Suche.
 - **Fotos und Videos:** Großansicht, EXIF-Ausrichtung, native Videowiedergabe und sechs Standbilder pro Video – ohne externes FFmpeg.
 - **Audio-Diary:** gemeinsame Zeitachse mit Abschnitten proportional zur Aufnahmedauer, sofortigen Längenhinweisen aus einem YAML-Cache, täglichem Hintergrundabgleich und fünf zeitlich passenden Fotos.
-- **Gesprochene Kommentare:** direkt zum Foto aufnehmen, Mikrofon wählen, Pegel beobachten und vor dem Speichern vorhören.
+- **Gesprochene Kommentare:** direkt in der Großansicht oder im Aufnahmedialog zum Foto aufnehmen, Mikrofon wählen, Pegel beobachten und vor dem Speichern vorhören.
 - **Tags und virtuelle Alben:** mehrere Tags pro Datei, Tagwolken zum Filtern und Tags bereits beim Import. Neue Zuordnungen erscheinen automatisch.
 - **Kontrollierter Import:** Prüflauf, kompakte Ergebnisse, datumsbasierte Namen mit gekennzeichnetem Dateisystem-Fallback, farbige Ergebnisse, optionale Fotoablage unter `Jahr/scans`, Kollisionsprüfung und separate Prüfung von Bildduplikaten.
 - **Native Bedienung:** macOS-Menüs, Tastenkürzel und bibliotheksbezogene Einstellungen; die letzte Bibliothek wird beim Start wieder geöffnet. Langsame Datenträger erhalten einen Wartedialog mit Wiederholung, Abbruch und alternativer Bibliothekswahl.
