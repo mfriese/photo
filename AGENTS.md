@@ -409,3 +409,6 @@ Nach jedem schreibenden Importabschluss (auch Abbruch mit bereits abgeschlossene
 
 
 - Audioleisten/-kurven und kompakte Pegelanzeige erhalten den gleichen normalen Rahmen wie Transportbuttons: gemeinsamer Theme-Helfer audio_track, ein Punkt Innenrahmen, Radius aus den Buttonvisuals, eindeutiger deaktivierter Rahmen. Inhalte mit kleinem innerem Sicherheitsabstand zeichnen, damit Audiosegmente und Pegelfüllung den Rahmen nicht übermalen. Allokierte Höhe bleibt bündig mit den Buttons; keine zusätzlichen Rahmenabstände oder Änderungen am Aufnahme-/Wiedergabeablauf.
+
+
+- Fotoübersichten einschließlich Alles/Jahr/Monat, Scans und Tagansichten: Kopf-Hörleiste mit quadratischen Buttons und Spur in derselben theme::TRANSPORT_EDGE-Höhe (34 Punkte) wie Großansicht und Recorder. Überschrift daneben vertikal zentrieren, keine abweichende 28×22-Sondergröße. Der gemeinsame Theme-Wert gilt für Kopf- und Großansichtsbuttons; Rahmen weiterhin über audio_track. Bei schmalen Breiten Überschrift kürzen statt die Controls zu verkleinern oder umzubrechen.

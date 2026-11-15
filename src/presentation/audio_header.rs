@@ -36,7 +36,7 @@ fn controls(
             preparing,
             can_start,
             can_window: state.active || can_start,
-            size: egui::vec2(28., 22.),
+            size: egui::vec2(theme::TRANSPORT_EDGE, theme::TRANSPORT_EDGE),
         },
     )
 }
@@ -63,7 +63,7 @@ fn controls_sized(
     let mut actions = Actions::default();
     let width = ui.available_width();
     ui.allocate_ui_with_layout(
-        egui::vec2(width, button_size.y.max(26.)),
+        egui::vec2(width, button_size.y),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.spacing_mut().item_spacing.x = 6.;
@@ -431,7 +431,7 @@ impl super::Suite {
                         preparing: preparing || recording,
                         can_start: self.viewer_audio.draft.selected().is_some() && !preparing,
                         can_window: self.viewer_audio.year_draft.selected().is_some(),
-                        size: egui::vec2(34., 34.),
+                        size: egui::vec2(theme::TRANSPORT_EDGE, theme::TRANSPORT_EDGE),
                     },
                 )
             })
@@ -561,15 +561,15 @@ impl super::Suite {
     pub(super) fn page_heading(&mut self, ui: &mut egui::Ui, title: &str) {
         let width = ui.available_width();
         ui.horizontal(|ui| {
-            ui.set_height(26.);
+            ui.set_height(theme::TRANSPORT_EDGE);
             let label_width = (width * 0.32).clamp(44., 180.);
             ui.add_sized(
-                [label_width, 26.],
+                [label_width, theme::TRANSPORT_EDGE],
                 egui::Label::new(egui::RichText::new(title).size(18.).strong()).truncate(),
             )
             .on_hover_text(title);
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width().max(1.), 26.),
+                egui::vec2(ui.available_width().max(1.), theme::TRANSPORT_EDGE),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| self.compact_audio(ui),
             );
@@ -637,6 +637,25 @@ mod tests {
                             });
                         },
                     );
+                    let buttons = output
+                        .shapes
+                        .iter()
+                        .filter_map(|s| match &s.shape {
+                            egui::Shape::Rect(r)
+                                if r.rect.size()
+                                    == egui::vec2(theme::TRANSPORT_EDGE, theme::TRANSPORT_EDGE) =>
+                            {
+                                Some(r.rect)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    assert!(
+                        buttons.len() >= 2,
+                        "both transport buttons must use the shared size"
+                    );
+                    assert!((buttons[0].center().y - buttons[1].center().y).abs() < 0.5);
+                    assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(r) if r.rect.width()>theme::TRANSPORT_EDGE && (r.rect.height()-buttons[0].height()).abs()<0.1 && (r.rect.center().y-buttons[0].center().y).abs()<0.5)),"track and buttons must align in height and center");
                     for shape in output.shapes {
                         if let egui::Shape::Text(text) = shape.shape {
                             if text.galley.job.text.is_empty() {

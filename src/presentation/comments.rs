@@ -567,7 +567,12 @@ fn preview_button(ui: &mut egui::Ui, playing: bool, enabled: bool) -> egui::Resp
     let response = if playing {
         transport_button(ui, true, enabled, false)
     } else {
-        let response = crate::theme::transport_button(ui, enabled, egui::vec2(34., 34.), "");
+        let response = crate::theme::transport_button(
+            ui,
+            enabled,
+            egui::vec2(crate::theme::TRANSPORT_EDGE, crate::theme::TRANSPORT_EDGE),
+            "",
+        );
         let c = response.rect.center();
         ui.painter().add(egui::Shape::convex_polygon(
             vec![
@@ -688,7 +693,12 @@ pub(super) fn transport_button(
     enabled: bool,
     stop: bool,
 ) -> egui::Response {
-    let response = crate::theme::transport_button(ui, enabled, egui::vec2(34., 34.), "");
+    let response = crate::theme::transport_button(
+        ui,
+        enabled,
+        egui::vec2(crate::theme::TRANSPORT_EDGE, crate::theme::TRANSPORT_EDGE),
+        "",
+    );
     let center = response.rect.center();
     let color = crate::theme::transport_symbol(enabled, !pause && !stop);
     if stop {
@@ -906,7 +916,10 @@ mod tests {
             let _ = ctx.run(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let response = transport_button(ui, pause, true, stop);
-                    assert_eq!(response.rect.size(), egui::vec2(34., 34.));
+                    assert_eq!(
+                        response.rect.size(),
+                        egui::vec2(crate::theme::TRANSPORT_EDGE, crate::theme::TRANSPORT_EDGE)
+                    );
                 });
             });
         }

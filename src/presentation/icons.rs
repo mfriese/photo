@@ -15,7 +15,12 @@ pub(super) enum Icon {
     Save,
 }
 pub(super) fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, help: &str) -> egui::Response {
-    let response = theme::transport_button(ui, enabled, egui::vec2(34., 34.), "");
+    let response = theme::transport_button(
+        ui,
+        enabled,
+        egui::vec2(crate::theme::TRANSPORT_EDGE, crate::theme::TRANSPORT_EDGE),
+        "",
+    );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, help));
     let c = response.rect.center();
     let color = theme::transport_symbol(enabled, false);

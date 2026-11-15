@@ -113,3 +113,6 @@ Foto-Kommentare bleiben in der Jahres-/Monatsnavigation bei ihrem eigenen Aufnah
 
 
 Audioleisten, Aufnahmekurven und die kompakte Pegelanzeige verwenden dieselben dezenten Ein-Punkt-Rahmen und Rundungen wie Transportbuttons. Eine innenliegende Zeichenfläche schützt die Kontur vor Pegel- und Segmentfüllungen. Außenmaß und Höhe bleiben unverändert, deaktivierte Hörleisten behalten den klar abgedunkelten Rahmen. Keine zusätzlichen Schatten, größeren Abstände oder neuen Akzentfarben.
+
+
+Die Kopf-Hörleisten der Fotoübersichten verwenden ebenfalls 34 × 34 Punkte große Buttons und eine 34 Punkte hohe Spur. theme::TRANSPORT_EDGE bündelt die Größe mit Großansicht und Recorder. Der Seitentitel bleibt daneben vertikal zentriert; bei wenig Platz wird er gekürzt, die Bedienelemente behalten ihre Größe.

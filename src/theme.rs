@@ -19,6 +19,7 @@ pub const BADGE_BACKGROUND: Color32 = Color32::from_black_alpha(220);
 pub const BADGE_FONT_SIZE: f32 = 12.;
 pub const BADGE_HEIGHT: f32 = 20.;
 pub const SECTION_HEADING_SIZE: f32 = 18.;
+pub const TRANSPORT_EDGE: f32 = 34.;
 pub const BADGE_PADDING: f32 = 3.;
 pub const SELECTED: Color32 = Color32::from_rgb(43, 67, 103);
 

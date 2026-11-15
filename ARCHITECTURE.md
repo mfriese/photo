@@ -490,3 +490,7 @@ Viewer- und Galerie-Navigation teilen navigate_viewer als Übersetzung vom flüc
 
 ## Gemeinsame Audioflächen
 Theme.audio_track bündelt die Rahmengeometrie von Kommentarzeitleiste, Aufnahmekurve und kompakter Pegelanzeige mit den normalen Transportbuttonvisuals. Der Helfer zeichnet ausschließlich Fläche/Innenrahmen und liefert die innen liegende Zeichenfläche zurück; äußere Widgetbounds und Hitbereiche bleiben unverändert. Auch der vollständige Aufnahmedialog verwendet denselben Kurvenhelfer. Keine Änderung an Domäne, Sitzungszuständen, Ports, Datenformaten oder nativen Adaptern.
+
+
+## Einheitliche Transporthöhe auf Übersichtsseiten
+TRANSPORT_EDGE im Theme definiert die 34-Punkte-Kantenlänge für Transportbuttons. AudioHeader verwendet dieselbe Größe in Übersicht und Großansicht; page_heading reserviert entsprechend eine Zeile in dieser Höhe und zentriert den gekürzten Titel daneben. Gemeinsame Buttons im Recorder und Symbolhelfer beziehen denselben Wert. Die Größenkorrektur betrifft ausschließlich Darstellung; Filter, Wiedergabesitzung, Aufnahmewechsel und Persistenz bleiben unverändert. Der vorhandene Kopfzeilentest prüft schmale/breite Breiten, Play/Pause, identische Button-/Spurhöhe und gemeinsame vertikale Mitte.
