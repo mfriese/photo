@@ -199,6 +199,7 @@ pub struct CommentSession {
     saved: bool,
     changed: bool,
     save_intent: Option<SaveIntent>,
+    next_photo: Option<PhotoTarget>,
 }
 impl CommentSession {
     pub fn new(
@@ -239,6 +240,7 @@ impl CommentSession {
             saved: false,
             changed: false,
             save_intent: None,
+            next_photo: None,
         }
     }
     pub fn devices(&self) -> &[InputDevice] {
@@ -525,6 +527,62 @@ impl CommentSession {
         }
         Ok(())
     }
+    /// Finalize and commit the current photo before starting a new owned recording.
+    /// Exactly one destination is accepted; rapid navigation cannot silently replace it.
+    pub fn continue_recording_at(&mut self, target: PhotoTarget) -> Result<(), String> {
+        if self.next_photo.is_some() || self.saving || self.is_save_pending() {
+            return Err("Kommentar wird bereits gespeichert; bitte kurz warten".into());
+        }
+        if !self.capture_owned || self.snapshot.phase != CapturePhase::Recording {
+            return Err(
+                "Automatischer Bildwechsel ist nur während laufender Aufnahme möglich".into(),
+            );
+        }
+        if self.root.as_ref() != Some(&target.root)
+            || !Media::from_path(target.file.as_str().into(), String::new())
+                .is_some_and(|m| m.is_photo())
+        {
+            return Err("Nächstes Aufnahmeziel muss ein Foto derselben Bibliothek sein".into());
+        }
+        if self.target.as_ref() == Some(&target) {
+            return Ok(());
+        }
+        self.request_save()?;
+        self.next_photo = Some(target);
+        Ok(())
+    }
+    pub fn is_switching_photo(&self) -> bool {
+        self.next_photo.is_some()
+    }
+    /// Cancel only the automatic restart, never the already requested safe publication.
+    pub fn cancel_recording_continuation(&mut self) {
+        self.next_photo = None;
+    }
+    pub fn poll_with_player(
+        &mut self,
+        player: &dyn crate::diary::AudioPlayer,
+    ) -> Option<PhotoTarget> {
+        self.poll();
+        if self.next_photo.is_some() && !self.saving && !self.is_save_pending() {
+            if self.saved && !self.has_unsaved() {
+                let target = self.next_photo.take()?;
+                if let Err(error) = self.open_photo(target.clone()) {
+                    self.error = error;
+                    return None;
+                }
+                if let Err(error) = self.start(player) {
+                    // The old take is committed. Show the new photo and report restart failure.
+                    self.error = format!(
+                        "Kommentar gespeichert; neue Aufnahme konnte nicht starten: {error}"
+                    );
+                }
+                return Some(target);
+            }
+            // Failed finalization/publication must retain the original take and photo.
+            self.next_photo = None;
+        }
+        None
+    }
     pub fn refresh_devices(&mut self) {
         if self.device_worker.is_some() {
             return;
@@ -608,6 +666,7 @@ impl CommentSession {
             return;
         }
         self.capture_owned = false;
+        self.next_photo = None;
         self.save_intent = None;
         self.pending_start = false;
         self.open = false;
@@ -934,6 +993,7 @@ mod tests {
         saves: AtomicUsize,
         commands: AtomicUsize,
         scans: AtomicUsize,
+        start_error: std::sync::atomic::AtomicBool,
     }
     impl crate::diary::AudioPlayer for Fake {
         fn revise(
@@ -957,6 +1017,9 @@ mod tests {
             Ok(Vec::new())
         }
         fn start(&self, _: &str) -> Result<(), String> {
+            if self.start_error.load(Ordering::SeqCst) {
+                return Err("Mikrofon nicht verfügbar".into());
+            }
             self.snapshot.lock().unwrap().id = "new".into();
             Ok(())
         }
@@ -1572,5 +1635,167 @@ mod tests {
         assert_eq!(session.target(), Some(&target));
         assert!(session.has_unsaved());
         assert_eq!(fake.commands.load(Ordering::SeqCst), commands + 2);
+    }
+    fn recording_session(fake: &Arc<Fake>) -> (CommentSession, PhotoTarget, PhotoTarget) {
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake.clone());
+        session.load("/library".into());
+        wait(&mut session);
+        let old = PhotoTarget {
+            root: "/library".into(),
+            file: LibraryFile::new("2008/09/a.jpg".into()).unwrap(),
+        };
+        let next = PhotoTarget {
+            root: "/library".into(),
+            file: LibraryFile::new("2008/09/b.jpg".into()).unwrap(),
+        };
+        session
+            .toggle_photo_recording(old.clone(), fake.as_ref())
+            .unwrap();
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Recording,
+            id: "new".into(),
+            seconds: 2.,
+            ..Default::default()
+        };
+        session.poll();
+        (session, old, next)
+    }
+    fn finalized(fake: &Fake) {
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Ready,
+            id: "new".into(),
+            seconds: 2.,
+            take: Some(CapturedTake {
+                id: "12345678-1234-1234-1234-123456789abc".into(),
+                path: "/tmp/test-take.m4a".into(),
+                recorded_at: "2026-11-15T12:00:00+01:00".into(),
+            }),
+            ..Default::default()
+        };
+    }
+    #[test]
+    fn photo_continuation_commits_original_before_restart_and_rejects_overlapping_destinations() {
+        let fake = Arc::new(Fake::default());
+        fake.saves.store(1, Ordering::SeqCst);
+        let (mut session, old, next) = recording_session(&fake);
+        session.continue_recording_at(next.clone()).unwrap();
+        assert_eq!(session.target(), Some(&old));
+        assert!(session.is_switching_photo());
+        assert!(session.continue_recording_at(old.clone()).is_err());
+        assert!(session.poll_with_player(fake.as_ref()).is_none());
+        finalized(&fake);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let changed = loop {
+            if let Some(target) = session.poll_with_player(fake.as_ref()) {
+                break target;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        assert_eq!(changed, next);
+        assert_eq!(session.target(), Some(&next));
+        assert!(!session.is_switching_photo());
+        assert!(session.has_unsaved());
+        assert_eq!(session.snapshot().phase, CapturePhase::Preparing);
+        assert_eq!(fake.copies.load(Ordering::SeqCst), 1);
+        assert_eq!(session.catalog().for_photo(&old.file).len(), 1);
+        assert!(session.catalog().for_photo(&next.file).is_empty());
+    }
+    #[test]
+    fn failed_or_cancelled_continuation_never_restarts_or_loses_original_take() {
+        let fake = Arc::new(Fake::default());
+        let (mut session, old, next) = recording_session(&fake);
+        session.continue_recording_at(next).unwrap();
+        finalized(&fake);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while session.is_switching_photo() {
+            assert!(session.poll_with_player(fake.as_ref()).is_none());
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(session.target(), Some(&old));
+        assert!(session.has_unsaved());
+        assert!(!session.error().is_empty());
+        assert_eq!(fake.copies.load(Ordering::SeqCst), 1);
+        // Cancellation prevents a later successful publication from starting a new microphone take.
+        let fake = Arc::new(Fake::default());
+        fake.saves.store(1, Ordering::SeqCst);
+        let (mut session, old, next) = recording_session(&fake);
+        session.continue_recording_at(next).unwrap();
+        session.cancel_recording_continuation();
+        finalized(&fake);
+        while session.has_unsaved() {
+            assert!(session.poll_with_player(fake.as_ref()).is_none());
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(session.target(), Some(&old));
+        assert!(!session.is_switching_photo());
+        assert_eq!(session.snapshot().phase, CapturePhase::Idle);
+    }
+    #[test]
+    fn paused_recording_and_foreign_or_video_targets_cannot_automatically_continue() {
+        let fake = Arc::new(Fake::default());
+        let (mut session, old, next) = recording_session(&fake);
+        for invalid in [
+            PhotoTarget {
+                root: "/other".into(),
+                file: next.file.clone(),
+            },
+            PhotoTarget {
+                root: next.root.clone(),
+                file: LibraryFile::new("2008/09/a.mp4".into()).unwrap(),
+            },
+        ] {
+            assert!(session.continue_recording_at(invalid).is_err());
+        }
+        fake.snapshot.lock().unwrap().phase = CapturePhase::Paused;
+        session.poll();
+        assert!(session.continue_recording_at(next).is_err());
+        assert_eq!(session.target(), Some(&old));
+        assert!(session.has_unsaved());
+    }
+    #[test]
+    fn finalization_failure_keeps_old_photo_and_restart_failure_never_repeats_publication() {
+        let fake = Arc::new(Fake::default());
+        let (mut session, old, next) = recording_session(&fake);
+        session.continue_recording_at(next).unwrap();
+        *fake.snapshot.lock().unwrap() = CaptureSnapshot {
+            phase: CapturePhase::Error,
+            id: "new".into(),
+            message: "Finalisierung fehlgeschlagen".into(),
+            ..Default::default()
+        };
+        assert!(session.poll_with_player(fake.as_ref()).is_none());
+        assert_eq!(session.target(), Some(&old));
+        assert!(session.has_unsaved());
+        assert!(!session.is_switching_photo());
+        assert_eq!(fake.copies.load(Ordering::SeqCst), 0);
+        let fake = Arc::new(Fake::default());
+        fake.saves.store(1, Ordering::SeqCst);
+        let (mut session, old, next) = recording_session(&fake);
+        session.continue_recording_at(next.clone()).unwrap();
+        finalized(&fake);
+        fake.start_error.store(true, Ordering::SeqCst);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let target = loop {
+            if let Some(target) = session.poll_with_player(fake.as_ref()) {
+                break target;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        assert_eq!(target, next);
+        assert_eq!(session.catalog().for_photo(&old.file).len(), 1);
+        assert!(!session.has_unsaved());
+        assert!(
+            session
+                .error()
+                .contains("neue Aufnahme konnte nicht starten")
+        );
+        for _ in 0..4 {
+            assert!(session.poll_with_player(fake.as_ref()).is_none());
+        }
+        assert_eq!(fake.copies.load(Ordering::SeqCst), 1);
     }
 }

@@ -85,25 +85,67 @@ impl super::Suite {
                         .on_hover_text(&date_detail);
                     }
                 });
-            if !self.comments.is_open() && !self.tag_view.open {
+            if (!self.comments.is_open() || self.comment_view.inline) && !self.tag_view.open {
                 next |= ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
                 previous |= ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
             }
-            if (next || previous) && !self.leave_inline_recording() {
-                next = false;
-                previous = false;
-            }
             if let Some(p) = position {
-                if next && p + 1 < visible.len() {
-                    self.selected = Some(visible[p + 1]);
-                }
-                if previous && p > 0 {
-                    self.selected = Some(visible[p - 1]);
+                let recording = self.comment_view.inline
+                    && self.comments.snapshot().phase
+                        == photosuite_application::comments::CapturePhase::Recording;
+                let eligible =
+                    |i: &usize| !recording || self.items.get(*i).is_some_and(|m| m.is_photo());
+                let destination = if next {
+                    visible
+                        .get(p + 1..)
+                        .unwrap_or(&[])
+                        .iter()
+                        .copied()
+                        .find(eligible)
+                } else if previous {
+                    visible
+                        .get(..p)
+                        .unwrap_or(&[])
+                        .iter()
+                        .rev()
+                        .copied()
+                        .find(eligible)
+                } else {
+                    None
+                };
+                if let Some(destination) = destination {
+                    self.navigate_viewer(destination);
                 }
             }
             if !open && self.leave_inline_recording() {
                 self.selected = None;
             }
+        }
+    }
+    pub(super) fn navigate_viewer(&mut self, destination: usize) {
+        let recording = self.comment_view.inline
+            && self.comments.snapshot().phase
+                == photosuite_application::comments::CapturePhase::Recording;
+        if self.comments.is_switching_photo() {
+            return;
+        }
+        if recording {
+            let result = (|| {
+                let media = self
+                    .items
+                    .get(destination)
+                    .ok_or("Foto nicht mehr vorhanden")?;
+                let target = photosuite_application::comments::PhotoTarget {
+                    root: self.root.clone().ok_or("Keine Bibliothek geöffnet")?,
+                    file: self.organization.file(media.path())?,
+                };
+                self.comments.continue_recording_at(target)
+            })();
+            if let Err(error) = result {
+                self.status = error;
+            }
+        } else if self.leave_inline_recording() {
+            self.selected = Some(destination);
         }
     }
 }
@@ -359,8 +401,8 @@ mod tests {
                     .max_by(|a, b| a.y.total_cmp(&b.y))
                     .expect("play directly above recording");
                 assert!((record.y - play.y - 38.).abs() < 0.5);
-                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(rect) if (rect.rect.height()-26.).abs()<0.1 && rect.fill==crate::theme::DISABLED_BG && (rect.rect.center().y-play.y).abs()<0.5)),"playback track centered in top row");
-                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(rect) if (rect.rect.height()-26.).abs()<0.1 && rect.fill==crate::theme::CANVAS && (rect.rect.center().y-record.y).abs()<0.5)),"recording waveform matches playback track height");
+                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(rect) if (rect.rect.height()-34.).abs()<0.1 && rect.fill==crate::theme::DISABLED_BG && (rect.rect.center().y-play.y).abs()<0.5)),"playback track centered in top row");
+                assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Rect(rect) if (rect.rect.height()-34.).abs()<0.1 && rect.fill==crate::theme::CANVAS && (rect.rect.center().y-record.y).abs()<0.5)),"recording waveform matches playback track height");
                 let mut groups: Vec<_> = output
                     .shapes
                     .iter()

@@ -14,8 +14,30 @@ pub(super) struct CommentView {
 }
 impl Suite {
     pub(super) fn poll_comments(&mut self, ctx: &egui::Context) {
-        self.comments.poll();
-        if self.comment_view.awaiting_save
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.comments.cancel_recording_continuation();
+        }
+        if let Some(target) = self
+            .comments
+            .poll_with_player(self.services.audio_player.as_ref())
+        {
+            let path = target.root.join(target.file.as_str());
+            if self.root.as_ref() == Some(&target.root)
+                && let Some(index) = self.items.iter().position(|m| m.path() == path)
+            {
+                self.selected = Some(index);
+                self.storyboard.clear();
+                self.status = "Aufnahme zum nächsten Foto gestartet".into();
+            }
+        }
+        if self.comments.is_switching_photo() {
+            self.status =
+                "Kommentar wird gespeichert; anschließend beginnt die Aufnahme zum nächsten Foto …"
+                    .into();
+        }
+        if (self.comment_view.awaiting_save
+            || self.comment_view.confirm_close
+            || self.comment_view.confirm_quit)
             && !self.comments.is_saving()
             && !self.comments.is_save_pending()
         {
@@ -62,6 +84,12 @@ impl Suite {
         }
     }
     pub(super) fn comment_dialog(&mut self, ctx: &egui::Context) {
+        // A scope/filter change may remove the viewer; never leave an invisible live recorder.
+        if self.comment_view.inline && self.selected.is_none() {
+            self.comments.cancel_recording_continuation();
+            self.comment_view.inline = false;
+            self.comments.show();
+        }
         if let Some(index) = self.record_photo.take() {
             let result = (|| {
                 let media = self
@@ -234,6 +262,7 @@ impl Suite {
     }
     /// Navigation/closing must never silently discard the take owned by the viewer.
     pub(super) fn leave_inline_recording(&mut self) -> bool {
+        self.comments.cancel_recording_continuation();
         if !self.comment_view.inline {
             return true;
         }
@@ -751,8 +780,8 @@ fn level_meter(ui: &mut egui::Ui, amplitude: f32, peak: f32) {
 }
 pub(super) fn compact_level(ui: &mut egui::Ui, amplitude: f32, peak: f32) {
     let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 3., crate::theme::CANVAS);
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.), egui::Sense::hover());
+    let rect = crate::theme::audio_track(ui, rect, crate::theme::CANVAS, true);
     let end = rect.left() + rect.width() * amplitude_position(amplitude);
     if end > rect.left() {
         ui.painter().rect_filled(
@@ -812,7 +841,7 @@ fn waveform_sized(ui: &mut egui::Ui, values: &[f32], height: f32) -> (egui::Rect
         egui::Sense::click_and_drag(),
     );
     response.clone().on_hover_text("Pegelverlauf: ungefähr 32 Sekunden. Bewegung auf ein Achtel verlangsamt; kurze Ausschläge bleiben sichtbar.");
-    ui.painter().rect_filled(rect, 4., crate::theme::CANVAS);
+    let rect = crate::theme::audio_track(ui, rect, crate::theme::CANVAS, true);
     let pixel = 1. / ui.ctx().pixels_per_point();
     ui.painter().line_segment(
         [

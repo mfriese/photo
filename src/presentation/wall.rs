@@ -7,6 +7,7 @@ impl super::Suite {
             self.diary_wall(ctx, visible);
             return;
         }
+        let mut open_media = None;
         egui::CentralPanel::default()
             .frame(theme::panel(theme::CANVAS, 12))
             .show(ctx, |ui| {
@@ -259,7 +260,7 @@ impl super::Suite {
                                                     self.status = error;
                                                 }
                                             } else {
-                                                self.selected = Some(index);
+                                                open_media = Some(index);
                                             }
                                         }
                                         super::captions::caption(
@@ -275,5 +276,8 @@ impl super::Suite {
                     },
                 );
             });
+        if let Some(index) = open_media {
+            self.navigate_viewer(index);
+        }
     }
 }

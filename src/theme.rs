@@ -66,6 +66,24 @@ pub fn transport_button(
     })
     .inner
 }
+/// Audio wells share the transport button's normal outline and corners.
+/// Keep samples/segments inside the rim without changing the allocated widget size.
+pub fn audio_track(ui: &egui::Ui, rect: egui::Rect, fill: Color32, enabled: bool) -> egui::Rect {
+    let visuals = &ui.visuals().widgets.inactive;
+    ui.painter().rect(
+        rect,
+        visuals.corner_radius,
+        fill,
+        if enabled {
+            visuals.bg_stroke
+        } else {
+            Stroke::new(1_f32, DISABLED_BORDER)
+        },
+        egui::StrokeKind::Inside,
+    );
+    rect.shrink((rect.width().min(rect.height()) * 0.25).min(2.))
+}
+
 pub fn transport_symbol(enabled: bool, record: bool) -> Color32 {
     if !enabled {
         DISABLED_TEXT

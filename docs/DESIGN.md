@@ -110,3 +110,6 @@ Playerfußzeile: native Gruppe mit bottomAnchor-Inset −22 innerhalb des Inhalt
 Transportflächen verwenden die zentrale Palette in src/theme.rs: 34-Punkte-Quadrate im Aufnahme-/Bereichsplayer, ein Punkt Rahmen und Radius fünf; identische normale, Hover-, Klick- und deaktivierte Farben. Native Farben werden generiert. Headercontrols bleiben kompakt, ohne Audio sind Symbol, Rahmen und Leiste eindeutig abgedunkelt. Alles steht über den Jahren; Tagwolke enthält normalisierte kleine Namen.
 
 Foto-Kommentare bleiben in der Jahres-/Monatsnavigation bei ihrem eigenen Aufnahmedatum. Die Fotozuordnung dient nur der expliziten Kommentar-Hörleiste und beeinflusst keine Baumposition.
+
+
+Audioleisten, Aufnahmekurven und die kompakte Pegelanzeige verwenden dieselben dezenten Ein-Punkt-Rahmen und Rundungen wie Transportbuttons. Eine innenliegende Zeichenfläche schützt die Kontur vor Pegel- und Segmentfüllungen. Außenmaß und Höhe bleiben unverändert, deaktivierte Hörleisten behalten den klar abgedunkelten Rahmen. Keine zusätzlichen Schatten, größeren Abstände oder neuen Akzentfarben.

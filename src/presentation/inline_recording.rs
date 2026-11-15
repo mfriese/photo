@@ -70,7 +70,7 @@ impl Suite {
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.set_width(wave);
-                    seek = comments::recording_waveform_sized(ui, &snapshot, seekable, 26.);
+                    seek = comments::recording_waveform_sized(ui, &snapshot, seekable, 34.);
                 },
             );
             ui.allocate_ui_with_layout(
@@ -169,12 +169,39 @@ mod tests {
                 CaptureCommand::Resume => {
                     self.snapshot.lock().unwrap().phase = CapturePhase::Recording
                 }
+                CaptureCommand::Finish => {
+                    let mut snapshot = self.snapshot.lock().unwrap();
+                    snapshot.phase = CapturePhase::Ready;
+                    snapshot.take = Some(photosuite_application::comments::CapturedTake {
+                        id: format!(
+                            "12345678-1234-1234-1234-{:012}",
+                            self.starts.load(Ordering::SeqCst)
+                        ),
+                        path: "/tmp/simulated.m4a".into(),
+                        recorded_at: "2026-11-15T12:00:00+01:00".into(),
+                    });
+                }
                 _ => {}
             }
             Ok(())
         }
         fn snapshot(&self) -> CaptureSnapshot {
             self.snapshot.lock().unwrap().clone()
+        }
+    }
+    impl photosuite_application::comments::CommentMediaStore for Recorder {
+        fn validate(
+            &self,
+            _: &PhotoTarget,
+            _: &photosuite_application::comments::CapturedTake,
+        ) -> Result<(), String> {
+            Ok(())
+        }
+        fn exists(&self, _: &std::path::Path) -> Result<bool, String> {
+            Ok(false)
+        }
+        fn copy_verified(&self, _: &std::path::Path, _: &std::path::Path) -> Result<(), String> {
+            Ok(())
         }
     }
     #[test]
@@ -299,5 +326,89 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(texts.contains(&"Speichern") && texts.contains(&"Verwerfen"));
         assert!(suite.comments.has_unsaved());
+    }
+    #[test]
+    fn arrow_navigation_during_recording_saves_old_photo_skips_video_and_starts_next_photo() {
+        let mut suite = super::super::layout_tests::test_suite();
+        let recorder = Arc::new(Recorder::default());
+        suite.root = Some("/Fotos".into());
+        suite.organization.open("/Fotos".into()).unwrap();
+        suite.comments = CommentSession::new(
+            suite.services.comments.clone(),
+            recorder.clone(),
+            recorder.clone(),
+        );
+        suite.comments.load("/Fotos".into());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !suite.comments.is_loaded() {
+            suite.comments.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        for name in [
+            "img_20080916_035811.jpg",
+            "img_20080916_035812.mp4",
+            "img_20080916_035813.jpg",
+        ] {
+            suite.items.push(
+                crate::domain::Media::from_path(
+                    format!("/Fotos/2008/09/{name}").into(),
+                    "2008/09".into(),
+                )
+                .unwrap(),
+            );
+        }
+        let old = suite.organization.file(suite.items[0].path()).unwrap();
+        let next = suite.organization.file(suite.items[2].path()).unwrap();
+        suite
+            .comments
+            .toggle_photo_recording(
+                PhotoTarget {
+                    root: "/Fotos".into(),
+                    file: old.clone(),
+                },
+                suite.services.audio_player.as_ref(),
+            )
+            .unwrap();
+        suite.comments.poll();
+        suite.comment_view.inline = true;
+        suite.selected = Some(0);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        ctx.style_mut(|s| s.animation_time = 0.);
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(950., 700.),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::ArrowRight,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| suite.media_viewer(ctx, &[0, 1, 2], &mut Vec::new()),
+        );
+        assert_eq!(
+            suite.selected,
+            Some(0),
+            "photo remains until the old comment is committed"
+        );
+        assert!(suite.comments.is_switching_photo());
+        while suite.comments.is_switching_photo() {
+            suite.poll_comments(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(suite.selected, Some(2));
+        assert_eq!(recorder.starts.load(Ordering::SeqCst), 2);
+        assert_eq!(suite.comments.target().unwrap().file, next);
+        assert_eq!(suite.comments.catalog().for_photo(&old).len(), 1);
+        assert!(suite.comments.has_unsaved());
+        assert!(suite.comment_view.inline);
     }
 }

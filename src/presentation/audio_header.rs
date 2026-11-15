@@ -96,15 +96,15 @@ fn controls_sized(
                 egui::vec2(bar_width, button_size.y),
                 egui::Sense::click_and_drag(),
             );
-            let track = rect.shrink2(egui::vec2(0., 4.));
-            ui.painter().rect_filled(
-                track,
-                2.,
+            let track = theme::audio_track(
+                ui,
+                rect,
                 if state.active || can_start {
                     theme::RAISED
                 } else {
                     theme::DISABLED_BG
                 },
+                state.active || can_start,
             );
             let mut hover = None;
             if let Some(timeline) = timeline.filter(|_| state.active || can_start) {
