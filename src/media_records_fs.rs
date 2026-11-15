@@ -31,9 +31,8 @@ impl Record {
     }
 }
 pub(crate) fn parse(bytes: &[u8]) -> Result<Record, String> {
-    let mut record: Record =
-        serde_saphyr::from_str(std::str::from_utf8(bytes).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+    let mut record: Record = crate::metadata_fs::parse_large_yaml(bytes, 16 * 1024 * 1024)
+        .map_err(|e| format!("Medien-YAML konnte nicht gelesen werden: {e}"))?;
     if record.version != 3 {
         return Err("Unbekannte Version der Medien-YAML".into());
     }

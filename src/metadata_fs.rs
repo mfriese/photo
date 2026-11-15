@@ -4,6 +4,28 @@ use std::{
     io::{Read, Write},
     path::Path,
 };
+/// Parse large, byte-bounded media/index documents with matching structural limits.
+/// Keep the parser's depth, aliases, anchors and expansion protections intact.
+pub(crate) fn parse_large_yaml<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+    max_bytes: usize,
+) -> Result<T, String> {
+    if bytes.len() > max_bytes {
+        return Err(format!(
+            "YAML überschreitet {} MiB",
+            max_bytes / (1024 * 1024)
+        ));
+    }
+    let nodes = (max_bytes / 8).max(250_000);
+    let options = serde_saphyr::options! {
+        budget: serde_saphyr::budget! {
+            max_nodes: nodes,
+            max_events: nodes.saturating_mul(4),
+        },
+    };
+    serde_saphyr::from_slice_with_options(bytes, options).map_err(|e| e.to_string())
+}
+
 /// Resolve a library metadata target without following symbolic directory ancestors.
 /// Reads never create directories; only an explicit write may create missing parents.
 pub(crate) fn library_path(
@@ -227,5 +249,23 @@ mod concurrent_tests {
                 .contains(&fs::read(&path).unwrap().as_slice())
         );
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+}
+
+#[cfg(test)]
+mod large_yaml_tests {
+    use super::*;
+    #[test]
+    fn larger_document_budget_keeps_byte_and_nesting_guards() {
+        let too_large = vec![b' '; 1025];
+        assert!(
+            parse_large_yaml::<serde_json::Value>(&too_large, 1024)
+                .unwrap_err()
+                .contains("überschreitet")
+        );
+        let nested = format!("{}0{}", "[".repeat(70), "]".repeat(70));
+        let error =
+            parse_large_yaml::<serde_json::Value>(nested.as_bytes(), 16 * 1024 * 1024).unwrap_err();
+        assert!(error.contains("Depth"), "{error}");
     }
 }

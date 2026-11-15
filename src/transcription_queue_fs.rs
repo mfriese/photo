@@ -56,7 +56,7 @@ impl QueueStore for YamlTranscriptionQueue {
         if bytes.len() > 32 * 1024 * 1024 {
             return Err("Transkriptionswarteschlange überschreitet 32 MiB".into());
         }
-        let document: Document = serde_saphyr::from_slice(&bytes)
+        let document: Document = metadata_fs::parse_large_yaml(&bytes, 32 * 1024 * 1024)
             .map_err(|e| format!("Transkriptionswarteschlange bleibt unverändert: {e}"))?;
         if document.version != 1 {
             return Err("Unbekannte Transkriptionswarteschlange".into());
@@ -261,6 +261,79 @@ mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn transcript_at_supported_segment_limit_can_be_saved_reloaded_and_tagged() {
+        let root = tempfile::tempdir().unwrap();
+        let store = YamlTranscriptionQueue;
+        let source = media(root.path(), "2017/04/img_20170407_040311.mp4");
+        let candidate = Candidate {
+            source: source.clone(),
+            record: source.clone(),
+        };
+        let segments = (0..50000)
+            .map(|i| Segment::new(i * 1000, i * 1000 + 500, "x".into()).unwrap())
+            .collect();
+        let transcript = Transcript::new(
+            store.version(root.path(), &source).unwrap(),
+            TranscriptStatus::Complete,
+            "tiny".into(),
+            "de".into(),
+            "x ".repeat(50000),
+            segments,
+        )
+        .unwrap();
+        store
+            .write_transcript(root.path(), &candidate, &transcript)
+            .unwrap();
+        assert_eq!(
+            store.existing(root.path(), &candidate).unwrap().as_ref(),
+            Some(&transcript)
+        );
+        let tags = crate::tag_store::YamlTags::default();
+        let old = tags.read_file_tags(root.path(), &source).unwrap();
+        tags.write_file_tags(
+            root.path(),
+            &source,
+            &["video".into()].into(),
+            old.revision.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(
+            store.existing(root.path(), &candidate).unwrap().as_ref(),
+            Some(&transcript)
+        );
+        assert_eq!(
+            fs::read(root.path().join(source.as_str())).unwrap(),
+            b"unchanged original media"
+        );
+    }
+
+    #[test]
+    fn large_valid_queue_can_be_reopened_after_saving() {
+        let root = tempfile::tempdir().unwrap();
+        let store = YamlTranscriptionQueue;
+        let mut journal = Journal::default();
+        for i in 0..40000 {
+            let source = file(&format!("2017/04/img_20170407_040311_{i:05}.mp4"));
+            journal.jobs.insert(
+                source.clone(),
+                Job {
+                    candidate: Candidate {
+                        source: source.clone(),
+                        record: source,
+                    },
+                    version: SourceVersion::new(123, "123.456".into()).unwrap(),
+                    state: JobState::Pending,
+                },
+            );
+        }
+        store.save(root.path(), &journal).unwrap();
+        let restored = store
+            .load(root.path())
+            .expect("valid saved large queue must reload");
+        assert_eq!(restored.jobs.len(), journal.jobs.len());
+    }
+
     #[test]
     fn photo_comment_transcript_round_trip_preserves_tags_links_and_source_bytes() {
         let root = tempfile::tempdir().unwrap();

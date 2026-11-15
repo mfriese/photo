@@ -445,6 +445,78 @@ impl PowerManager for NativePower {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "Diagnostic integration: requires WHISPER_TEST_MODEL and WHISPER_TEST_MEDIA; uses only temporary output"]
+    fn supplied_media_transcript_survives_yaml_round_trip() {
+        use crate::domain::{
+            tags::LibraryFile,
+            transcript::{Transcript, TranscriptStatus},
+        };
+        use photosuite_application::transcription::queue::{Candidate, QueueStore};
+        let original = std::path::PathBuf::from(
+            std::env::var_os("WHISPER_TEST_MEDIA").expect("WHISPER_TEST_MEDIA"),
+        );
+        let before = std::fs::read(&original).unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let source = LibraryFile::new("2026/11/img_20261115_120000.mp4".into()).unwrap();
+        let path = folder.path().join(source.as_str());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &before).unwrap();
+        let model = std::env::var("WHISPER_TEST_MODEL_ID").unwrap_or("large-v3-turbo".into());
+        let choice = ModelChoice {
+            path: std::env::var_os("WHISPER_TEST_MODEL")
+                .expect("WHISPER_TEST_MODEL")
+                .into(),
+            settings: photosuite_application::transcription::Settings::new(&model, "de").unwrap(),
+        };
+        let engine =
+            NativeEngine::new(Arc::new(crate::whisper_models_native::NativeModelTransport));
+        let output = engine
+            .transcribe(&choice, &path, &AtomicBool::new(false), &|_| {})
+            .expect("native inference");
+        let text = output
+            .segments
+            .iter()
+            .map(|s| s.text())
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!(
+            "Inference completed: {} segments, {} text bytes",
+            output.segments.len(),
+            text.len()
+        );
+        let store = crate::transcription_queue_fs::YamlTranscriptionQueue;
+        let value = Transcript::new(
+            store.version(folder.path(), &source).unwrap(),
+            if output.no_audio {
+                TranscriptStatus::NoAudio
+            } else if text.is_empty() {
+                TranscriptStatus::NoSpeech
+            } else {
+                TranscriptStatus::Complete
+            },
+            model,
+            output.language,
+            text,
+            output.segments,
+        )
+        .unwrap();
+        let candidate = Candidate {
+            source: source.clone(),
+            record: source,
+        };
+        store
+            .write_transcript(folder.path(), &candidate, &value)
+            .expect("publish transcript YAML");
+        assert_eq!(
+            store.existing(folder.path(), &candidate).unwrap().as_ref(),
+            Some(&value)
+        );
+        assert_eq!(std::fs::read(&original).unwrap(), before);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        engine.release_model();
+    }
+
+    #[test]
     #[ignore = "Requires WHISPER_TEST_MODEL pointing to verified tiny-q5_1 weights; never downloads automatically"]
     fn native_whisper_transcribes_real_speech_and_mpeg4_audio_without_modifying_sources() {
         let model = std::path::PathBuf::from(
