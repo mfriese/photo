@@ -86,6 +86,27 @@ pub trait PreferencesStore: Send + Sync + 'static {
     ) -> Result<(Preferences, Option<String>), String> {
         self.load_with_status()
     }
+    /// One readiness attempt. The progress callback exposes only the local locator before disk I/O.
+    fn startup_attempt(
+        &self,
+        explicit: Option<&std::path::Path>,
+        progress: &dyn Fn(StartupLocation),
+    ) -> Result<StartupRead, String> {
+        let (preferences, warning) = self.load_for_startup(explicit)?;
+        let library = explicit
+            .map(Into::into)
+            .or_else(|| preferences.startup_library([]));
+        progress(StartupLocation {
+            preferences: preferences.clone(),
+            library: library.clone(),
+        });
+        Ok(StartupRead {
+            preferences,
+            library,
+            ready: true,
+            warning,
+        })
+    }
     fn load_library(&self, _root: &std::path::Path) -> Result<Option<Preferences>, String> {
         Ok(None)
     }
@@ -515,4 +536,4 @@ mod scoped_tests {
 }
 
 mod startup;
-pub use startup::{StartupOutcome, StartupPreferences};
+pub use startup::{StartupLocation, StartupOutcome, StartupPreferences, StartupRead, StartupState};

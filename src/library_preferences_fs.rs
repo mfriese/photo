@@ -104,7 +104,7 @@ fn regular_root(root: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn read_yaml(root: &Path) -> Result<Option<Preferences>, String> {
+fn read_settings_bytes(root: &Path) -> Result<Option<Vec<u8>>, String> {
     regular_root(root)?;
     let path = crate::metadata_fs::library_path(root, SETTINGS, false)?;
     if !check_file(&path)? {
@@ -116,10 +116,13 @@ fn read_yaml(root: &Path) -> Result<Option<Preferences>, String> {
         .take(MAX_SETTINGS + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
+    Ok(Some(bytes))
+}
+fn decode_yaml(bytes: &[u8]) -> Result<Preferences, String> {
     if bytes.len() as u64 > MAX_SETTINGS {
         return Err("yaml/settings.yaml ist größer als 64 KiB; Datei bleibt unverändert".into());
     }
-    let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+    let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
     let value: serde_json::Value =
         serde_saphyr::from_str(text).map_err(|e| format!("yaml/settings.yaml: {e}"))?;
     let object = value
@@ -147,7 +150,13 @@ fn read_yaml(root: &Path) -> Result<Option<Preferences>, String> {
         }
     }
     let plist: plist::Value = serde_json::from_value(value).map_err(|e| e.to_string())?;
-    crate::preferences_codec::decode(plist).map(Some)
+    crate::preferences_codec::decode(plist)
+}
+fn read_yaml(root: &Path) -> Result<Option<Preferences>, String> {
+    read_settings_bytes(root)?
+        .as_deref()
+        .map(decode_yaml)
+        .transpose()
 }
 fn yaml(preferences: &Preferences) -> Result<String, String> {
     let encoded = crate::preferences_codec::encode(preferences);
@@ -175,6 +184,80 @@ impl PreferencesStore for LibraryPreferences {
         explicit: Option<&Path>,
     ) -> Result<(Preferences, Option<String>), String> {
         self.initial(explicit)
+    }
+    fn startup_attempt(
+        &self,
+        explicit: Option<&Path>,
+        progress: &dyn Fn(photosuite_application::preferences::StartupLocation),
+    ) -> Result<photosuite_application::preferences::StartupRead, String> {
+        use photosuite_application::preferences::{StartupLocation, StartupRead};
+        let local = self.local()?;
+        let root = explicit
+            .map(Path::to_path_buf)
+            .or_else(|| local.last_library.clone());
+        progress(StartupLocation {
+            preferences: local.clone(),
+            library: root.clone(),
+        });
+        let Some(root) = root else {
+            return Ok(StartupRead {
+                preferences: local,
+                library: None,
+                ready: true,
+                warning: None,
+            });
+        };
+        // Actually open/read the directory, not just a possibly cached exists() check.
+        let accessible = (|| {
+            regular_root(&root)?;
+            fs::read_dir(&root)
+                .map_err(|e| e.to_string())?
+                .next()
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            Ok::<_, String>(())
+        })();
+        if let Err(error) = accessible {
+            return Ok(StartupRead {
+                preferences: local,
+                library: Some(root),
+                ready: false,
+                warning: Some(error),
+            });
+        }
+        let bytes = match read_settings_bytes(&root) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Ok(StartupRead {
+                    preferences: local,
+                    library: Some(root),
+                    ready: false,
+                    warning: Some(error),
+                });
+            }
+        };
+        match bytes.as_deref().map(decode_yaml).transpose() {
+            Ok(settings) => {
+                let mut settings = settings.unwrap_or_default();
+                settings.last_library = local.last_library;
+                let open = explicit.is_some() || settings.reopen_library;
+                settings.library_scope = Some(root.clone());
+                Ok(StartupRead {
+                    preferences: settings,
+                    library: open.then_some(root),
+                    ready: true,
+                    warning: None,
+                })
+            }
+            Err(error) => Ok(StartupRead {
+                preferences: local,
+                library: Some(root),
+                ready: true,
+                warning: Some(format!(
+                    "Bibliotheks-Einstellungen konnten nicht geladen werden: {error}"
+                )),
+            }),
+        }
     }
     fn load_library(&self, root: &Path) -> Result<Option<Preferences>, String> {
         Ok(Some(read_yaml(root)?.unwrap_or_default()))
@@ -609,5 +692,48 @@ mod locator_validation_tests {
                 .is_err()
         );
         assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[cfg(test)]
+mod startup_readiness_tests {
+    use super::*;
+    #[test]
+    fn startup_access_retries_missing_storage_but_preserves_invalid_settings_and_locator() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("offline");
+        let locator = directory.path().join("library.plist");
+        let store = LibraryPreferences::new(locator.clone());
+        store
+            .save(&Preferences {
+                last_library: Some(root.clone()),
+                ..Default::default()
+            })
+            .unwrap();
+        let before = fs::read(&locator).unwrap();
+        let progress = std::sync::Mutex::new(None);
+        let read = store
+            .startup_attempt(None, &|location| {
+                *progress.lock().unwrap() = location.library;
+            })
+            .unwrap();
+        assert!(!read.ready);
+        assert_eq!(read.library, Some(root.clone()));
+        assert_eq!(*progress.lock().unwrap(), Some(root.clone()));
+        assert!(!root.exists());
+        assert_eq!(fs::read(&locator).unwrap(), before);
+        fs::create_dir(&root).unwrap();
+        let read = store.startup_attempt(None, &|_| {}).unwrap();
+        assert!(read.ready);
+        assert_eq!(read.library, Some(root.clone()));
+        assert!(!root.join("yaml").exists());
+        fs::create_dir(root.join("yaml")).unwrap();
+        let bytes = b"invalid: [";
+        fs::write(root.join(SETTINGS), bytes).unwrap();
+        let read = store.startup_attempt(None, &|_| {}).unwrap();
+        assert!(read.ready);
+        assert!(read.warning.is_some());
+        assert_eq!(fs::read(root.join(SETTINGS)).unwrap(), bytes);
+        assert_eq!(fs::read(locator).unwrap(), before);
     }
 }

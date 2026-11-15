@@ -59,6 +59,13 @@ pub fn read(path: &Path) -> Result<FileDates, String> {
     })
 }
 
+/// Local calendar day for disposable-cache maintenance, not a media capture date.
+pub(crate) fn today() -> Result<String, String> {
+    let value =
+        local(SystemTime::now(), "Cachetag").ok_or("Lokales Kalenderdatum nicht verfügbar")?;
+    Ok(value.local.stamp()[..8].to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

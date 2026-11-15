@@ -23,6 +23,10 @@ pub trait AudioSource: Send + Sync + 'static {
     fn cached_probe(&self, _: &Path) -> Option<AudioProbe> {
         None
     }
+    /// Display hint only; never substitutes an audio validation probe. No I/O.
+    fn cached_duration(&self, path: &Path) -> Option<f64> {
+        self.cached_probe(path).map(|p| p.duration)
+    }
     fn probe(&self, path: &Path) -> Result<AudioProbe, String>;
     fn capture_time(&self, path: &Path) -> Result<CaptureTime, String>;
     /// Resolve remaining date metadata while reusing a measured audio probe.
@@ -439,9 +443,8 @@ impl DiarySession {
                     .iter()
                     .filter_map(|clip| {
                         source
-                            .cached_probe(clip.path())
-                            .filter(|probe| probe.audio_only)
-                            .map(|probe| (clip.path().into(), probe.duration))
+                            .cached_duration(clip.path())
+                            .map(|duration| (clip.path().into(), duration))
                     })
                     .collect::<Vec<_>>();
                 timeline.refine_durations(&durations)?;

@@ -12,6 +12,7 @@ mod context_photos;
 mod desktop_menu;
 mod duplicates_fs;
 mod duplicates_ui;
+mod duration_cache_fs;
 mod exiftool;
 mod file_dates_fs;
 mod image_loader;
@@ -81,6 +82,7 @@ fn main() -> eframe::Result {
         tool: exiftool.clone(),
     });
     let services = application::Services {
+        duration_cache: Some(std::sync::Arc::new(duration_cache_fs::YamlDurations)),
         comment_media: std::sync::Arc::new(comments_fs::CommentFiles {
             audio: audio_source.clone(),
             copier: importer.clone(),

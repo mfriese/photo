@@ -8,6 +8,7 @@ mod gallery;
 mod icons;
 mod library;
 mod menu;
+mod startup;
 mod tag_cloud;
 mod tags;
 mod viewer;
@@ -95,6 +96,9 @@ impl Suite {
             }
             self.tag_view.clear_scope();
         }
+        if let Some(startup) = self.startup.as_mut() {
+            startup.cancel_for_navigation();
+        }
         self.audio_preparation.reset();
         self.organization.begin_media_scan(&path);
         self.comments.load(path.clone());
@@ -114,11 +118,11 @@ impl Suite {
             .request(self.services.preferences.clone(), path.clone());
         self.collection
             .request(self.services.repository.clone(), path.clone());
+        self.root = Some(path.clone());
         if remember {
             self.preferences.last_library = Some(path.clone());
             self.persist_preferences();
         }
-        self.root = Some(path);
         self.items.clear();
         self.gallery.selection.clear();
         self.known_media.clear();
@@ -163,53 +167,10 @@ impl Suite {
         }
     }
     fn settings_ready(&self) -> bool {
-        self.startup.is_none() && !self.library_settings.is_loading()
-    }
-    fn poll_startup(&mut self, ctx: &egui::Context) {
-        let Some(startup) = self.startup.as_mut() else {
-            return;
-        };
-        let Some(outcome) = startup.poll() else {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
-            return;
-        };
-        self.startup = None;
-        if self.root.is_none() {
-            let (mut preferences, mut error) = match outcome.result {
-                Ok((p, warning)) => (p, warning.unwrap_or_default()),
-                Err(error) => (
-                    Default::default(),
-                    format!("Einstellungen konnten nicht geladen werden: {error}"),
-                ),
-            };
-            let mut bindings = crate::command_bindings::CommandBindings::default();
-            if let Err(binding_error) = bindings.restore(&preferences.shortcuts) {
-                preferences.library_scope = None;
-                error = binding_error;
-            }
-            self.bindings = bindings;
-            self.apply_preferences(preferences);
-            self.preferences_error = error;
-        }
-        let snapshot = self.snapshot();
-        if let Some(persistence) = &mut self.persistence {
-            persistence.update(snapshot);
-        } else {
-            self.persistence = Some(photosuite_application::preferences::Persistence::new(
-                self.services.preferences.clone(),
-                snapshot,
-            ));
-        }
-        if self.root.is_some() {
-            self.persist_location();
-        } else {
-            self.persistence.as_mut().unwrap().flush_current();
-            if let Some(path) = self.preferences.startup_library(outcome.arguments) {
-                self.load_path(path, false);
-            } else {
-                self.status = "Bereit".into();
-            }
-        }
+        self.startup
+            .as_ref()
+            .is_none_or(|startup| !startup.waiting())
+            && !self.library_settings.is_loading()
     }
     fn snapshot(&self) -> photosuite_application::preferences::Preferences {
         let mut p = self.preferences.clone();
@@ -308,6 +269,9 @@ impl Suite {
         self.persist_preferences();
     }
     fn persist_preferences(&mut self) {
+        if self.root.is_none() {
+            return;
+        }
         let snapshot = self.snapshot();
         if let Some(persistence) = &mut self.persistence {
             persistence.update(snapshot);
@@ -523,6 +487,7 @@ impl eframe::App for Suite {
         self.bindings.show(ctx);
         self.settings(ctx);
         self.help(ctx);
+        self.startup_dialog(ctx);
         self.poll_menu(ctx);
         let tag_choices = self
             .organization
@@ -585,9 +550,10 @@ pub fn create(
         search_open: false,
         help_open: false,
         audio_header: Default::default(),
-        audio_preparation: photosuite_application::diary_preparation::AudioPreparation::new(
+        audio_preparation: photosuite_application::diary_preparation::AudioPreparation::with_cache(
             services.audio_source.clone(),
             services.work_priority.clone(),
+            services.duration_cache.clone(),
         ),
         viewer_audio: Default::default(),
         organization: photosuite_application::organization::OrganizationSession::new(

@@ -20,8 +20,9 @@ impl super::Suite {
                             .fit_to_exact_size(egui::vec2(64., 64.)),
                         );
                         ui.add_space(8.);
+                        let unavailable=self.startup.as_ref().is_some_and(|s|s.state()==photosuite_application::preferences::StartupState::Unavailable);
                         ui.label(
-                            egui::RichText::new("Platz für Erinnerungen.")
+                            egui::RichText::new(if unavailable{"Bibliothek aktuell nicht erreichbar."}else{"Platz für Erinnerungen."})
                                 .size(22.)
                                 .strong(),
                         );
@@ -31,10 +32,14 @@ impl super::Suite {
                                 .color(theme::MUTED),
                         );
                         ui.add_space(10.);
+                        if unavailable {
+                            if let Some(path)=self.startup.as_ref().and_then(|s|s.target()){ui.add(egui::Label::new(path.display().to_string()).truncate()).on_hover_text(path.display().to_string());}
+                            if ui.button("Erneut versuchen").clicked(){self.retry_startup();}
+                        }
                         if ui
                             .add_sized(
                                 [ui.available_width().min(200.), 30.],
-                                egui::Button::new("Fotosammlung öffnen …")
+                                egui::Button::new(if unavailable{"Andere Bibliothek öffnen …"}else{"Fotosammlung öffnen …"})
                                     .fill(theme::SELECTED)
                                     .wrap_mode(egui::TextWrapMode::Truncate),
                             )

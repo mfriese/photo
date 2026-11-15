@@ -31,3 +31,5 @@ pub mod comments;
 pub mod diary_preparation;
 
 pub mod media_trash;
+
+pub mod duration_cache;

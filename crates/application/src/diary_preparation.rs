@@ -19,6 +19,7 @@ struct Cache {
     generation: u64,
     revision: u64,
     values: HashMap<PathBuf, AudioProbe>,
+    hints: HashMap<PathBuf, f64>,
     order: VecDeque<PathBuf>,
 }
 struct PreparedSource {
@@ -31,10 +32,19 @@ impl PreparedSource {
         cache.generation += 1;
         cache.revision += 1;
         cache.values.clear();
+        cache.hints.clear();
         cache.order.clear();
     }
 }
 impl AudioSource for PreparedSource {
+    fn cached_duration(&self, path: &Path) -> Option<f64> {
+        let cache = self.cache.lock().unwrap();
+        cache
+            .values
+            .get(path)
+            .map(|p| p.duration)
+            .or_else(|| cache.hints.get(path).copied())
+    }
     fn cached_probe(&self, path: &Path) -> Option<AudioProbe> {
         self.cache.lock().unwrap().values.get(path).cloned()
     }
@@ -80,6 +90,7 @@ impl AudioSource for PreparedSource {
 }
 enum Event {
     Checked(PathBuf, Result<(), String>),
+    CacheError(String),
     Done,
 }
 struct Active {
@@ -87,6 +98,7 @@ struct Active {
     receiver: mpsc::Receiver<Event>,
 }
 pub struct AudioPreparation {
+    store: Option<Arc<dyn crate::duration_cache::DurationCache>>,
     source: Arc<PreparedSource>,
     priority: Arc<WorkPriority>,
     active: Option<Active>,
@@ -99,7 +111,15 @@ pub struct AudioPreparation {
 }
 impl AudioPreparation {
     pub fn new(source: Arc<dyn AudioSource>, priority: Arc<WorkPriority>) -> Self {
+        Self::with_cache(source, priority, None)
+    }
+    pub fn with_cache(
+        source: Arc<dyn AudioSource>,
+        priority: Arc<WorkPriority>,
+        store: Option<Arc<dyn crate::duration_cache::DurationCache>>,
+    ) -> Self {
         Self {
+            store,
             source: Arc::new(PreparedSource {
                 inner: source,
                 cache: Default::default(),
@@ -163,7 +183,7 @@ impl AudioPreparation {
         self.queued = Some(
             paths
                 .into_iter()
-                .filter(|p| self.source.cached_probe(p).is_none())
+                .filter(|p| self.store.is_some() || self.source.cached_probe(p).is_none())
                 .collect(),
         );
         self.launch();
@@ -183,12 +203,92 @@ impl AudioPreparation {
         let stop = cancel.clone();
         let (tx, receiver) = mpsc::sync_channel(16);
         self.active = Some(Active { cancel, receiver });
+        let store = self.store.clone();
+        let generation = source.cache.lock().unwrap().generation;
         std::thread::spawn(move || {
+            if let Some(store) = store {
+                let mut loaded = Vec::new();
+                // Read all small cache documents before doing any slow native measurements.
+                for group in store.groups(&paths) {
+                    if !priority.wait_background(&stop) {
+                        break;
+                    }
+                    match store.load(&group, &stop) {
+                        Ok(snapshot) => {
+                            let mut cache = source.cache.lock().unwrap();
+                            if cache.generation == generation && !stop.load(Ordering::Relaxed) {
+                                for path in &paths {
+                                    if let Some(entry) = snapshot.entries.get(path) {
+                                        if cache.hints.len() >= CACHE_LIMIT
+                                            && !cache.hints.contains_key(path)
+                                            && let Some(old) = cache.hints.keys().next().cloned()
+                                        {
+                                            cache.hints.remove(&old);
+                                        }
+                                        cache.hints.insert(path.clone(), entry.seconds);
+                                    }
+                                }
+                                cache.revision += 1;
+                            }
+                            loaded.push((group, snapshot));
+                        }
+                        Err(error) => {
+                            if tx.send(Event::CacheError(error)).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+                for (group, snapshot) in loaded {
+                    let result = crate::duration_cache::reconcile_loaded(
+                        store.as_ref(),
+                        &group,
+                        snapshot,
+                        &stop,
+                        |path| {
+                            if !priority.wait_background(&stop) {
+                                return Err("Abgebrochen".into());
+                            }
+                            // Fresh native measurement; display hints never validate playback.
+                            let probe = source.inner.probe(path)?;
+                            if !probe.audio_only
+                                || !probe.duration.is_finite()
+                                || probe.duration <= 0.
+                            {
+                                return Err("Ungültige Audioaufnahme".into());
+                            }
+                            let mut cache = source.cache.lock().unwrap();
+                            if cache.generation == generation && !stop.load(Ordering::Relaxed) {
+                                if !cache.values.contains_key(path) {
+                                    if cache.values.len() >= CACHE_LIMIT
+                                        && let Some(old) = cache.order.pop_front()
+                                    {
+                                        cache.values.remove(&old);
+                                    }
+                                    cache.order.push_back(path.into());
+                                }
+                                cache.values.insert(path.into(), probe.clone());
+                                cache.revision += 1;
+                            }
+                            Ok(probe.duration)
+                        },
+                    );
+                    if let Err(error) = result
+                        && tx.send(Event::CacheError(error)).is_err()
+                    {
+                        return;
+                    }
+                }
+            }
             for path in paths {
                 if !priority.wait_background(&stop) {
                     break;
                 }
-                let result = source.probe(&path).map(|_| ());
+                let result = if source.cached_duration(&path).is_some() {
+                    Ok(())
+                } else {
+                    source.probe(&path).map(|_| ())
+                };
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
@@ -213,6 +313,11 @@ impl AudioPreparation {
                                 }
                                 self.errors.insert(path, error);
                             }
+                        }
+                    }
+                    Ok(Event::CacheError(error)) => {
+                        if !active.cancel.load(Ordering::Relaxed) {
+                            self.error = format!("Audiolängen-Cache: {error}");
                         }
                     }
                     Ok(Event::Done) => {
@@ -245,8 +350,10 @@ impl AudioPreparation {
                     cache
                         .values
                         .get(clip.path())
-                        .filter(|probe| clip.duration() != Some(probe.duration))
-                        .map(|probe| (clip.path().to_owned(), probe.duration))
+                        .map(|p| p.duration)
+                        .or_else(|| cache.hints.get(clip.path()).copied())
+                        .filter(|duration| clip.duration() != Some(*duration))
+                        .map(|duration| (clip.path().to_owned(), duration))
                 })
                 .collect::<Vec<_>>()
         };
@@ -446,5 +553,92 @@ mod tests {
         prep.poll();
         assert!(!prep.is_loading());
         assert!(!prep.error().is_empty());
+    }
+    #[test]
+    fn persistent_hints_arrive_before_inventory_and_never_substitute_playback_validation() {
+        use crate::duration_cache::{DurationCache, Fingerprint, Length, Snapshot};
+        struct Store {
+            path: PathBuf,
+            release: Arc<AtomicBool>,
+        }
+        impl DurationCache for Store {
+            fn groups(&self, _: &[PathBuf]) -> Vec<PathBuf> {
+                vec!["year".into()]
+            }
+            fn load(&self, _: &Path, _: &AtomicBool) -> Result<Snapshot, String> {
+                Ok(Snapshot {
+                    today: "20261115".into(),
+                    last_full_verified: Some("20261115".into()),
+                    entries: [(
+                        self.path.clone(),
+                        Length {
+                            seconds: 99.,
+                            fingerprint: Fingerprint {
+                                size: 1,
+                                modified: "stamp".into(),
+                            },
+                        },
+                    )]
+                    .into(),
+                    files: Default::default(),
+                })
+            }
+            fn inventory(
+                &self,
+                _: &Path,
+                cancel: &AtomicBool,
+            ) -> Result<BTreeMap<PathBuf, Fingerprint>, String> {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+                while !self.release.load(Ordering::SeqCst) && !cancel.load(Ordering::Relaxed) {
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::yield_now();
+                }
+                Ok([(
+                    self.path.clone(),
+                    Fingerprint {
+                        size: 1,
+                        modified: "stamp".into(),
+                    },
+                )]
+                .into())
+            }
+            fn save(&self, _: &Path, _: &Snapshot) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let source = Arc::new(Source {
+            probes: AtomicUsize::new(0),
+            dates: AtomicUsize::new(0),
+        });
+        let release = Arc::new(AtomicBool::new(false));
+        let path = PathBuf::from("aud_20261113_120000.wav");
+        let mut prep = AudioPreparation::with_cache(
+            source.clone(),
+            Default::default(),
+            Some(Arc::new(Store {
+                path: path.clone(),
+                release: release.clone(),
+            })),
+        );
+        let mut timeline = timeline(&[path.to_str().unwrap()]);
+        prep.ensure("2026", Some(&timeline), true);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while prep.source().cached_duration(&path) != Some(99.) {
+            prep.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(prep.is_loading());
+        prep.apply(&mut timeline).unwrap();
+        assert_eq!(timeline.clips()[0].duration(), Some(99.));
+        assert!(prep.source().cached_probe(&path).is_none());
+        assert_eq!(source.probes.load(Ordering::SeqCst), 0);
+        release.store(true, Ordering::SeqCst);
+        drain(&mut prep);
+        assert_eq!(source.probes.load(Ordering::SeqCst), 0);
+        assert_eq!(prep.source().probe(&path).unwrap().duration, 1.);
+        assert_eq!(source.probes.load(Ordering::SeqCst), 1);
+        prep.apply(&mut timeline).unwrap();
+        assert_eq!(timeline.clips()[0].duration(), Some(1.));
     }
 }

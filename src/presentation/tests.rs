@@ -207,6 +207,7 @@ pub(super) fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            duration_cache: None,
             media_trash: adapters.clone(),
             comments: adapters.clone(),
             comment_media: adapters.clone(),
@@ -2238,4 +2239,106 @@ fn duplicates_are_a_separate_library_scoped_file_menu_dialog() {
             .unwrap()
             .enabled
     );
+}
+
+#[test]
+fn startup_wait_dialog_is_readable_and_cancellation_preserves_the_saved_library() {
+    use photosuite_application::preferences::{
+        Preferences, PreferencesStore, StartupLocation, StartupPreferences, StartupRead,
+        StartupState,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Slow(AtomicBool);
+    impl PreferencesStore for Slow {
+        fn load(&self) -> Result<Preferences, String> {
+            unreachable!()
+        }
+        fn save(&self, _: &Preferences) -> Result<(), String> {
+            panic!("cancelled readiness must not save")
+        }
+        fn startup_attempt(
+            &self,
+            _: Option<&std::path::Path>,
+            progress: &dyn Fn(StartupLocation),
+        ) -> Result<StartupRead, String> {
+            let preferences = Preferences {
+                last_library: Some("/Volumes/External/Photos".into()),
+                ..Default::default()
+            };
+            progress(StartupLocation {
+                preferences: preferences.clone(),
+                library: preferences.last_library.clone(),
+            });
+            while !self.0.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            Ok(StartupRead {
+                library: preferences.last_library.clone(),
+                preferences,
+                ready: true,
+                warning: None,
+            })
+        }
+    }
+    let source = Arc::new(Slow(AtomicBool::new(false)));
+    let mut suite = test_suite();
+    suite.startup = Some(StartupPreferences::new(source.clone(), vec![]));
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    ctx.style_mut(|style| style.animation_time = 0.);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while suite.startup.as_ref().unwrap().target().is_none() {
+        suite.poll_startup(&ctx);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    for width in [360., 800.] {
+        let mut labels = Vec::new();
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 600.),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| suite.startup_dialog(ctx),
+            );
+            labels = output
+                .shapes
+                .into_iter()
+                .filter_map(|shape| match shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect();
+        }
+        assert!(labels.iter().any(|label| label == "Abbrechen"));
+        assert!(
+            labels
+                .iter()
+                .any(|label| label == "Andere Bibliothek öffnen …")
+        );
+        assert!(labels.iter().any(|label| label.contains("von 60 Sekunden")));
+    }
+    suite.startup.as_mut().unwrap().cancel();
+    suite.poll_startup(&ctx);
+    assert!(suite.root.is_none());
+    assert!(suite.settings_ready());
+    assert_eq!(
+        suite.preferences.last_library,
+        Some("/Volumes/External/Photos".into())
+    );
+    source.0.store(true, Ordering::SeqCst);
+    while suite.startup.as_ref().unwrap().busy() {
+        suite.poll_startup(&ctx);
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        suite.startup.as_ref().unwrap().state(),
+        StartupState::Cancelled
+    );
+    assert!(suite.root.is_none());
 }
