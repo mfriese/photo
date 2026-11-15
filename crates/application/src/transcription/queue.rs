@@ -7,10 +7,10 @@ use crate::{
     transcription::Settings,
 };
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc,
     },
@@ -84,6 +84,8 @@ pub enum Phase {
 pub struct WorkProgress {
     pub phase: Phase,
     pub fraction: f32,
+    /// A provisional recognized segment for the bounded live log, not persistence.
+    pub finding: Option<String>,
 }
 #[derive(Clone, Debug)]
 pub struct EngineOutput {
@@ -116,6 +118,19 @@ pub struct Receipt {
     pub record: LibraryFile,
     pub excerpt: String,
 }
+/// Latest 16 recognized segments plus bounded file-start headings. Not persisted.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogEntry {
+    pub source: LibraryFile,
+    pub text: Option<String>,
+}
+const LOG_LIMIT: usize = 16;
+fn push_bounded<T>(queue: &mut VecDeque<T>, value: T) {
+    if queue.len() == LOG_LIMIT {
+        queue.pop_front();
+    }
+    queue.push_back(value);
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Indicator {
     Idle,
@@ -128,6 +143,19 @@ struct Catalog {
     sources: Vec<Candidate>,
     complete: bool,
 }
+fn push_log(log: &mut VecDeque<LogEntry>, value: LogEntry) {
+    log.push_back(value);
+    while log.iter().filter(|entry| entry.text.is_some()).count() > LOG_LIMIT {
+        while let Some(entry) = log.pop_front() {
+            if entry.text.is_some() {
+                break;
+            }
+        }
+    }
+    while log.len() > LOG_LIMIT * 2 + 1 {
+        log.pop_front();
+    }
+}
 enum Event {
     Progress(WorkProgress),
     Done(Result<(Journal, Option<Receipt>), String>),
@@ -137,6 +165,7 @@ struct Active {
     cancel: Arc<AtomicBool>,
     generation: u64,
     planning: bool,
+    findings: Arc<Mutex<VecDeque<String>>>,
 }
 pub struct QueueSession {
     store: Arc<dyn QueueStore>,
@@ -155,6 +184,7 @@ pub struct QueueSession {
     progress: WorkProgress,
     current: Option<LibraryFile>,
     last: Option<Receipt>,
+    log: VecDeque<LogEntry>,
     error: String,
     controls_dirty: bool,
 }
@@ -303,6 +333,7 @@ fn run(
             progress(WorkProgress {
                 phase: Phase::Saving,
                 fraction: 1.,
+                finding: None,
             });
             check(cancel)?;
             store.write_transcript(root, &job.candidate, &result)?;
@@ -355,9 +386,11 @@ impl QueueSession {
             progress: WorkProgress {
                 phase: Phase::Planning,
                 fraction: 0.,
+                finding: None,
             },
             current: None,
             last: None,
+            log: VecDeque::new(),
             error: String::new(),
             controls_dirty: false,
         }
@@ -372,6 +405,7 @@ impl QueueSession {
         self.reconcile = false;
         self.current = None;
         self.last = None;
+        self.log.clear();
         self.error.clear();
         self.awake = None;
         self.mode = Arc::new(AtomicU8::new(0));
@@ -396,6 +430,7 @@ impl QueueSession {
             self.mode = Arc::new(AtomicU8::new(0));
             self.mode_loaded = false;
             self.last = None;
+            self.log.clear();
         }
         self.catalog = Some(catalog);
         self.reconcile = true;
@@ -471,6 +506,9 @@ impl QueueSession {
             })
             .unwrap_or_default()
     }
+    pub fn log(&self) -> &VecDeque<LogEntry> {
+        &self.log
+    }
     pub fn counts(&self) -> (usize, usize, usize) {
         self.journal
             .as_ref()
@@ -513,6 +551,20 @@ impl QueueSession {
     pub fn poll(&mut self) {
         let mut result = None;
         if let Some(active) = &self.active {
+            if active.generation == self.generation
+                && let Some(source) = &self.current
+            {
+                let mut findings = active.findings.lock().unwrap_or_else(|e| e.into_inner());
+                for text in findings.drain(..) {
+                    push_log(
+                        &mut self.log,
+                        LogEntry {
+                            source: source.clone(),
+                            text: Some(text),
+                        },
+                    );
+                }
+            }
             for _ in 0..16 {
                 match active.receiver.try_recv() {
                     Ok(Event::Progress(progress)) => {
@@ -535,6 +587,18 @@ impl QueueSession {
         if let Some(result) = result {
             let active = self.active.take().unwrap();
             if active.generation == self.generation {
+                if let Some(source) = &self.current {
+                    let mut findings = active.findings.lock().unwrap_or_else(|e| e.into_inner());
+                    for text in findings.drain(..) {
+                        push_log(
+                            &mut self.log,
+                            LogEntry {
+                                source: source.clone(),
+                                text: Some(text),
+                            },
+                        );
+                    }
+                }
                 match result {
                     Ok((journal, receipt)) => {
                         if active.planning && !self.mode_loaded {
@@ -583,12 +647,14 @@ impl QueueSession {
             self.progress = WorkProgress {
                 phase: Phase::Planning,
                 fraction: 0.,
+                finding: None,
             };
             self.active = Some(Active {
                 receiver,
                 cancel,
                 generation,
                 planning: true,
+                findings: Default::default(),
             });
             std::thread::spawn(move || {
                 let result = plan(store.as_ref(), &catalog, &stop).map(|j| (j, None));
@@ -607,6 +673,7 @@ impl QueueSession {
                 cancel,
                 generation,
                 planning: false,
+                findings: Default::default(),
             });
             std::thread::spawn(move || {
                 let result =
@@ -646,16 +713,33 @@ impl QueueSession {
         self.progress = WorkProgress {
             phase: Phase::LoadingModel,
             fraction: 0.,
+            finding: None,
         };
+        push_log(
+            &mut self.log,
+            LogEntry {
+                source: key.clone(),
+                text: None,
+            },
+        );
+        let findings = Arc::new(Mutex::new(VecDeque::new()));
         self.active = Some(Active {
             receiver,
             cancel,
             generation,
             planning: false,
+            findings: findings.clone(),
         });
         std::thread::spawn(move || {
             let _lease = lease;
-            let notify = |p| {
+            let notify = |mut p: WorkProgress| {
+                if let Some(text) = p.finding.take()
+                    && !text.trim().is_empty()
+                {
+                    let text = text.chars().take(2000).collect();
+                    let mut pending = findings.lock().unwrap_or_else(|e| e.into_inner());
+                    push_bounded(&mut pending, text);
+                }
                 let _ = tx.try_send(Event::Progress(p));
             };
             let result = run(
@@ -818,6 +902,7 @@ mod tests {
             progress(WorkProgress {
                 phase: Phase::Transcribing,
                 fraction: 0.5,
+                finding: Some("Erkannter Text".into()),
             });
             if let Some(store) = &self.fail_save {
                 store.fail_journal.store(true, Ordering::SeqCst);
@@ -894,6 +979,45 @@ mod tests {
             std::thread::yield_now();
         }
     }
+    #[test]
+    fn live_findings_are_fifo_bounded_and_library_switch_discards_history() {
+        let (mut queue, _, _, _) = setup();
+        queue.set_model(Some(choice()));
+        let sources = (0..24).map(|i| candidate(&format!("{i:02}.wav"))).collect();
+        queue.sync(Path::new("/library"), sources, true);
+        until(&mut queue, |q| !q.busy() && q.counts() == (24, 24, 0));
+        let findings = queue
+            .log()
+            .iter()
+            .filter(|e| e.text.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(findings.len(), 16);
+        assert!(findings[0].source.as_str().ends_with("08.wav"));
+        assert!(findings[15].source.as_str().ends_with("23.wav"));
+        assert!(queue.log().len() <= 33);
+        assert!(
+            queue
+                .log()
+                .iter()
+                .any(|e| e.text.is_none() && e.source.as_str().ends_with("23.wav"))
+        );
+        queue.sync(Path::new("/other"), vec![], true);
+        assert!(queue.log().is_empty());
+        queue.reset();
+        assert!(queue.log().is_empty());
+    }
+
+    #[test]
+    fn fast_segment_bursts_retain_last_sixteen_without_a_ui_poll() {
+        let mut pending = VecDeque::new();
+        for i in 0..100 {
+            push_bounded(&mut pending, format!("Segment {i}"));
+        }
+        assert_eq!(pending.len(), 16);
+        assert_eq!(pending.front().unwrap(), "Segment 84");
+        assert_eq!(pending.back().unwrap(), "Segment 99");
+    }
+
     #[test]
     fn whole_batch_holds_one_sleep_assertion_and_completed_sources_are_not_transcribed_twice() {
         let (mut queue, store, engine, power) = setup();

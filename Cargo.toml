@@ -36,7 +36,7 @@ windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSMenu", "NSMenuItem", "NSResponder", "NSEvent"] }
-whisper-rs = { version = "=0.16.0", features = ["metal"] }
+whisper-rs = { version = "=0.16.0", features = ["metal", "raw-api"] }
 
 [[example]]
 name = "native-menu-check"

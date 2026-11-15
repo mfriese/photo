@@ -91,6 +91,7 @@ mod platform {
             (b.notify)(WorkProgress {
                 phase: Phase::Transcribing,
                 fraction: fraction.clamp(0., 1.) as f32,
+                finding: None,
             })
         }))
         .is_err()
@@ -110,6 +111,56 @@ mod platform {
         raw: *mut c_void,
     ) {
         unsafe { progress(raw, percent) }
+    }
+    unsafe extern "C" fn whisper_segments(
+        _: *mut whisper_rs::WhisperSysContext,
+        state: *mut whisper_rs::WhisperSysState,
+        count: i32,
+        raw: *mut c_void,
+    ) {
+        let bridge = unsafe { &*raw.cast::<Bridge<'_>>() };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Called synchronously by whisper after finalized segments; read only.
+            let total =
+                unsafe { whisper_rs::whisper_rs_sys::whisper_full_n_segments_from_state(state) };
+            for index in (total - count.max(0)).max(0)..total {
+                if bridge.cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                let text = unsafe {
+                    whisper_rs::whisper_rs_sys::whisper_full_get_segment_text_from_state(
+                        state, index,
+                    )
+                };
+                if text.is_null() {
+                    continue;
+                }
+                let text = unsafe { CStr::from_ptr(text) }.to_string_lossy();
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                (bridge.notify)(WorkProgress {
+                    phase: Phase::Transcribing,
+                    fraction: ((bridge.start_ms.load(Ordering::Relaxed)
+                        + (unsafe {
+                            whisper_rs::whisper_rs_sys::whisper_full_get_segment_t1_from_state(
+                                state, index,
+                            )
+                        }
+                        .max(0) as u64)
+                            .saturating_mul(10)
+                            .min(bridge.chunk_ms.load(Ordering::Relaxed)))
+                        as f64
+                        / bridge.total_ms.load(Ordering::Relaxed).max(1) as f64)
+                        .clamp(0., 1.) as f32,
+                    finding: Some(text.chars().take(2000).collect()),
+                });
+            }
+        }));
+        if result.is_err() {
+            bridge.failed.store(true, Ordering::Relaxed);
+        }
     }
     struct Decode<'a> {
         engine: &'a NativeEngine,
@@ -145,6 +196,7 @@ mod platform {
             (self.bridge.notify)(WorkProgress {
                 phase: Phase::LoadingModel,
                 fraction: 0.,
+                finding: None,
             });
             let digest =
                 self.engine
@@ -236,6 +288,8 @@ mod platform {
                 params.set_abort_callback_user_data(raw);
                 params.set_progress_callback(Some(whisper_progress));
                 params.set_progress_callback_user_data(raw);
+                params.set_new_segment_callback(Some(whisper_segments));
+                params.set_new_segment_callback_user_data(raw);
             }
             let mut state = self
                 .cache
@@ -534,14 +588,19 @@ mod tests {
         };
         let stop = AtomicBool::new(false);
         let progress_seen = AtomicBool::new(false);
+        let finding_seen = AtomicBool::new(false);
         let result = engine
             .transcribe(&choice, &audio, &stop, &|p| {
+                if p.finding.as_ref().is_some_and(|text| !text.is_empty()) {
+                    finding_seen.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 if p.phase == Phase::Transcribing {
                     progress_seen.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             })
             .unwrap();
         assert!(progress_seen.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(finding_seen.load(std::sync::atomic::Ordering::Relaxed));
         let text = result
             .segments
             .iter()

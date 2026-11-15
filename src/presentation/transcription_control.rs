@@ -156,10 +156,7 @@ impl Suite {
             errors.push(("Verarbeitung", self.transcription_queue.error()));
         }
         errors.extend(failures.iter().map(|(path, error)| (path.as_str(), *error)));
-        let has_text = self
-            .transcription_queue
-            .last()
-            .is_some_and(|r| !r.excerpt.is_empty());
+        let has_text = !self.transcription_queue.log().is_empty();
         let section_id = ui.id().with("transcription_section");
         let mut section = ui.data_mut(|d| d.get_temp::<u8>(section_id).unwrap_or(0));
         if (section == 1 && errors.is_empty()) || (section == 2 && !has_text) {
@@ -172,7 +169,7 @@ impl Suite {
                     ui.selectable_value(&mut section, 1, format!("Fehler ({})", errors.len()));
                 }
                 if has_text {
-                    ui.selectable_value(&mut section, 2, "Textvorschau");
+                    ui.selectable_value(&mut section, 2, "Letzte Texte");
                 }
             });
             ui.separator();
@@ -196,20 +193,7 @@ impl Suite {
             return;
         }
         if section == 2 {
-            if let Some(receipt) = self.transcription_queue.last() {
-                ui.add(egui::Label::new(receipt.source.as_str()).truncate())
-                    .on_hover_text(receipt.source.as_str());
-                paged_text(
-                    ui,
-                    egui::Id::new((
-                        "transcription_text",
-                        receipt.source.as_str(),
-                        &receipt.excerpt,
-                    )),
-                    &receipt.excerpt,
-                    false,
-                );
-            }
+            live_log(ui, self.transcription_queue.log());
             return;
         }
         // UI selection/formatting only; all queue transitions remain in QueueSession.
@@ -296,6 +280,46 @@ impl Suite {
         }
         ui.separator();
         ui.small("Lokal auf diesem Mac. Während der Verarbeitung bleibt der Mac wach; der Bildschirm darf ausgehen. Fertige Texte bleiben bei Abbruch erhalten.");
+    }
+}
+
+fn live_log(
+    ui: &mut egui::Ui,
+    log: &std::collections::VecDeque<photosuite_application::transcription::queue::LogEntry>,
+) {
+    let mut rows = Vec::new();
+    let mut source = None;
+    for entry in log {
+        if source != Some(&entry.source) || entry.text.is_none() {
+            rows.push((
+                true,
+                entry.source.as_str().to_owned(),
+                entry.source.as_str().to_owned(),
+            ));
+            source = Some(&entry.source);
+        }
+        if let Some(text) = &entry.text {
+            rows.push((false, text.replace(['\r', '\n'], " "), text.clone()));
+        }
+    }
+    let line_height = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
+    let per_page = ((ui.ctx().content_rect().height() - 180.) / line_height)
+        .floor()
+        .max(1.) as usize;
+    let count = rows.len().div_ceil(per_page).max(1);
+    // A new finding follows the newest page; within each page FIFO stays top to bottom.
+    let tail = log.back().map(|e| (e.source.as_str(), e.text.as_deref()));
+    let page = page_selector(ui, ("live_findings", tail), count);
+    let end = rows.len().saturating_sub(page * per_page);
+    let start = end.saturating_sub(per_page);
+    for (heading, text, full) in &rows[start..end] {
+        let text = if *heading {
+            egui::RichText::new(text.rsplit('/').next().unwrap_or(text)).strong()
+        } else {
+            egui::RichText::new(text)
+        };
+        ui.add(egui::Label::new(text).truncate())
+            .on_hover_text(full);
     }
 }
 
