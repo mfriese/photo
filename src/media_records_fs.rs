@@ -16,6 +16,8 @@ pub(crate) struct Record {
     pub tags: Option<BTreeSet<String>>,
     #[serde(default)]
     pub comments: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub transcripts: BTreeMap<String, crate::transcript_codec::TranscriptDto>,
 }
 impl Record {
     pub fn new(file: &LibraryFile) -> Self {
@@ -24,6 +26,7 @@ impl Record {
             file: file.as_str().into(),
             tags: None,
             comments: Default::default(),
+            transcripts: Default::default(),
         }
     }
 }
@@ -42,6 +45,13 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Record, String> {
                 .map(|t| normalize_tag_name(t))
                 .collect::<Result<_, _>>()?,
         );
+    }
+    for (source, transcript) in &record.transcripts {
+        let source = LibraryFile::new(source.clone())?;
+        if crate::domain::Media::from_audio_asset(source.as_str().into(), String::new()).is_none() {
+            return Err("Transkriptquelle muss Audio oder Video sein".into());
+        }
+        transcript.value()?;
     }
     let mut comments = crate::domain::comments::CommentCatalog::default();
     for (id, audio) in &record.comments {
@@ -65,11 +75,11 @@ pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
     let mut bytes = Vec::new();
     fs::File::open(path)
         .map_err(|e| e.to_string())?
-        .take(1024 * 1024 + 1)
+        .take(16 * 1024 * 1024 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() > 1024 * 1024 {
-        return Err("Medien-YAML überschreitet 1 MiB".into());
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err("Medien-YAML überschreitet 16 MiB".into());
     }
     Ok(Some(bytes))
 }
@@ -98,8 +108,8 @@ pub(crate) fn write(
     let bytes = serde_saphyr::to_string(&record)
         .map_err(|e| e.to_string())?
         .into_bytes();
-    if bytes.len() > 1024 * 1024 {
-        return Err("Medien-YAML überschreitet 1 MiB".into());
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err("Medien-YAML überschreitet 16 MiB".into());
     }
     crate::metadata_fs::atomic_write_if_current(&path(root, file, true)?, &bytes, expected)
 }

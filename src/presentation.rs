@@ -12,6 +12,7 @@ mod menu;
 mod startup;
 mod tag_cloud;
 mod tags;
+mod transcription_control;
 mod viewer;
 mod wall;
 use crate::domain::Media;
@@ -20,6 +21,11 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc;
 pub struct Suite {
+    transcription_queue: photosuite_application::transcription::queue::QueueSession,
+    transcription_seen: Option<transcription_control::Seen>,
+    transcription_complete: bool,
+    transcription: photosuite_application::transcription::ModelSession,
+    settings_view: crate::options_ui::SettingsView,
     gallery: gallery::GalleryState,
     comments: photosuite_application::comments::CommentSession,
     comment_view: comments::CommentView,
@@ -100,6 +106,9 @@ impl Suite {
         if let Some(startup) = self.startup.as_mut() {
             startup.cancel_for_navigation();
         }
+        self.transcription_queue.reset();
+        self.transcription_seen = None;
+        self.transcription_complete = false;
         self.audio_preparation.reset();
         self.organization.begin_media_scan(&path);
         self.comments.load(path.clone());
@@ -192,33 +201,36 @@ impl Suite {
         self.preferences = p;
     }
     fn settings(&mut self, ctx: &egui::Context) {
-        if !self.settings_ready() {
-            egui::Window::new("Einstellungen")
-                .open(&mut self.options_open)
-                .show(ctx, |ui| {
-                    ui.label("Einstellungen werden geladen …");
-                });
-            return;
-        }
+        let library_ready = self.settings_ready();
         let mut p = self.snapshot();
         let index_action = crate::options_ui::show(
             ctx,
             &mut self.options_open,
             &mut p,
-            self.editor.is_saving(),
-            &mut self.bindings.visible,
-            &self.preferences_error,
-            crate::options_ui::CommentIndexStatus {
-                available: self.comments.can_rebuild(),
-                rebuilding: self.comments.is_rebuilding(),
-                message: if self.comments.is_rebuilding() {
-                    &self.comments.rebuild_progress().phase
-                } else {
-                    self.comments.message()
+            &mut self.settings_view,
+            crate::options_ui::SettingsContext {
+                library_ready,
+                transcription: Some(&mut self.transcription),
+                saving: self.editor.is_saving(),
+                bindings: &mut self.bindings.visible,
+                error: &self.preferences_error,
+                comments: crate::options_ui::CommentIndexStatus {
+                    available: self.comments.can_rebuild(),
+                    rebuilding: self.comments.is_rebuilding(),
+                    message: if self.comments.is_rebuilding() {
+                        &self.comments.rebuild_progress().phase
+                    } else {
+                        self.comments.message()
+                    },
+                    error: self.comments.error(),
                 },
-                error: self.comments.error(),
             },
         );
+        if let Some(path) = self.settings_view.transcription.take_reveal()
+            && let Err(error) = self.services.opener.reveal(&path)
+        {
+            self.status = error;
+        }
         match index_action {
             Some(crate::options_ui::CommentIndexAction::Rebuild) => {
                 if let Err(error) = self.comments.rebuild() {
@@ -228,8 +240,10 @@ impl Suite {
             Some(crate::options_ui::CommentIndexAction::Cancel) => self.comments.cancel_rebuild(),
             None => {}
         }
-        self.apply_preferences(p);
-        self.persist_preferences();
+        if self.settings_ready() {
+            self.apply_preferences(p);
+            self.persist_preferences();
+        }
     }
     fn poll_library_settings(&mut self, ctx: &egui::Context) {
         if let Some((root, result)) = self.library_settings.poll()
@@ -334,6 +348,10 @@ impl Suite {
 }
 impl eframe::App for Suite {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.transcription.poll();
+        if self.transcription.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.poll_startup(ctx);
         self.poll_comments(ctx);
         self.media_dates.poll();
@@ -406,6 +424,8 @@ impl eframe::App for Suite {
         if let Some(result) = self.collection.poll() {
             match result {
                 Ok(collection) => {
+                    self.transcription_complete =
+                        !self.collection.is_loading() && collection.unreadable == 0;
                     self.organization.observe_media(
                         &collection.root,
                         &collection.items,
@@ -433,6 +453,7 @@ impl eframe::App for Suite {
             }
             self.remember_after_scan = false;
         }
+        self.poll_transcription_queue(ctx);
         if self.collection.is_loading() {
             if let (Some(tag), Some(catalog)) = (&self.tag_view.active, self.organization.catalog())
                 && catalog.tags().contains_key(tag)
@@ -532,6 +553,17 @@ pub fn create(
         std::env::args_os().skip(1).collect(),
     );
     Suite {
+        transcription_queue: photosuite_application::transcription::queue::QueueSession::new(
+            services.transcription_queue.clone(),
+            services.transcription_engine.clone(),
+            services.transcription_power.clone(),
+        ),
+        transcription_seen: None,
+        transcription_complete: false,
+        transcription: photosuite_application::transcription::ModelSession::new(
+            services.transcription.clone(),
+        ),
+        settings_view: Default::default(),
         gallery: Default::default(),
         comments: photosuite_application::comments::CommentSession::new(
             services.comments.clone(),

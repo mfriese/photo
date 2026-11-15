@@ -15,6 +15,7 @@ PhotoSuite macht deine nach **Jahr und Monat** geordnete Sammlung durchsuchbar �
 - **Fotos und Videos:** Großansicht, EXIF-Ausrichtung, native Videowiedergabe und sechs Standbilder pro Video – ohne externes FFmpeg.
 - **Audio-Diary:** gemeinsame Zeitachse mit Abschnitten proportional zur Aufnahmedauer, sofortigen Längenhinweisen aus einem YAML-Cache, täglichem Hintergrundabgleich und fünf zeitlich passenden Fotos.
 - **Gesprochene Kommentare:** direkt in der Großansicht oder im Aufnahmedialog zum Foto aufnehmen, bei Bildwechsel automatisch speichern und weiter aufnehmen, Mikrofon wählen, Pegel beobachten und vor dem Speichern vorhören.
+- **Lokale Transkription:** Audio und Video automatisch mit Whisper verschriftlichen; Modell und Sprache appweit wählen, Verarbeitung pausieren und fortsetzen. Ergebnisse liegen in den Medien-YAMLs.
 - **Tags und virtuelle Alben:** mehrere Tags pro Datei, Tagwolken zum Filtern und Tags bereits beim Import. Neue Zuordnungen erscheinen automatisch.
 - **Kontrollierter Import:** Prüflauf, kompakte Ergebnisse, datumsbasierte Namen mit gekennzeichnetem Dateisystem-Fallback, farbige Ergebnisse, optionale Fotoablage unter `Jahr/scans`, Kollisionsprüfung und separate Prüfung von Bildduplikaten.
 - **Native Bedienung:** macOS-Menüs, Tastenkürzel und bibliotheksbezogene Einstellungen; die letzte Bibliothek wird beim Start wieder geöffnet. Langsame Datenträger erhalten einen Wartedialog mit Wiederholung, Abbruch und alternativer Bibliothekswahl.
@@ -23,7 +24,7 @@ Die Hörleiste folgt der Auswahl **Alles / Jahr / Monat**. Tagebucheinträge ers
 
 ## Installieren und starten
 
-Zum Bauen brauchst du **Rust/Cargo, Xcode Command Line Tools, Python 3, Make und ExifTool**. ExifTool lässt sich beispielsweise mit `brew install exiftool` installieren.
+Zum Bauen brauchst du **Rust/Cargo, Xcode Command Line Tools, CMake, Python 3, Make und ExifTool**. CMake und ExifTool lassen sich beispielsweise mit `brew install cmake exiftool` installieren. whisper-rs wird über Cargo geladen und statisch eingebunden; eine separate Whisper-Installation ist nicht nötig. Modelle werden erst nach Bestätigung in den Einstellungen heruntergeladen.
 
 ```sh
 cargo fetch --locked
@@ -67,14 +68,14 @@ Bibliothek/
     └── 2026/11/com_20261114_130000.m4a.yaml
 ```
 
-Dateibezogene YAMLs liegen einheitlich unter **`yaml/Jahr/Monat/<Dateiname.ext>.yaml`**. Sie enthalten Tags und gegebenenfalls Kommentarverweise. Die Gesamtindizes lassen sich daraus neu aufbauen. Nur der zuletzt geöffnete Bibliothekspfad bleibt lokal in den macOS-Preferences.
+Dateibezogene YAMLs liegen einheitlich unter **`yaml/Jahr/Monat/<Dateiname.ext>.yaml`**. Sie enthalten Tags und gegebenenfalls Kommentarverweise. Die Gesamtindizes lassen sich daraus neu aufbauen. Bibliothekspfad und globale Whisper-Auswahl bleiben lokal in den macOS-Preferences; Modelle liegen im appweiten Application Support.
 
 **Import kopiert und löscht keine Quelldateien.** Quellen können erst in einem getrennten, ausdrücklich bestätigten Schritt nach erneutem Bytevergleich in den Papierkorb verschoben werden. Auch Duplikatentfernung erfordert Bestätigung. Optionales Speichern manueller JPEG-Drehungen verändert EXIF im Original ohne Neukompression oder dauerhaftes Backup. Verwaltungs-YAMLs werden unabhängig vom Nur-Lesen-Modus der Medien gespeichert.
 
 ## Bekannte Grenzen
 
 - **HEIC und Kamera-RAW fehlen derzeit.** Unterstützt sind JPEG, PNG, WebP, TIFF, GIF und BMP; Video-/Audioformate hängen von den macOS-Codecs ab.
-- Die Anwendung ist noch nicht auf andere Betriebssysteme portiert. Transkription und umfassende Bildbearbeitung sind nicht enthalten.
+- Die Anwendung ist noch nicht auf andere Betriebssysteme portiert. Umfassende Bildbearbeitung ist nicht enthalten.
 - Audioabschnitte können während der Hintergrundprüfung ihre Breite ändern; lückenlose Übergänge sind nicht garantiert.
 - Große Sammlungen werden schrittweise geladen. Cache-, Dateigrößen- und weitere Robustheitsgrenzen stehen im [Benutzerhandbuch](docs/USER_GUIDE.md) und in der [Architekturdokumentation](ARCHITECTURE.md).
 

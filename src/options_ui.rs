@@ -29,19 +29,55 @@ pub enum CommentIndexAction {
     Rebuild,
     Cancel,
 }
+#[derive(Default, PartialEq, Eq)]
+pub enum SettingsPage {
+    #[default]
+    General,
+    Transcription,
+}
+#[derive(Default)]
+pub struct SettingsView {
+    pub page: SettingsPage,
+    pub transcription: crate::transcription_ui::View,
+}
+pub struct SettingsContext<'a> {
+    pub saving: bool,
+    pub bindings: &'a mut bool,
+    pub error: &'a str,
+    pub comments: CommentIndexStatus<'a>,
+    pub library_ready: bool,
+    pub transcription: Option<&'a mut photosuite_application::transcription::ModelSession>,
+}
 pub fn show(
     ctx: &egui::Context,
     open: &mut bool,
     p: &mut Preferences,
-    saving: bool,
-    bindings: &mut bool,
-    error: &str,
-    comments: CommentIndexStatus<'_>,
+    view: &mut SettingsView,
+    state: SettingsContext<'_>,
 ) -> Option<CommentIndexAction> {
+    let SettingsContext {
+        saving,
+        bindings,
+        error,
+        comments,
+        library_ready,
+        transcription,
+    } = state;
     let mut action = None;
-    egui::Window::new("Einstellungen").open(open).default_width(480.)
+    egui::Window::new("Einstellungen").open(open).default_width(480.).default_height(720.)
         .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
             spacing(ui);
+            ui.horizontal_wrapped(|ui|{
+                ui.selectable_value(&mut view.page,SettingsPage::General,"Allgemein");
+                ui.selectable_value(&mut view.page,SettingsPage::Transcription,"Transkription");
+            });ui.separator();
+            if view.page==SettingsPage::Transcription {
+                if let Some(session)=transcription{crate::transcription_ui::show(ui,session,&mut view.transcription);}
+                else{ui.label("Transkriptionsvorbereitung nicht verfügbar.");}
+                return;
+            }
+            if !library_ready {ui.spinner();ui.label("Bibliotheks-Einstellungen werden geladen …");return;}
+
             if p.library_scope.is_some() { ui.label("Änderungen werden in yaml/settings.yaml in der Bibliothek gespeichert."); }
             else { ui.label("Ohne geladene Bibliothek gelten Einstellungen nur für diese Sitzung."); }
             ui.small("Der zuletzt geöffnete Bibliothekspfad bleibt lokal auf diesem Mac.");
@@ -99,10 +135,15 @@ mod tests {
                             ctx,
                             &mut open,
                             &mut p,
-                            false,
-                            &mut bindings,
-                            "",
-                            CommentIndexStatus::default(),
+                            &mut SettingsView::default(),
+                            SettingsContext {
+                                saving: false,
+                                bindings: &mut bindings,
+                                error: "",
+                                comments: CommentIndexStatus::default(),
+                                library_ready: true,
+                                transcription: None,
+                            },
                         );
                     },
                 );

@@ -569,10 +569,15 @@ impl super::Suite {
             )
             .on_hover_text(title);
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width().max(1.), theme::TRANSPORT_EDGE),
+                egui::vec2(
+                    (ui.available_width() - theme::TRANSPORT_EDGE - ui.spacing().item_spacing.x)
+                        .max(1.),
+                    theme::TRANSPORT_EDGE,
+                ),
                 egui::Layout::left_to_right(egui::Align::Center),
                 |ui| self.compact_audio(ui),
             );
+            self.transcription_button(ui);
         });
     }
 }

@@ -95,6 +95,16 @@ def rust_notices(resources, metadata):
                 destination = notices / name / source.name
                 destination.parent.mkdir(exist_ok=True)
                 shutil.copy2(source, destination)
+        # whisper-rs-sys ships the statically linked whisper.cpp/GGML sources.
+        # Retain their MIT notice even though our repository no longer vendors them.
+        if package["name"] == "whisper-rs-sys":
+            source = folder / "whisper.cpp/LICENSE"
+            if not source.is_file():
+                raise RuntimeError("whisper.cpp-Lizenz fehlt in whisper-rs-sys")
+            destination = notices / name / "whisper.cpp-LICENSE"
+            destination.parent.mkdir(exist_ok=True)
+            shutil.copy2(source, destination)
+            lines.append(f"whisper.cpp / GGML: MIT; see Rust/{name}/whisper.cpp-LICENSE")
     (resources / "Licenses/THIRD_PARTY.txt").write_text("\n".join(lines) + "\n")
 
 

@@ -217,3 +217,5 @@ pub fn capture_from_filename(media: &Media) -> Option<CaptureTime> {
 }
 
 pub mod import_date;
+
+pub mod transcript;

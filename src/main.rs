@@ -34,7 +34,13 @@ mod staging_fs;
 mod storyboard_ui;
 mod tag_store;
 mod theme;
+mod transcript_codec;
+mod transcription_fs;
+mod transcription_native;
+mod transcription_queue_fs;
+mod transcription_ui;
 mod video;
+mod whisper_models_native;
 use eframe::egui;
 fn main() -> eframe::Result {
     let executable = std::env::current_exe().unwrap_or_default();
@@ -81,7 +87,19 @@ fn main() -> eframe::Result {
         repository: repository.clone(),
         tool: exiftool.clone(),
     });
+    let model_transport = std::sync::Arc::new(whisper_models_native::NativeModelTransport);
     let services = application::Services {
+        transcription_engine: std::sync::Arc::new(transcription_native::NativeEngine::new(
+            model_transport.clone(),
+        )),
+        transcription_queue: std::sync::Arc::new(transcription_queue_fs::YamlTranscriptionQueue),
+        transcription_power: std::sync::Arc::new(transcription_native::NativePower),
+        transcription: std::sync::Arc::new(transcription_fs::WhisperModels::new(
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default(),
+            model_transport,
+        )),
         duration_cache: Some(std::sync::Arc::new(duration_cache_fs::YamlDurations)),
         comment_media: std::sync::Arc::new(comments_fs::CommentFiles {
             audio: audio_source.clone(),

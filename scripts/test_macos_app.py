@@ -16,6 +16,29 @@ class InstallerTests(unittest.TestCase):
         (app / "marker").write_text(marker)
         return app
 
+    def test_whisper_dependency_native_license_is_bundled(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            crate = root / "crate"
+            (crate / "whisper.cpp").mkdir(parents=True)
+            (crate / "Cargo.toml").write_text("")
+            (crate / "LICENSE").write_text("Bindings notice")
+            (crate / "whisper.cpp/LICENSE").write_text("MIT engine notice")
+            resources = root / "Resources"
+            resources.mkdir()
+            package = {"name": "whisper-rs-sys", "version": "0.15.0",
+                       "source": "registry", "license": "Unlicense",
+                       "manifest_path": str(crate / "Cargo.toml")}
+            macos_app.rust_notices(resources, {"packages": [package]})
+            bundled = resources / "Licenses/Rust/whisper-rs-sys-0.15.0"
+            self.assertEqual((bundled / "LICENSE").read_text(), "Bindings notice")
+            self.assertEqual((bundled / "whisper.cpp-LICENSE").read_text(), "MIT engine notice")
+            (crate / "whisper.cpp/LICENSE").unlink()
+            missing = root / "missing-license"
+            missing.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "Lizenz fehlt"):
+                macos_app.rust_notices(missing, {"packages": [package]})
+
     def test_replaces_only_owned_app(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

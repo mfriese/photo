@@ -168,6 +168,15 @@ impl photosuite_application::organization::CatalogRepository for UnusedAdapters 
 pub(super) fn test_suite() -> Suite {
     let adapters = Arc::new(UnusedAdapters);
     Suite {
+        transcription_queue: photosuite_application::transcription::queue::QueueSession::new(
+            adapters.clone(),
+            adapters.clone(),
+            adapters.clone(),
+        ),
+        transcription_seen: None,
+        transcription_complete: false,
+        transcription: photosuite_application::transcription::ModelSession::new(adapters.clone()),
+        settings_view: Default::default(),
         gallery: Default::default(),
         comments: photosuite_application::comments::CommentSession::new(
             adapters.clone(),
@@ -207,6 +216,10 @@ pub(super) fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            transcription_engine: adapters.clone(),
+            transcription_queue: adapters.clone(),
+            transcription_power: adapters.clone(),
+            transcription: adapters.clone(),
             duration_cache: None,
             media_trash: adapters.clone(),
             comments: adapters.clone(),
@@ -2341,4 +2354,84 @@ fn startup_wait_dialog_is_readable_and_cancellation_preserves_the_saved_library(
         StartupState::Cancelled
     );
     assert!(suite.root.is_none());
+}
+
+impl photosuite_application::transcription::ModelStore for UnusedAdapters {
+    fn locations(&self) -> photosuite_application::transcription::Locations {
+        photosuite_application::transcription::Locations {
+            models: "/Global/Models".into(),
+            preferences: "/Global/Preferences.plist".into(),
+        }
+    }
+    fn inspect(
+        &self,
+        _: &std::sync::atomic::AtomicBool,
+        _: &(dyn Fn(photosuite_application::transcription::Progress) + Sync),
+    ) -> Result<photosuite_application::transcription::Prepared, String> {
+        Ok(Default::default())
+    }
+    fn prepare(
+        &self,
+        _: &photosuite_application::transcription::Settings,
+        _: &std::sync::atomic::AtomicBool,
+        _: &(dyn Fn(photosuite_application::transcription::Progress) + Sync),
+    ) -> Result<photosuite_application::transcription::Prepared, String> {
+        Err("No model download in layout tests".into())
+    }
+}
+
+impl photosuite_application::transcription::queue::Engine for UnusedAdapters {
+    fn transcribe(
+        &self,
+        _: &photosuite_application::transcription::queue::ModelChoice,
+        _: &std::path::Path,
+        _: &std::sync::atomic::AtomicBool,
+        _: &(dyn Fn(photosuite_application::transcription::queue::WorkProgress) + Sync),
+    ) -> Result<photosuite_application::transcription::queue::EngineOutput, String> {
+        Err("No inference in layout tests".into())
+    }
+}
+impl photosuite_application::transcription::queue::PowerManager for UnusedAdapters {
+    fn acquire(
+        &self,
+    ) -> Result<Arc<dyn photosuite_application::transcription::queue::AwakeLease>, String> {
+        Err("No sleep assertion in layout tests".into())
+    }
+}
+impl photosuite_application::transcription::queue::QueueStore for UnusedAdapters {
+    fn load(
+        &self,
+        _: &std::path::Path,
+    ) -> Result<photosuite_application::transcription::queue::Journal, String> {
+        Ok(Default::default())
+    }
+    fn save(
+        &self,
+        _: &std::path::Path,
+        _: &photosuite_application::transcription::queue::Journal,
+    ) -> Result<Vec<u8>, String> {
+        Ok(vec![])
+    }
+    fn version(
+        &self,
+        _: &std::path::Path,
+        _: &crate::domain::tags::LibraryFile,
+    ) -> Result<crate::domain::transcript::SourceVersion, String> {
+        crate::domain::transcript::SourceVersion::new(1, "0".into())
+    }
+    fn existing(
+        &self,
+        _: &std::path::Path,
+        _: &photosuite_application::transcription::queue::Candidate,
+    ) -> Result<Option<crate::domain::transcript::Transcript>, String> {
+        Ok(None)
+    }
+    fn write_transcript(
+        &self,
+        _: &std::path::Path,
+        _: &photosuite_application::transcription::queue::Candidate,
+        _: &crate::domain::transcript::Transcript,
+    ) -> Result<(), String> {
+        Err("No transcript writes in layout tests".into())
+    }
 }

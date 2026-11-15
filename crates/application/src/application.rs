@@ -71,6 +71,10 @@ mod tests {
 /// Ports are supplied exclusively by the composition root.
 #[derive(Clone)]
 pub struct Services {
+    pub transcription_engine: std::sync::Arc<dyn crate::transcription::queue::Engine>,
+    pub transcription_queue: std::sync::Arc<dyn crate::transcription::queue::QueueStore>,
+    pub transcription_power: std::sync::Arc<dyn crate::transcription::queue::PowerManager>,
+    pub transcription: std::sync::Arc<dyn crate::transcription::ModelStore>,
     pub duration_cache: Option<std::sync::Arc<dyn crate::duration_cache::DurationCache>>,
     pub media_trash: std::sync::Arc<dyn crate::media_trash::MediaTrash>,
     pub comment_media: std::sync::Arc<dyn crate::comments::CommentMediaStore>,

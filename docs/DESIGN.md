@@ -116,3 +116,6 @@ Audioleisten, Aufnahmekurven und die kompakte Pegelanzeige verwenden dieselben d
 
 
 Die Kopf-Hörleisten der Fotoübersichten verwenden ebenfalls 34 × 34 Punkte große Buttons und eine 34 Punkte hohe Spur. theme::TRANSPORT_EDGE bündelt die Größe mit Großansicht und Recorder. Der Seitentitel bleibt daneben vertikal zentriert; bei wenig Platz wird er gekürzt, die Bedienelemente behalten ihre Größe.
+
+
+Settings: Allgemein und Transkription als kompakte Reiter. Globale Transkriptionsauswahl mit voller Modell-/Sprachliste, Größenangabe, getrenntem Bestätigungsdialog, Fortschritt, Abbruch und sichtbarem Ergebnis. Beide globalen Speicherorte als beschriftete, gekürzte Pfadzeilen mit vollständigem Tooltip; geprüfte Modelldatei über Finder-Button erreichbar. Layout bleibt scrollbar und bei 360 Punkten nutzbar. Rechts der Übersichtshörleiste zeigt ein gleich großer Button Dokument (Ruhe), Spinner (Arbeit) oder Pause (Warten/Pause). Sein scrollbar begrenztes Popup zeigt Fortschritt, Modus, Fehler, Pause/Fortsetzen/Abbruch, Retry und Einstellungen; kein zusätzlicher permanenter Kopfbereich.

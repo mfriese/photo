@@ -15,6 +15,10 @@ fn main() {
     }
     std::fs::write(out.join("theme_palette.h"), header).unwrap();
     for source in [
+        "native/transcription_audio.m",
+        "native/transcription.h",
+        "native/whisper_models.m",
+        "native/whisper_models.h",
         "native/audio.m",
         "native/comment_recorder.m",
         "native/comment_edit.m",
@@ -49,6 +53,8 @@ fn main() {
     );
     let mut objects = Vec::new();
     for source in [
+        "transcription_audio",
+        "whisper_models",
         "video",
         "player",
         "filesystem",
@@ -82,10 +88,14 @@ fn main() {
         );
         objects.push(object);
     }
+    let archive = out.join("libphotosuite_video.a");
+    if archive.exists() {
+        std::fs::remove_file(&archive).expect("replace native archive without stale objects");
+    }
     assert!(
         std::process::Command::new("ar")
             .arg("crs")
-            .arg(out.join("libphotosuite_video.a"))
+            .arg(&archive)
             .args(&objects)
             .status()
             .unwrap()
@@ -93,6 +103,8 @@ fn main() {
     );
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=photosuite_video");
+    println!("cargo:rustc-link-lib=framework=IOKit");
+
     for framework in [
         "AVFoundation",
         "AVKit",
