@@ -393,7 +393,7 @@ mod tests {
         let target = tempfile::tempdir().unwrap();
         photo(&source.path().join("scan.jpg"), 10);
         let original = fs::read(source.path().join("scan.jpg")).unwrap();
-        let run_tagged = |preview, tags: Vec<String>, include_identical| {
+        let run_tagged = |preview, tags: Vec<String>| {
             let job = import::start_tagged(
                 Arc::new(adapter()),
                 source.path().into(),
@@ -402,7 +402,6 @@ mod tests {
                 Some(import::TaggingOptions {
                     repository: Arc::new(crate::tag_store::YamlTags::default()),
                     tags,
-                    include_identical,
                 }),
             );
             let mut events = Vec::new();
@@ -419,14 +418,14 @@ mod tests {
             }
             events
         };
-        let plan = run_tagged(true, vec!["SCAN".into(), "dia".into()], false);
+        let plan = run_tagged(true, vec!["SCAN".into(), "dia".into()]);
         assert!(plan.iter().any(|e| {
             e.file_report
                 .as_ref()
                 .is_some_and(|r| r.tags == ["scan", "dia"])
         }));
         assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
-        let imported = run_tagged(false, vec!["SCAN".into(), "dia".into()], false);
+        let imported = run_tagged(false, vec!["SCAN".into(), "dia".into()]);
         let report = imported
             .iter()
             .find_map(|e| e.file_report.as_ref())
@@ -445,17 +444,26 @@ mod tests {
         let stored = repo.load(target.path()).unwrap();
         assert!(stored.catalog.contains("scan", relative));
         assert!(stored.catalog.contains("dia", relative));
-        run_tagged(false, vec!["archive".into()], false);
+        let index_before = fs::read(target.path().join("yaml/tags.yaml")).unwrap();
+        let source_yaml = target
+            .path()
+            .join("yaml/2008/09/img_20080916_035811.jpg.yaml");
+        let yaml_before = fs::read(&source_yaml).unwrap();
+        let skipped = run_tagged(false, vec!["archive".into()]);
+        let skipped = skipped
+            .iter()
+            .find_map(|event| event.file_report.as_ref())
+            .unwrap();
+        assert_eq!(skipped.decision, import::FileDecision::SkippedIdentical);
+        assert!(skipped.tags.is_empty());
+        assert_eq!(
+            fs::read(target.path().join("yaml/tags.yaml")).unwrap(),
+            index_before
+        );
+        assert_eq!(fs::read(source_yaml).unwrap(), yaml_before);
         assert!(
             !repo
                 .load(target.path())
-                .unwrap()
-                .catalog
-                .contains("archive", relative)
-        );
-        run_tagged(false, vec!["archive".into()], true);
-        assert!(
-            repo.load(target.path())
                 .unwrap()
                 .catalog
                 .contains("archive", relative)
@@ -467,7 +475,7 @@ mod tests {
             .path()
             .join("yaml/2008/09/img_20080916_035811_001.jpg.yaml");
         fs::write(&damaged, b"bad: [").unwrap();
-        let failed = run_tagged(false, vec!["scan".into()], false);
+        let failed = run_tagged(false, vec!["scan".into()]);
         let report = failed.iter().find_map(|e| e.file_report.as_ref()).unwrap();
         assert_eq!(report.decision, import::FileDecision::Copied);
         assert!(report.tag_error.is_some());
@@ -575,17 +583,17 @@ mod tests {
             assert_eq!(fs::read(source.path().join(name)).unwrap(), bytes);
         }
         // Tags still use flat year/month YAMLs and reference the actual scans media path.
+        let tagged_target = tempfile::tempdir().unwrap();
         let tags = Arc::new(crate::tag_store::YamlTags::default());
         let job = import::start_with_options(
             Arc::new(adapter()),
             source.path().into(),
-            target.path().into(),
+            tagged_target.path().into(),
             import::ImportOptions {
                 photo_layout: import::PhotoImportLayout::Scans,
                 tagging: Some(import::TaggingOptions {
                     repository: tags.clone(),
                     tags: vec!["scan".into()],
-                    include_identical: true,
                 }),
                 ..Default::default()
             },
@@ -597,7 +605,7 @@ mod tests {
                 .unwrap();
             match event.outcome {
                 Some(import::ImportOutcome::Completed(summary)) => {
-                    assert_eq!((summary.copied, summary.skipped, summary.failed), (0, 3, 0));
+                    assert_eq!((summary.copied, summary.skipped, summary.failed), (2, 1, 0));
                     break;
                 }
                 Some(import::ImportOutcome::Failed(error)) => panic!("{error}"),
@@ -605,9 +613,9 @@ mod tests {
             }
         }
         use photosuite_application::organization::CatalogRepository;
-        let catalog = tags.load(target.path()).unwrap().catalog;
+        let catalog = tags.load(tagged_target.path()).unwrap().catalog;
         assert!(catalog.contains("scan", "2008/scans/img_20080916_035811.jpg"));
-        let yaml = target
+        let yaml = tagged_target
             .path()
             .join("yaml/2008/09/img_20080916_035811.jpg.yaml");
         let record = crate::media_records_fs::parse(&fs::read(yaml).unwrap()).unwrap();

@@ -184,7 +184,6 @@ pub fn start(
 pub struct TaggingOptions {
     pub repository: Arc<dyn crate::organization::CatalogRepository>,
     pub tags: Vec<String>,
-    pub include_identical: bool,
 }
 pub fn start_tagged(
     adapter: Arc<dyn ImportAdapter>,
@@ -423,8 +422,7 @@ pub fn start_with_options(
                 let tag_eligible = matches!(
                     report.decision,
                     FileDecision::Copied | FileDecision::Planned
-                ) || (tagging.as_ref().is_some_and(|t| t.include_identical)
-                    && report.decision == FileDecision::SkippedIdentical);
+                );
                 if tag_eligible && !names.is_empty() {
                     report.tags = names.clone();
                     if let (Some(batch), Some(destination)) = (&mut tag_batch, &report.target) {

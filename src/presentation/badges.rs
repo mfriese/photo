@@ -9,16 +9,8 @@ struct Badge {
     size: egui::Vec2,
 }
 fn badge(ui: &egui::Ui, label: &str, width: f32) -> Badge {
-    let mut job = egui::text::LayoutJob::simple_singleline(
-        label.into(),
-        egui::FontId::proportional(12.),
-        theme::TEXT,
-    );
-    job.wrap.max_width = (width - 2. * theme::BADGE_PADDING).max(1.);
-    job.wrap.max_rows = 1;
-    job.wrap.break_anywhere = true;
-    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-    let size = galley.mesh_bounds.size() + egui::Vec2::splat(2. * theme::BADGE_PADDING);
+    let galley = theme::tag_galley(ui, label, width);
+    let size = theme::tag_size(&galley);
     Badge { galley, size }
 }
 fn used_width(row: &[Badge]) -> f32 {
@@ -29,8 +21,7 @@ pub(super) fn paint_cloud(ui: &egui::Ui, image: egui::Rect, labels: &[&str]) {
         return;
     }
     let width = image.width() - 2. * INSET;
-    let row_height = ui.fonts_mut(|fonts| fonts.row_height(&egui::FontId::proportional(12.)))
-        + 2. * theme::BADGE_PADDING;
+    let row_height = theme::BADGE_HEIGHT;
     let max_rows = (((image.height() * 0.5 - 2. * INSET + GAP) / (row_height + GAP)).floor()
         as usize)
         .clamp(1, 3);
@@ -74,8 +65,7 @@ pub(super) fn paint_cloud(ui: &egui::Ui, image: egui::Rect, labels: &[&str]) {
                 badge.size,
             );
             painter.rect_filled(rect, 3., theme::BADGE_BACKGROUND);
-            let text_origin = rect.min + egui::Vec2::splat(theme::BADGE_PADDING)
-                - badge.galley.mesh_bounds.min.to_vec2();
+            let text_origin = theme::tag_text_origin(rect, &badge.galley);
             painter.galley(text_origin, badge.galley.clone(), theme::TEXT);
             x += badge.size.x + GAP;
         }
@@ -96,6 +86,13 @@ mod tests {
                         ui,
                         image,
                         &[
+                            "m",
+                            "a",
+                            "v",
+                            "b",
+                            "p",
+                            "g",
+                            "ÄÖÜ",
                             "Video",
                             "Familie",
                             "Sommer",
@@ -117,6 +114,7 @@ mod tests {
             assert!(!blocks.is_empty());
             for block in &blocks {
                 assert!(image.contains_rect(*block));
+                assert_eq!(block.height(), theme::BADGE_HEIGHT);
             }
             let mut texts = 0;
             for shape in &output.shapes {
@@ -124,12 +122,7 @@ mod tests {
                     theme::assert_text_glyphs(&ctx, text);
                     let ink = text.visual_bounding_rect();
                     let block = blocks.iter().find(|rect| rect.contains_rect(ink)).unwrap();
-                    for padding in [
-                        ink.left() - block.left(),
-                        block.right() - ink.right(),
-                        ink.top() - block.top(),
-                        block.bottom() - ink.bottom(),
-                    ] {
+                    for padding in [ink.left() - block.left(), block.right() - ink.right()] {
                         assert!(
                             (padding - theme::BADGE_PADDING).abs() < 0.1,
                             "unequal padding {padding}"

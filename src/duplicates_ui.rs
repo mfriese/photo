@@ -53,6 +53,7 @@ impl DuplicateReview {
                     .clicked()
                 {
                     self.choice_group = None;
+                    self.error.clear();
                     if let Err(error) = self.session.start(library.cloned().unwrap(), repository) {
                         self.error = error;
                     }
@@ -191,6 +192,69 @@ impl DuplicateReview {
     }
 }
 
+/// Owns a captured library scope, even while cancellation results are still arriving.
+#[derive(Default)]
+pub struct DuplicateDialog {
+    pub visible: bool,
+    root: Option<PathBuf>,
+    review: DuplicateReview,
+}
+impl DuplicateDialog {
+    pub fn running(&self) -> bool {
+        self.review.running()
+    }
+    pub fn open(&mut self, root: Option<PathBuf>) {
+        if !self.running() && self.root != root {
+            self.review = Default::default();
+            self.root = root;
+        }
+        self.visible = true;
+    }
+    fn poll(&mut self, adapter: Arc<dyn duplicates::DuplicateImages>) -> bool {
+        let changed = self.review.poll(adapter);
+        if !self.visible && self.review.running() {
+            self.review.cancel();
+        }
+        changed
+    }
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        services: &crate::application::Services,
+    ) -> Option<PathBuf> {
+        let mut changed = self.poll(services.duplicates.clone());
+        if self.review.running() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        egui::Window::new("Duplikate suchen")
+            .open(&mut self.visible)
+            .default_size([700., 560.])
+            .max_width((ctx.content_rect().width() - 32.).max(260.))
+            .max_height((ctx.content_rect().height() - 48.).max(240.))
+            .vscroll(true)
+            .show(ctx, |ui| {
+                crate::options_ui::spacing(ui);
+                if let Some(root) = &self.root {
+                    ui.add(egui::Label::new(root.display().to_string()).truncate())
+                        .on_hover_text(root.display().to_string());
+                } else {
+                    ui.label("Zuerst eine Bibliothek öffnen.");
+                }
+                changed |= self.review.show(
+                    ui,
+                    self.root.as_ref(),
+                    services.repository.clone(),
+                    services.duplicates.clone(),
+                    services.opener.clone(),
+                );
+            });
+        if !self.visible && self.review.running() {
+            self.review.cancel();
+        }
+        changed.then(|| self.root.clone()).flatten()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +291,28 @@ mod tests {
         ) -> Result<(), String> {
             panic!("layout must never trash")
         }
+    }
+    #[test]
+    fn independent_dialog_keeps_active_root_and_cancels_closed_work_without_deleting() {
+        let adapter = Arc::new(NoIo);
+        let mut dialog = DuplicateDialog::default();
+        dialog.open(Some("/old".into()));
+        dialog
+            .review
+            .session
+            .start("/old".into(), adapter.clone())
+            .unwrap();
+        dialog.open(Some("/new".into()));
+        assert_eq!(dialog.root.as_deref(), Some(std::path::Path::new("/old")));
+        dialog.visible = false;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while dialog.running() {
+            dialog.poll(adapter.clone());
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(!dialog.visible);
+        assert!(!dialog.review.session.take_refresh());
     }
     #[test]
     fn review_layout_fits_narrow_and_wide_windows() {

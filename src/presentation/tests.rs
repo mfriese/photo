@@ -228,6 +228,7 @@ pub(super) fn test_suite() -> Suite {
             orientation_writer: adapters,
         },
         import_panel: Default::default(),
+        duplicate_dialog: Default::default(),
         bindings: Default::default(),
         write_exif: true,
         editor: Default::default(),
@@ -515,7 +516,7 @@ fn importing_elsewhere_keeps_the_open_photo_library_and_saved_path() {
     let mut suite = test_suite();
     suite.root = Some("/Fotos/Sammlung".into());
     suite.preferences.last_library = suite.root.clone();
-    suite.refresh_after_import("/Andere/Sammlung".into());
+    suite.refresh_changed_library("/Andere/Sammlung".into());
     assert_eq!(suite.root, Some("/Fotos/Sammlung".into()));
     assert_eq!(suite.preferences.last_library, suite.root);
     assert!(!suite.collection.is_loading());
@@ -2126,7 +2127,7 @@ fn import_completion_reloads_existing_tag_catalog_and_memberships() {
     imported.create("scan").unwrap();
     imported.assign("scan", file.clone(), true).unwrap();
     *repository.0.lock().unwrap() = imported;
-    suite.refresh_after_import(path.clone());
+    suite.refresh_changed_library(path.clone());
     wait(&mut suite);
     let catalog = suite.organization.catalog().unwrap();
     assert!(catalog.tags().contains_key("scan"));
@@ -2189,4 +2190,52 @@ fn viewer_projection_ignores_invalid_entries_and_audio_in_an_old_snapshot() {
     ];
     suite.selected = Some(3928);
     assert_eq!(suite.viewer_items(&[3928, 0, 1]), vec![0]);
+}
+
+#[test]
+fn duplicates_are_a_separate_library_scoped_file_menu_dialog() {
+    use crate::desktop_menu::Action;
+    let ctx = egui::Context::default();
+    let mut suite = test_suite();
+    assert!(
+        !suite
+            .menu_entries(&ctx)
+            .iter()
+            .find(|entry| entry.action == Action::FindDuplicates)
+            .unwrap()
+            .enabled
+    );
+    suite.root = Some("/Fotos".into());
+    assert!(
+        suite
+            .menu_entries(&ctx)
+            .iter()
+            .find(|entry| entry.action == Action::FindDuplicates)
+            .unwrap()
+            .enabled
+    );
+    let menu = Arc::new(MenuHarness::default());
+    suite.native_menu = Some(Box::new(TestMenu(menu.clone())));
+    *menu.queued.lock().unwrap() = vec![Action::FindDuplicates];
+    let _ = ctx.run(egui::RawInput::default(), |ctx| suite.poll_menu(ctx));
+    assert!(suite.duplicate_dialog.visible);
+    assert!(!suite.import_panel.visible);
+    ctx.style_mut(|style| style.animation_time = 0.);
+    for _ in 0..2 {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            suite.duplicate_dialog.show(ctx, &suite.services);
+        });
+    }
+    let output = ctx.run(egui::RawInput::default(), |ctx| {
+        suite.duplicate_dialog.show(ctx, &suite.services);
+    });
+    assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text=="Duplikatsuche starten")));
+    assert!(
+        !suite
+            .menu_entries(&ctx)
+            .iter()
+            .find(|entry| entry.action == Action::Import)
+            .unwrap()
+            .enabled
+    );
 }

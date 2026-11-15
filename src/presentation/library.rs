@@ -57,7 +57,7 @@ impl super::Suite {
                         ui.add_space(12.);theme::sidebar_heading(ui,"Tags");ui.add_space(8.);
                         for tag in tags {
                             let selected=self.tag_view.active.as_ref()==Some(&tag);
-                            if theme::navigation(ui, selected, &tag).on_hover_text(&tag).clicked(){
+                            if theme::tag_navigation(ui, selected, &tag).on_hover_text(&tag).clicked(){
                                 self.tag_view.active=(!selected).then_some(tag);self.group=None;
                             }
                         }

@@ -16,6 +16,9 @@ pub const LEVEL_YELLOW: Color32 = Color32::from_rgb(255, 215, 95);
 pub const LEVEL_RED: Color32 = Color32::from_rgb(255, 125, 125);
 pub const ACCENT: Color32 = Color32::from_rgb(139, 181, 255);
 pub const BADGE_BACKGROUND: Color32 = Color32::from_black_alpha(220);
+pub const BADGE_FONT_SIZE: f32 = 12.;
+pub const BADGE_HEIGHT: f32 = 20.;
+pub const SECTION_HEADING_SIZE: f32 = 18.;
 pub const BADGE_PADDING: f32 = 3.;
 pub const SELECTED: Color32 = Color32::from_rgb(43, 67, 103);
 
@@ -168,8 +171,14 @@ pub fn root_navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::
 }
 
 pub fn navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
+    navigation_row(ui, selected, label, 20.)
+}
+pub fn tag_navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
+    navigation_row(ui, selected, label, BADGE_HEIGHT)
+}
+fn navigation_row(ui: &mut egui::Ui, selected: bool, label: &str, height: f32) -> egui::Response {
     ui.add_sized(
-        [ui.available_width(), 20.],
+        [ui.available_width(), height],
         egui::Button::new(RichText::new(label).color(TEXT))
             .right_text("")
             .selected(selected)
@@ -207,8 +216,87 @@ pub fn import_log_color(level: photosuite_application::import::LogLevel) -> Colo
         LogLevel::Error => IMPORT_ERROR,
     }
 }
+/// Shared restrained card surface for related controls.
+pub fn content_group<R>(
+    ui: &mut egui::Ui,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    egui::Frame::new()
+        .fill(SURFACE)
+        .stroke(Stroke::new(1_f32, BORDER))
+        .corner_radius(8)
+        .inner_margin(10)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            body(ui)
+        })
+}
+pub fn section_heading(ui: &mut egui::Ui, text: &str) {
+    ui.label(
+        RichText::new(text)
+            .size(SECTION_HEADING_SIZE)
+            .strong()
+            .color(TEXT),
+    );
+}
 pub fn sidebar_heading(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).size(18.).strong().color(TEXT));
+    section_heading(ui, text);
+}
+/// Shared single-line badge typography; glyph bounds determine width, never height.
+pub fn tag_galley(ui: &egui::Ui, label: &str, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(
+        label.into(),
+        FontId::proportional(BADGE_FONT_SIZE),
+        TEXT,
+    );
+    job.wrap.max_width = (width - 2. * BADGE_PADDING).max(1.);
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    ui.fonts_mut(|fonts| fonts.layout_job(job))
+}
+pub fn tag_size(galley: &egui::Galley) -> egui::Vec2 {
+    egui::vec2(
+        galley.mesh_bounds.width() + 2. * BADGE_PADDING,
+        BADGE_HEIGHT,
+    )
+}
+pub fn tag_text_origin(rect: egui::Rect, galley: &egui::Galley) -> egui::Pos2 {
+    egui::pos2(
+        rect.left() + BADGE_PADDING - galley.mesh_bounds.min.x,
+        rect.center().y - galley.size().y * 0.5,
+    )
+}
+/// Interactive counterpart of photo badges, with one fixed compact height and common baseline.
+pub fn tag_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let galley = tag_galley(ui, label, ui.available_width());
+    let size = tag_size(&galley);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            ui.is_enabled(),
+            if selected {
+                format!("{label}, ausgewählt")
+            } else {
+                label.into()
+            },
+        )
+    });
+    ui.painter()
+        .rect_filled(rect, 3., if selected { SELECTED } else { BADGE_BACKGROUND });
+    if selected {
+        ui.painter().rect_stroke(
+            rect,
+            3.,
+            Stroke::new(1_f32, ACCENT),
+            egui::StrokeKind::Inside,
+        );
+    }
+    ui.painter()
+        .galley(tag_text_origin(rect, &galley), galley, TEXT);
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(label)
 }
 
 #[cfg(test)]
@@ -341,6 +429,58 @@ mod tests {
                     }
                 }
                 assert!(year_found, "The actual year header must be checked");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tag_height_tests {
+    use super::*;
+    #[test]
+    fn all_tag_letters_and_selection_states_share_height_and_text_baseline() {
+        for scale in [1., 2.] {
+            for selected in [false, true] {
+                let ctx = egui::Context::default();
+                install(&ctx);
+                ctx.set_pixels_per_point(scale);
+                let mut bounds = Vec::new();
+                let output = ctx.run(egui::RawInput::default(), |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            for label in ["m", "a", "v", "b", "p", "g", "ÄÖÜ", "Video"] {
+                                bounds.push((label, tag_chip(ui, label, selected).rect));
+                            }
+                        });
+                    });
+                });
+                assert!(bounds.iter().all(|(_, rect)| rect.height() == BADGE_HEIGHT));
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(texts.len(), bounds.len());
+                let y = texts[0].pos.y;
+                for text in texts {
+                    assert!(
+                        (text.pos.y - y).abs() < 0.1,
+                        "different logical text baseline"
+                    );
+                    let rect = bounds
+                        .iter()
+                        .find(|(label, _)| *label == text.galley.job.text)
+                        .unwrap()
+                        .1;
+                    assert!(
+                        rect.contains_rect(text.visual_bounding_rect()),
+                        "glyph extends outside its tag: {}",
+                        text.galley.job.text
+                    );
+                }
             }
         }
     }

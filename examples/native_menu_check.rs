@@ -43,7 +43,15 @@ fn main() -> eframe::Result {
                     mac_cmd: false,
                 }),
             };
-            self.menu.sync(&[entry.clone(), open]).unwrap();
+            let mut duplicates = Entry {
+                action: Action::FindDuplicates,
+                enabled: true,
+                checked: None,
+                shortcut: None,
+            };
+            self.menu
+                .sync(&[entry.clone(), open, duplicates.clone()])
+                .unwrap();
             let app = NSApplication::sharedApplication(MainThreadMarker::new().unwrap());
             let menu = app.mainMenu().unwrap();
             let labels: Vec<_> = (0..menu.numberOfItems())
@@ -59,6 +67,15 @@ fn main() -> eframe::Result {
                 "o"
             );
             assert!(!file.itemAtIndex(0).unwrap().isEnabled());
+            let duplicate_index = (0..file.numberOfItems())
+                .find(|&i| file.itemAtIndex(i).unwrap().title().to_string() == "Find Duplicates…")
+                .expect("separate File menu action");
+            assert!(file.itemAtIndex(duplicate_index).unwrap().isEnabled());
+            file.performActionForItemAtIndex(duplicate_index);
+            assert_eq!(self.menu.drain(), vec![Action::FindDuplicates]);
+            duplicates.enabled = false;
+            self.menu.sync(&[duplicates]).unwrap();
+            assert!(!file.itemAtIndex(duplicate_index).unwrap().isEnabled());
             let view = menu.itemAtIndex(3).unwrap().submenu().unwrap();
             let square = view.itemAtIndex(1).unwrap();
             assert!(square.isEnabled());

@@ -12,6 +12,7 @@ pub enum Action {
     OpenLibrary,
     Refresh,
     Import,
+    FindDuplicates,
     Settings,
     Shortcuts,
     Tags,

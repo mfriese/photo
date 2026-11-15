@@ -17,6 +17,8 @@ impl Suite {
     pub(super) fn menu_entries(&self, ctx: &egui::Context) -> Vec<Entry> {
         let blocked = self.comments.is_open()
             || self.options_open
+            || self.duplicate_dialog.visible
+            || self.duplicate_dialog.running()
             || self.import_panel.visible
             || self.tag_view.open
             || self.bindings.visible
@@ -48,6 +50,12 @@ impl Suite {
                 enabled: self.root.is_some() && !blocked,
                 checked: None,
                 shortcut: shortcut("I", true),
+            },
+            Entry {
+                action: Action::FindDuplicates,
+                enabled: self.root.is_some() && !blocked && !self.import_panel.running(),
+                checked: None,
+                shortcut: None,
             },
             Entry {
                 action: Action::Settings,
@@ -237,6 +245,7 @@ impl Suite {
                 }
             }
             Action::Import => self.import_panel.open(self.root.clone()),
+            Action::FindDuplicates => self.duplicate_dialog.open(self.root.clone()),
             Action::AudioWindow => {
                 if let Err(error) = self
                     .services

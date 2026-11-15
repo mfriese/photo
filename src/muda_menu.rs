@@ -85,6 +85,13 @@ impl MudaMenu {
         file.append(&PredefinedMenuItem::separator())
             .map_err(|e| e.to_string())?;
         add(&file, &mut items, Action::Import, "Import…", false)?;
+        add(
+            &file,
+            &mut items,
+            Action::FindDuplicates,
+            "Find Duplicates…",
+            false,
+        )?;
         file.append(&PredefinedMenuItem::separator())
             .map_err(|e| e.to_string())?;
         file.append(&PredefinedMenuItem::close_window(Some("Close Window")))

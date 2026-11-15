@@ -55,12 +55,12 @@ impl Suite {
         egui::ScrollArea::vertical().id_salt("period_tag_cloud").max_height(72.).auto_shrink([false,true]).show(ui,|ui|{
             ui.horizontal_wrapped(|ui|{
                 ui.spacing_mut().item_spacing=egui::vec2(4.,3.);
-                ui.spacing_mut().interact_size.y=22.;ui.spacing_mut().button_padding.y=2.;
-                ui.add_sized([30.,22.],egui::Label::new(egui::RichText::new("Tags").size(12.).color(theme::MUTED)));
-                if ui.add_enabled(!self.tag_view.filters.is_empty(),egui::Button::new(egui::RichText::new("Reset").size(12.)).min_size(egui::vec2(0.,22.))).clicked(){self.tag_view.filters.clear();}
+                ui.spacing_mut().interact_size.y=theme::BADGE_HEIGHT;ui.spacing_mut().button_padding.y=2.;
+                ui.add_sized([30.,theme::BADGE_HEIGHT],egui::Label::new(egui::RichText::new("Tags").size(theme::BADGE_FONT_SIZE).color(theme::MUTED)));
+                if ui.add_enabled(!self.tag_view.filters.is_empty(),egui::Button::new(egui::RichText::new("Reset").size(theme::BADGE_FONT_SIZE)).min_size(egui::vec2(0.,theme::BADGE_HEIGHT))).clicked(){self.tag_view.filters.clear();}
                 for tag in tags {
                     let selected=self.tag_view.filters.contains(&tag);
-                    let response=ui.add(egui::Button::new(egui::RichText::new(format!("    {tag}")).size(12.).color(theme::TEXT)).selected(selected).wrap_mode(egui::TextWrapMode::Truncate).min_size(egui::vec2(0.,22.)).fill(if selected{theme::SELECTED}else{theme::RAISED}));
+                    let response=ui.add(egui::Button::new(egui::RichText::new(format!("    {tag}")).size(theme::BADGE_FONT_SIZE).color(theme::TEXT)).selected(selected).wrap_mode(egui::TextWrapMode::Truncate).min_size(egui::vec2(0.,theme::BADGE_HEIGHT)).fill(if selected{theme::SELECTED}else{theme::RAISED}));
                     if selected {
                         let point=egui::pos2(response.rect.left()+7.,response.rect.center().y);
                         ui.painter().line_segment([point+egui::vec2(-2.,0.),point+egui::vec2(0.,2.)],egui::Stroke::new(1.5_f32,theme::TEXT));

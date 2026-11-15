@@ -45,6 +45,7 @@ pub struct Suite {
     preferences_error: String,
     options_open: bool,
     import_panel: crate::import_ui::ImportPanel,
+    duplicate_dialog: crate::duplicates_ui::DuplicateDialog,
     bindings: crate::command_bindings::CommandBindings,
     write_exif: bool,
     editor: photosuite_application::editing::EditingSession,
@@ -425,6 +426,8 @@ impl eframe::App for Suite {
                 self.selected.is_some()
                     && !self.editor.is_saving()
                     && !self.options_open
+                    && !self.duplicate_dialog.visible
+                    && !self.duplicate_dialog.running()
                     && !self.import_panel.visible
                     && !self.comments.is_open()
                     && !self.tag_view.open
@@ -530,12 +533,15 @@ impl eframe::App for Suite {
             self.import_panel
                 .show(ctx, &self.services, self.root.as_deref(), tag_choices)
         {
-            self.refresh_after_import(path);
+            self.refresh_changed_library(path);
+        }
+        if let Some(path) = self.duplicate_dialog.show(ctx, &self.services) {
+            self.refresh_changed_library(path);
         }
     }
 }
 impl Suite {
-    fn refresh_after_import(&mut self, path: PathBuf) {
+    fn refresh_changed_library(&mut self, path: PathBuf) {
         if self.root.as_ref().is_none_or(|root| root == &path) {
             self.load_library(path, true, true);
         } else {
@@ -606,6 +612,7 @@ pub fn create(
         preferences_error: String::new(),
         options_open: false,
         import_panel: Default::default(),
+        duplicate_dialog: Default::default(),
         bindings: Default::default(),
         write_exif: preferences.write_exif,
         editor: Default::default(),
