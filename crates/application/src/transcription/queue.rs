@@ -153,7 +153,10 @@ fn push_log(log: &mut VecDeque<LogEntry>, value: LogEntry) {
         }
     }
     while log.len() > LOG_LIMIT * 2 + 1 {
-        log.pop_front();
+        // Empty/silent files must not evict one of the latest sixteen findings.
+        if let Some(index) = log.iter().position(|entry| entry.text.is_none()) {
+            log.remove(index);
+        }
     }
 }
 enum Event {
@@ -904,6 +907,15 @@ mod tests {
                 fraction: 0.5,
                 finding: Some("Erkannter Text".into()),
             });
+            if path.to_string_lossy().contains("burst") {
+                for i in 0..100 {
+                    progress(WorkProgress {
+                        phase: Phase::Transcribing,
+                        fraction: i as f32 / 100.,
+                        finding: Some(format!("Segment {i}")),
+                    });
+                }
+            }
             if let Some(store) = &self.fail_save {
                 store.fail_journal.store(true, Ordering::SeqCst);
             }
@@ -1001,6 +1013,17 @@ mod tests {
                 .iter()
                 .any(|e| e.text.is_none() && e.source.as_str().ends_with("23.wav"))
         );
+        for i in 0..100 {
+            push_log(
+                &mut queue.log,
+                LogEntry {
+                    source: candidate(&format!("silent-{i}.wav")).source,
+                    text: None,
+                },
+            );
+        }
+        assert_eq!(queue.log().iter().filter(|e| e.text.is_some()).count(), 16);
+        assert!(queue.log().len() <= 33);
         queue.sync(Path::new("/other"), vec![], true);
         assert!(queue.log().is_empty());
         queue.reset();
@@ -1009,13 +1032,24 @@ mod tests {
 
     #[test]
     fn fast_segment_bursts_retain_last_sixteen_without_a_ui_poll() {
-        let mut pending = VecDeque::new();
-        for i in 0..100 {
-            push_bounded(&mut pending, format!("Segment {i}"));
+        let (mut queue, store, _, _) = setup();
+        queue.set_model(Some(choice()));
+        queue.sync(Path::new("/library"), vec![candidate("burst.wav")], true);
+        until(&mut queue, |q| q.current().is_some());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while store.texts.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
         }
-        assert_eq!(pending.len(), 16);
-        assert_eq!(pending.front().unwrap(), "Segment 84");
-        assert_eq!(pending.back().unwrap(), "Segment 99");
+        until(&mut queue, |q| !q.busy() && q.counts() == (1, 1, 0));
+        let findings = queue
+            .log()
+            .iter()
+            .filter_map(|e| e.text.as_deref())
+            .collect::<Vec<_>>();
+        assert_eq!(findings.len(), 16);
+        assert_eq!(findings[0], "Segment 84");
+        assert_eq!(findings[15], "Segment 99");
     }
 
     #[test]
