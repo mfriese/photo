@@ -1,24 +1,23 @@
-//! Verified audio publication and revision-guarded photo references; never edits a photo.
+//! Authoritative photo YAML references and their derived SQLite index.
 use crate::domain::{
     Media,
     comments::{Comment, CommentCatalog},
     tags::LibraryFile,
 };
+use crate::library_db::{self, Database, Section};
 use photosuite_application::{comments::*, diary::AudioSource, import::ImportAdapter};
 use std::{
     fs,
-    io::Read,
     path::Path,
     sync::{Arc, atomic::AtomicBool},
 };
-const FILE: &str = "yaml/comments-index.yaml";
-const MAX: u64 = 32 * 1024 * 1024;
 pub struct CommentFiles {
     pub audio: Arc<dyn AudioSource>,
     pub copier: Arc<dyn ImportAdapter>,
 }
-pub struct YamlComments {
+pub struct SqliteComments {
     pub priority: Arc<photosuite_application::work_priority::WorkPriority>,
+    pub database: Arc<Database>,
 }
 mod photo_records;
 fn directory(path: &Path) -> Result<(), String> {
@@ -27,34 +26,6 @@ fn directory(path: &Path) -> Result<(), String> {
         return Err("Bibliothek/Ordner ist kein reguläres Verzeichnis".into());
     }
     Ok(())
-}
-fn read(root: &Path) -> Result<Option<Vec<u8>>, String> {
-    directory(root)?;
-    let path = crate::metadata_fs::library_path(root, FILE, false)?;
-    if !crate::metadata_fs::check_file(&path)? {
-        return Ok(None);
-    }
-    let mut bytes = Vec::new();
-    fs::File::open(path)
-        .map_err(|e| e.to_string())?
-        .take(MAX + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX {
-        return Err("Kommentarverwaltung überschreitet 32 MiB".into());
-    }
-    Ok(Some(bytes))
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PhotoEntry {
-    comments: std::collections::BTreeMap<String, String>,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Document {
-    version: u32,
-    photos: std::collections::BTreeMap<String, PhotoEntry>,
 }
 fn add_photo(
     catalog: &mut CommentCatalog,
@@ -68,57 +39,49 @@ fn add_photo(
     }
     Ok(())
 }
-fn decode(bytes: &[u8]) -> Result<CommentCatalog, String> {
-    let doc: Document =
-        serde_saphyr::from_str(std::str::from_utf8(bytes).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    if doc.version != 3 {
-        return Err(
-            "Neuer Foto-Kommentarindex benötigt Version 3; keine Altformat-Unterstützung".into(),
-        );
-    }
-    let mut catalog = CommentCatalog::default();
-    for (photo, entry) in doc.photos {
-        add_photo(&mut catalog, &photo, entry.comments)?;
-    }
-    Ok(catalog)
-}
-fn encode(catalog: &CommentCatalog) -> Result<Vec<u8>, String> {
-    let mut photos = std::collections::BTreeMap::new();
-    for comment in catalog.entries().values() {
-        let entry = photos
-            .entry(comment.photo().as_str().to_owned())
-            .or_insert_with(|| PhotoEntry {
-                comments: Default::default(),
-            });
-        entry
-            .comments
-            .insert(comment.id().into(), comment.audio().as_str().into());
-    }
-    let doc = Document { version: 3, photos };
-    let bytes = serde_saphyr::to_string(&doc)
-        .map_err(|e| e.to_string())?
-        .into_bytes();
-    if bytes.len() as u64 > MAX {
-        return Err("Kommentarindex überschreitet 32 MiB".into());
-    }
-    Ok(bytes)
-}
-impl CommentRepository for YamlComments {
+impl CommentRepository for SqliteComments {
     fn read_cache(&self, root: &Path) -> Result<CommentCache, String> {
-        match read(root)? {
-            None => Ok(CommentCache::Missing),
-            Some(bytes) => Ok(CommentCache::Current(StoredComments {
-                catalog: decode(&bytes)?,
-                revision: Some(bytes),
-            })),
-        }
+        self.database.transaction(root, |tx| {
+            let revision = library_db::revision(tx, Section::Comments)?;
+            if revision.is_none() {
+                return Ok(CommentCache::Missing);
+            }
+            let mut catalog = CommentCatalog::default();
+            let mut stmt = tx.prepare(
+                "SELECT id,photo_path,audio_path FROM audio_comments ORDER BY photo_path,id",
+            )?;
+            for row in stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })? {
+                let (id, photo, audio) = row?;
+                catalog
+                    .insert(
+                        Comment::new(
+                            id,
+                            LibraryFile::new(audio).map_err(library_db::invalid)?,
+                            LibraryFile::new(photo).map_err(library_db::invalid)?,
+                        )
+                        .map_err(library_db::invalid)?,
+                    )
+                    .map_err(library_db::invalid)?;
+            }
+            Ok(CommentCache::Current(StoredComments { catalog, revision }))
+        })
     }
     fn write_photo_record(&self, root: &Path, comment: &Comment) -> Result<CommentCatalog, String> {
         self.update_photo_record(root, comment)
     }
     fn rebuild_base(&self, root: &Path) -> Result<RebuildBase, String> {
-        self.read_rebuild_base(root)
+        self.database.transaction(root, |tx| {
+            Ok(RebuildBase {
+                revision: library_db::revision(tx, Section::Comments)?,
+                warning: String::new(),
+            })
+        })
     }
     fn scan_photo_records(
         &self,
@@ -134,11 +97,7 @@ impl CommentRepository for YamlComments {
         catalog: &CommentCatalog,
         expected: Option<&[u8]>,
     ) -> Result<Vec<u8>, String> {
-        directory(root)?;
-        let bytes = encode(catalog)?;
-        let path = crate::metadata_fs::library_path(root, FILE, true)?;
-        crate::metadata_fs::atomic_write_if_current(&path, &bytes, expected)?;
-        Ok(bytes)
+        self.save(root, catalog, expected)
     }
     fn save(
         &self,
@@ -146,20 +105,24 @@ impl CommentRepository for YamlComments {
         catalog: &CommentCatalog,
         expected: Option<&[u8]>,
     ) -> Result<Vec<u8>, String> {
-        let current = read(root)?;
-        if current.as_deref() != expected {
-            return Err(
-                "yaml/comments-index.yaml wurde extern geändert; bitte Speichern erneut versuchen"
-                    .into(),
-            );
-        }
-        if let Some(bytes) = current {
-            decode(&bytes)?;
-        }
-        let bytes = encode(catalog)?;
-        let path = crate::metadata_fs::library_path(root, FILE, true)?;
-        crate::metadata_fs::atomic_write_if_current(&path, &bytes, expected)?;
-        Ok(bytes)
+        self.database.transaction(root, |tx| {
+            let revision = library_db::publish(tx, Section::Comments, expected)?;
+            tx.execute("DELETE FROM audio_comments", [])?;
+            tx.execute("UPDATE media SET reference_at=recorded_at WHERE kind='audio'",[])?;
+            let mut stmt = tx
+                .prepare("INSERT INTO audio_comments(id,photo_path,audio_path) VALUES(?1,?2,?3)")?;
+            for comment in catalog.entries().values() {
+                library_db::media(tx, comment.photo())?;
+                library_db::media(tx, comment.audio())?;
+                    tx.execute("UPDATE media SET reference_at=(SELECT reference_at FROM media WHERE path=?1) WHERE path=?2",(comment.photo().as_str(),comment.audio().as_str()))?;
+                stmt.execute((
+                    comment.id(),
+                    comment.photo().as_str(),
+                    comment.audio().as_str(),
+                ))?;
+            }
+            Ok(revision)
+        })
     }
 }
 impl CommentMediaStore for CommentFiles {
@@ -228,8 +191,9 @@ mod tests {
             }),
         }
     }
-    fn store() -> YamlComments {
-        YamlComments {
+    fn store() -> SqliteComments {
+        SqliteComments {
+            database: Arc::default(),
             priority: Default::default(),
         }
     }
@@ -306,7 +270,10 @@ mod tests {
             session.rebuild().unwrap();
             drain(&mut session);
             assert!(!session.error().is_empty());
-            assert_eq!(fs::read(root.path().join(FILE)).unwrap(), before);
+            assert_eq!(
+                store().rebuild_base(root.path()).unwrap().revision.unwrap(),
+                before
+            );
             assert_eq!(session.catalog().entries().len(), 1);
         }
     }
@@ -323,44 +290,6 @@ mod tests {
         fs::create_dir_all(root.path().join(comment.audio().as_str())).unwrap();
         assert!(store().write_photo_record(root.path(), &comment).is_err());
         assert!(!root.path().join(comment.sidecar().as_str()).exists());
-    }
-    #[test]
-    fn unsupported_cache_requires_explicit_rebuild_and_preserves_original_bytes() {
-        let root = tempfile::tempdir().unwrap();
-        let source = tempfile::tempdir().unwrap();
-        let target = photo(root.path(), "2008/09/photo.jpg");
-        let repo = store();
-        let comment = publish_comment(&adapter(), &target, &take(source.path(), 1, 2026)).unwrap();
-        repo.write_photo_record(root.path(), &comment).unwrap();
-        let old=b"# old cache\nversion: 2\ncomments:\n  invalid-old-id:\n    audio: 2020/audio/comments/old.m4a\n";
-        fs::write(root.path().join(FILE), old).unwrap();
-        assert!(load_catalog(&repo, root.path(), &AtomicBool::new(false)).is_err());
-        assert_eq!(fs::read(root.path().join(FILE)).unwrap(), old);
-        let (loaded, _) =
-            rebuild_catalog(&repo, root.path(), &AtomicBool::new(false), &|_| {}).unwrap();
-        assert_eq!(loaded.catalog.entries().len(), 1);
-        assert!(loaded.catalog.by_audio(comment.audio()).is_some());
-        assert!(
-            fs::read_to_string(root.path().join(FILE))
-                .unwrap()
-                .contains("photos:")
-        );
-        let recovery = fs::read_dir(root.path().join("yaml"))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .find(|p| {
-                p.file_name()
-                    .unwrap()
-                    .to_string_lossy()
-                    .starts_with("comments-index-recovery-")
-            })
-            .unwrap();
-        assert_eq!(fs::read(recovery).unwrap(), old);
-        // Failure in the new authoritative source leaves the old index byte-for-byte intact.
-        fs::write(root.path().join(FILE), old).unwrap();
-        fs::write(root.path().join(comment.sidecar().as_str()), b"broken: [").unwrap();
-        assert!(load_catalog(&repo, root.path(), &AtomicBool::new(false)).is_err());
-        assert_eq!(fs::read(root.path().join(FILE)).unwrap(), old);
     }
     #[test]
     fn commit_merges_authoritative_photo_records_and_never_resurrects_removed_references() {
@@ -436,7 +365,7 @@ mod tests {
         );
         assert!(!text.contains("recorded_at") && !text.contains("photo_taken_at"));
         assert_eq!(fs::read_dir(sidecar.parent().unwrap()).unwrap().count(), 1);
-        fs::remove_file(library.path().join(FILE)).unwrap();
+        fs::remove_file(library.path().join(crate::library_db::FILE)).unwrap();
         let rebuilt = load_catalog(&repo, library.path(), &AtomicBool::new(false)).unwrap();
         assert_eq!(rebuilt.catalog.entries().len(), 2);
         for comment in rebuilt.catalog.entries().values() {
@@ -489,46 +418,6 @@ mod tests {
         );
     }
     #[test]
-    fn source_records_are_authoritative_and_old_audio_records_are_not_read() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("2026/audio/y")).unwrap();
-        fs::write(
-            root.path().join("2026/audio/y/com_20261113_120000.yaml"),
-            "version: 1\nid: old\n",
-        )
-        .unwrap();
-        let repo = store();
-        assert!(
-            load_catalog(&repo, root.path(), &AtomicBool::new(false))
-                .unwrap()
-                .catalog
-                .entries()
-                .is_empty()
-        );
-        fs::create_dir_all(root.path().join("yaml")).unwrap();
-        fs::write(root.path().join(FILE), b"version: 2\ncomments: {}\n").unwrap();
-        assert!(load_catalog(&repo, root.path(), &AtomicBool::new(false)).is_err());
-        let (rebuilt, _) =
-            rebuild_catalog(&repo, root.path(), &AtomicBool::new(false), &|_| {}).unwrap();
-        assert!(rebuilt.catalog.entries().is_empty());
-        assert!(
-            String::from_utf8(rebuilt.revision.unwrap())
-                .unwrap()
-                .contains("version: 3")
-        );
-        assert!(
-            fs::read_dir(root.path().join("yaml"))
-                .unwrap()
-                .any(|entry| {
-                    entry
-                        .unwrap()
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with("comments-index-recovery-")
-                })
-        );
-    }
-    #[test]
     fn invalid_photo_metadata_and_external_index_changes_are_preserved() {
         let root = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
@@ -550,12 +439,15 @@ mod tests {
         let revision = repo
             .save(root.path(), &CommentCatalog::default(), None)
             .unwrap();
-        fs::write(root.path().join(FILE), b"external").unwrap();
+        fs::write(root.path().join(crate::library_db::FILE), b"external").unwrap();
         assert!(
             repo.replace_index(root.path(), &CommentCatalog::default(), Some(&revision))
                 .is_err()
         );
-        assert_eq!(fs::read(root.path().join(FILE)).unwrap(), b"external");
+        assert_eq!(
+            fs::read(root.path().join(crate::library_db::FILE)).unwrap(),
+            b"external"
+        );
     }
     #[test]
     fn cancellation_and_symbolic_photo_metadata_never_replace_the_index() {

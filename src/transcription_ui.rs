@@ -271,11 +271,15 @@ mod tests {
                             &mut preferences,
                             &mut view,
                             crate::options_ui::SettingsContext {
+                                index: None,
+                                root: None,
+                                can_rebuild_index: false,
                                 saving: false,
                                 bindings: &mut bindings,
                                 error: "",
                                 comments: Default::default(),
                                 library_ready: false,
+                                geodata: None,
                                 transcription: Some(&mut session),
                             },
                         );

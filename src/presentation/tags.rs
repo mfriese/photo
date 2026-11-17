@@ -41,11 +41,11 @@ impl TagView {
         let mut discard = false;
         let mut rebuild = false;
         let mut cancel_loading = false;
-        egui::Window::new("Tags und Alben").open(&mut self.open).default_width(520.)
+        egui::Window::new("Tags").open(&mut self.open).default_width(520.)
             .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
                 crate::options_ui::spacing(ui);
                 ui.label("Tags ordnen Dateien zu. Links filtern Tags die aktuelle Ansicht.");
-                ui.small("Originaldateien bleiben unverändert. Tags in Medien-YAMLs speichern; yaml/tags.yaml ist der schnelle Index.");
+                ui.small("Originaldateien bleiben unverändert. Tags in Medien-YAMLs speichern; yaml/library.sqlite ist der schnelle Index.");
                 if !self.files.is_empty(){
                     ui.label(format!("{} Datei(en) ausgewählt",self.files.len()));
                     if self.files.len()==1 {ui.add(egui::Label::new(self.files[0].as_str()).truncate()).on_hover_text(self.files[0].as_str());}
@@ -54,23 +54,22 @@ impl TagView {
                 if session.loading(){ui.horizontal(|ui|{ui.spinner();ui.label("Tags werden geladen …");if ui.small_button("Abbrechen").clicked(){cancel_loading=true;}});}
                 if session.saving(){ui.label("Änderungen werden gespeichert …");}
                 let rows:Vec<_>=session.catalog().map(|c|c.tags().iter().map(|(name,files)|
-                    (name.clone(),files.len(),c.albums().contains(name),self.files.iter().filter(|file|files.contains(*file)).count()))
+                    (name.clone(),files.len(),self.files.iter().filter(|file|files.contains(*file)).count()))
                     .collect()).unwrap_or_default();
                 ui.add_enabled_ui(session.catalog().is_some(),|ui|{
                     ui.horizontal_wrapped(|ui|{
                         ui.add(egui::TextEdit::singleline(&mut self.new_name).hint_text("Neuer Tag").desired_width(180.));
-                        if ui.button("Tag anlegen").clicked(){actions.push(Action::CreateMany{name:self.new_name.clone(),files:self.files.clone()});}
+                        if ui.add_enabled(!self.files.is_empty(),egui::Button::new("Tag zuweisen")).clicked(){actions.push(Action::CreateMany{name:self.new_name.clone(),files:self.files.clone()});}
                     });
                     egui::ScrollArea::vertical().id_salt("tag_rows").max_height(280.).auto_shrink([false,true]).show(ui,|ui|{
                         if rows.is_empty(){ui.label("Noch keine Tags. Einen Tag anlegen und Dateien zuordnen.");}
-                        for (name,count,mut album,assigned_count) in rows{
+                        for (name,count,assigned_count) in rows{
                             let mut assigned=assigned_count==self.files.len();
                             ui.horizontal_wrapped(|ui|{
                                 if !self.files.is_empty(){
                                     if ui.checkbox(&mut assigned,if assigned_count>0 && assigned_count<self.files.len(){format!("{name} ({assigned_count}/{})",self.files.len())}else{name.clone()}).changed(){actions.push(Action::AssignMany{tag:name.clone(),files:self.files.clone(),present:assigned});}
                                 }else if ui.selectable_label(self.selected.as_ref()==Some(&name),&name).clicked(){self.selected=Some(name.clone());self.rename=name.clone();}
                                 ui.label(format!("({count})"));
-                                if ui.checkbox(&mut album,"Album").changed(){actions.push(Action::Album{tag:name.clone(),enabled:album});}
                                 if ui.small_button("Anzeigen").clicked(){self.filters.clear();self.filters.insert(name.clone());}
                             });
                         }
@@ -79,7 +78,7 @@ impl TagView {
                         ui.separator();ui.horizontal_wrapped(|ui|{
                             ui.add(egui::TextEdit::singleline(&mut self.rename).desired_width(180.));
                             if ui.button("Umbenennen").clicked(){actions.push(Action::Rename{old:selected.clone(),new:self.rename.clone()});}
-                            if ui.button("Tag entfernen").on_hover_text("Entfernt nur den Tag und seine Albumzuordnung; alle Dateien bleiben erhalten").clicked(){actions.push(Action::Remove(selected.clone()));}
+                            if ui.button("Tag entfernen").on_hover_text("Entfernt nur den Tag; alle Dateien bleiben erhalten").clicked(){actions.push(Action::Remove(selected.clone()));}
                         });
                     }
                 });

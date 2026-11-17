@@ -1770,7 +1770,7 @@ mod gallery_tests {
         cache.ensure(&items, Path::new("/library"), "2023/07");
         assert!(cache.selected().is_none());
         assert!(cache.timeline().is_none());
-        cache.ensure(&items, Path::new("/library"), "albums");
+        cache.ensure(&items, Path::new("/library"), "tags");
         assert!(cache.timeline().is_none());
         assert!(gallery_year("0000/01").is_none());
     }

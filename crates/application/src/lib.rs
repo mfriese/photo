@@ -35,3 +35,8 @@ pub mod media_trash;
 pub mod duration_cache;
 
 pub mod transcription;
+
+pub mod downloads;
+pub mod geodata;
+pub mod library_index;
+pub mod runtime;

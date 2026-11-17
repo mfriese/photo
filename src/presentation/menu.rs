@@ -333,7 +333,7 @@ impl Suite {
             ui.label("File → Open Library…: Fotosammlung öffnen. Jahre links aufklappen und ein Jahr oder einen Monat auswählen.");
             ui.label("View: Seitenleiste, quadratische Vorschauen, Videofilter und fünf Vorschaugrößen.");
             ui.label("Ein Foto anklicken, um die Großansicht zu öffnen. Pfeiltasten wechseln das Bild, Escape schließt die Ansicht.");
-            ui.label("Edit: Drehbefehle, Videowiedergabe, Tags und Alben sowie anpassbare Tastenkürzel. Bildbefehle benötigen eine geöffnete Großansicht.");
+            ui.label("Edit: Drehbefehle, Videowiedergabe, Tags sowie anpassbare Tastenkürzel. Bildbefehle benötigen eine geöffnete Großansicht.");
             ui.label("Die Audioleiste startet und pausiert mit ▶ / ⏸. Ein Klick auf die Jahresachse springt zur gewünschten Aufnahme.");
             ui.label("PhotoSuite → Settings…: Einstellungen der Bibliothek. Originale bleiben unverändert, außer bei ausdrücklich aktivierten Schreib- oder bestätigten Bereinigungsaktionen.");
         });

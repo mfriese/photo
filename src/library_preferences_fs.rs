@@ -312,7 +312,7 @@ mod tests {
     }
     use photosuite_application::preferences::Shortcut;
     #[test]
-    fn all_catalogs_use_yaml_and_ignore_old_locations_without_creating_on_read() {
+    fn catalogs_use_sqlite_settings_remain_yaml_and_old_locations_are_ignored() {
         use photosuite_application::{
             comments::{CommentCache, CommentRepository},
             organization::CatalogRepository,
@@ -334,10 +334,11 @@ mod tests {
         .unwrap();
         let settings = store_at(local.path().join("prefs.plist"));
         assert!(settings.load_library(root.path()).unwrap().is_some());
-        let tags = crate::tag_store::YamlTags::default();
+        let tags = crate::tag_store::SqliteTags::default();
         let loaded = tags.load(root.path()).unwrap();
         assert!(loaded.catalog.tags().is_empty());
-        let comments = crate::comments_fs::YamlComments {
+        let comments = crate::comments_fs::SqliteComments {
+            database: std::sync::Arc::default(),
             priority: Default::default(),
         };
         assert!(matches!(
@@ -354,7 +355,7 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(!root.path().join("yaml").exists());
+        assert!(root.path().join(crate::library_db::FILE).is_file());
         settings
             .save(&Preferences {
                 library_scope: Some(root.path().into()),
@@ -369,7 +370,7 @@ mod tests {
                 None,
             )
             .unwrap();
-        for name in ["settings.yaml", "tags.yaml", "comments-index.yaml"] {
+        for name in ["settings.yaml", "library.sqlite"] {
             assert!(root.path().join("yaml").join(name).is_file());
         }
         for name in [
@@ -401,10 +402,11 @@ mod tests {
                 })
                 .is_err()
         );
-        let tags = crate::tag_store::YamlTags::default();
+        let tags = crate::tag_store::SqliteTags::default();
         assert!(tags.load(root.path()).is_err());
         assert!(tags.save(root.path(), &Default::default(), None).is_err());
-        let comments = crate::comments_fs::YamlComments {
+        let comments = crate::comments_fs::SqliteComments {
+            database: std::sync::Arc::default(),
             priority: Default::default(),
         };
         assert!(comments.read_cache(root.path()).is_err());

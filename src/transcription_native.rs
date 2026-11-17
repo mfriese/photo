@@ -538,7 +538,7 @@ mod tests {
             output.segments.len(),
             text.len()
         );
-        let store = crate::transcription_queue_fs::YamlTranscriptionQueue;
+        let store = crate::transcription_queue_fs::SqliteTranscriptionQueue::default();
         let value = Transcript::new(
             store.version(folder.path(), &source).unwrap(),
             if output.no_audio {

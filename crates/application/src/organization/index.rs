@@ -29,9 +29,12 @@ pub(super) fn load_cancel(
     if stored.revision.is_some() || !repository.supports_file_records() {
         return Ok(stored);
     }
+    let catalog = from_records(repository, root, cancel)?;
+    check(cancel)?;
+    let revision = repository.replace_index(root, &catalog, None)?;
     Ok(StoredCatalog {
-        catalog: from_records(repository, root, cancel)?,
-        revision: None,
+        catalog,
+        revision: Some(revision),
     })
 }
 fn from_records(
@@ -39,8 +42,7 @@ fn from_records(
     root: &Path,
     cancel: &AtomicBool,
 ) -> Result<TagCatalog, String> {
-    let definitions = repository.load_definitions(root)?;
-    let mut catalog = definitions.catalog.definitions();
+    let mut catalog = TagCatalog::default();
     for record in repository.scan_file_tags(root, cancel)? {
         for name in record.tags.into_iter().flatten() {
             if !catalog.tags().contains_key(&name) {
@@ -82,13 +84,6 @@ pub(super) fn save_cancel(
     if repository.index_revision(root)?.as_deref() != revision {
         return Err("Tagindex wurde extern verändert; Einzeldateien bleiben erhalten".into());
     }
-    let definitions = repository.load_definitions(root)?;
-    if definitions.revision.is_some()
-        && definitions.catalog != previous.definitions()
-        && definitions.catalog != desired.definitions()
-    {
-        return Err("Tagdefinitionen wurden extern verändert".into());
-    }
     for file in previous.files().union(&desired.files()) {
         check(cancel)?;
         let old = tags(previous, file);
@@ -110,11 +105,6 @@ pub(super) fn save_cancel(
             repository.write_file_tags(root, file, &new, current.revision.as_deref())?;
         }
     }
-    repository.save_definitions(
-        root,
-        &desired.definitions(),
-        definitions.revision.as_deref(),
-    )?;
     check(cancel)?;
     repository.save(root, desired, revision)
 }
@@ -198,18 +188,6 @@ impl ImportTags {
         if !self.changed {
             return Ok(());
         }
-        let definitions = self.repository.load_definitions(&self.root)?;
-        let mut merged = definitions.catalog;
-        for name in self.stored.catalog.tags().keys() {
-            if !merged.tags().contains_key(name) {
-                merged.create(name)?;
-            }
-        }
-        self.repository.save_definitions(
-            &self.root,
-            &merged.definitions(),
-            definitions.revision.as_deref(),
-        )?;
         self.repository.save(
             &self.root,
             &self.stored.catalog,

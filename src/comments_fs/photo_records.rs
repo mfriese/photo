@@ -1,10 +1,7 @@
 //! Authoritative photo records; every update is guarded by the current file revision.
 use super::*;
 use crate::media_records_fs::{Record as MediaRecord, parse};
-use std::{
-    io::Write,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::Ordering;
 fn checked_bytes(path: &Path) -> Result<Vec<u8>, String> {
     crate::media_records_fs::read(path)?
         .ok_or_else(|| format!("Foto-YAML fehlt: {}", path.display()))
@@ -44,7 +41,7 @@ fn safe_reference(root: &Path, relative: &LibraryFile) -> Result<bool, String> {
     }
     Ok(present)
 }
-impl YamlComments {
+impl SqliteComments {
     pub(super) fn update_photo_record(
         &self,
         root: &Path,
@@ -83,41 +80,6 @@ impl YamlComments {
         entry.comments = normalized;
         crate::media_records_fs::write(root, comment.photo(), &entry, previous.as_deref())?;
         Ok(catalog)
-    }
-    pub(super) fn read_rebuild_base(&self, root: &Path) -> Result<RebuildBase, String> {
-        let revision = read(root)?;
-        let mut warning = String::new();
-        if let Some(bytes) = revision.as_deref()
-            && let Err(error) = decode(bytes)
-        {
-            static SEQUENCE: AtomicUsize = AtomicUsize::new(0);
-            loop {
-                let relative = format!(
-                    "yaml/comments-index-recovery-{}-{}.yaml",
-                    std::process::id(),
-                    SEQUENCE.fetch_add(1, Ordering::Relaxed)
-                );
-                let path = crate::metadata_fs::library_path(root, &relative, true)?;
-                match fs::OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(&path)
-                {
-                    Ok(mut file) => {
-                        file.write_all(bytes).map_err(|e| e.to_string())?;
-                        file.sync_all().map_err(|e| e.to_string())?;
-                        warning = format!(
-                            "Unlesbarer Index erhalten unter {}: {error}",
-                            path.display()
-                        );
-                        break;
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                    Err(e) => return Err(e.to_string()),
-                }
-            }
-        }
-        Ok(RebuildBase { revision, warning })
     }
     pub(super) fn read_photo_records(
         &self,

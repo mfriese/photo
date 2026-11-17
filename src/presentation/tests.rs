@@ -176,6 +176,8 @@ pub(super) fn test_suite() -> Suite {
         transcription_seen: None,
         transcription_complete: false,
         transcription: photosuite_application::transcription::ModelSession::new(adapters.clone()),
+        geodata: photosuite_application::geodata::Session::new(adapters.clone()),
+        index_maintenance: photosuite_application::library_index::Session::new(adapters.clone()),
         settings_view: Default::default(),
         gallery: Default::default(),
         comments: photosuite_application::comments::CommentSession::new(
@@ -220,6 +222,8 @@ pub(super) fn test_suite() -> Suite {
             transcription_queue: adapters.clone(),
             transcription_power: adapters.clone(),
             transcription: adapters.clone(),
+            geodata: adapters.clone(),
+            index_rebuilder: adapters.clone(),
             duration_cache: None,
             media_trash: adapters.clone(),
             comments: adapters.clone(),
@@ -1047,7 +1051,7 @@ fn sidebar_lists_all_tags_alphabetically_on_separate_rows() {
             }
             _ => None,
         })
-        .expect("album in sidebar");
+        .expect("tag in sidebar");
     let _ = ctx.run(
         input(vec![
             egui::Event::PointerMoved(target),
@@ -1095,7 +1099,7 @@ fn sidebar_lists_all_tags_alphabetically_on_separate_rows() {
     assert_eq!(suite.visible(), vec![0, 1]);
 }
 #[test]
-fn tag_dialog_fits_narrow_windows_and_mixed_albums_do_not_send_audio_to_image_viewer() {
+fn tag_dialog_fits_narrow_windows_and_mixed_tags_do_not_send_audio_to_image_viewer() {
     use photosuite_application::organization::Action;
     for width in [360., 600., 1280.] {
         let mut suite = test_suite();
@@ -1110,7 +1114,7 @@ fn tag_dialog_fits_narrow_windows_and_mixed_albums_do_not_send_audio_to_image_vi
             .organization
             .apply(Action::Create {
                 name: "Familienurlaub Sommer".into(),
-                file: None,
+                file: Some(crate::domain::tags::LibraryFile::new("2023/01/b.jpg".into()).unwrap()),
             })
             .unwrap();
         suite.tag_view.open = true;
@@ -1170,7 +1174,7 @@ fn tag_checkbox_assigns_and_removes_the_current_file() {
         .organization
         .apply(Action::Create {
             name: "Urlaub".into(),
-            file: None,
+            file: Some(crate::domain::tags::LibraryFile::new("2023/01/b.jpg".into()).unwrap()),
         })
         .unwrap();
     let file = suite
@@ -2002,7 +2006,8 @@ fn sidebar_tags_filter_period_with_and_and_keep_options_visible() {
         }
         let labels = draw(&mut suite, &ctx, vec![], width);
         let rect = |label: &str| labels.iter().find(|(s, _)| s == label).unwrap().1;
-        assert!(rect("Tags").bottom() < rect("Reset").top());
+        assert!((rect("Tags").center().y - rect("Reset").center().y).abs() < 3.);
+        assert!(rect("Reset").left() > rect("Tags").right());
         assert!(rect("dia").bottom() < rect("scan").top());
         assert!(suite.tag_view.filters.is_empty());
         assert_eq!(suite.visible(), vec![0, 1, 2]);
@@ -2456,5 +2461,43 @@ impl photosuite_application::transcription::queue::QueueStore for UnusedAdapters
         _: &crate::domain::transcript::Transcript,
     ) -> Result<(), String> {
         Err("No transcript writes in layout tests".into())
+    }
+}
+
+impl photosuite_application::geodata::Store for UnusedAdapters {
+    fn locations(&self) -> photosuite_application::geodata::Locations {
+        photosuite_application::geodata::Locations {
+            archive: "/Global/GeoNames/cities500.zip".into(),
+            preferences: "/Global/Preferences/geodata.plist".into(),
+        }
+    }
+    fn inspect(
+        &self,
+        _: &std::sync::atomic::AtomicBool,
+        _: &(dyn Fn(photosuite_application::downloads::Progress) + Sync),
+    ) -> Result<photosuite_application::geodata::Prepared, String> {
+        Ok(Default::default())
+    }
+    fn prepare(
+        &self,
+        enabled: bool,
+        _: &std::sync::atomic::AtomicBool,
+        _: &(dyn Fn(photosuite_application::downloads::Progress) + Sync),
+    ) -> Result<photosuite_application::geodata::Prepared, String> {
+        Ok(photosuite_application::geodata::Prepared {
+            enabled,
+            ..Default::default()
+        })
+    }
+}
+
+impl photosuite_application::library_index::Rebuilder for UnusedAdapters {
+    fn rebuild(
+        &self,
+        _: &std::path::Path,
+        _: &std::sync::atomic::AtomicBool,
+        _: &(dyn Fn(usize) + Sync),
+    ) -> Result<(), String> {
+        Err("unused".into())
     }
 }

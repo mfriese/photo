@@ -63,6 +63,10 @@ pub struct Journal {
 }
 pub trait QueueStore: Send + Sync + 'static {
     fn load(&self, root: &Path) -> Result<Journal, String>;
+    fn load_cancellable(&self, root: &Path, cancel: &AtomicBool) -> Result<Journal, String> {
+        check(cancel)?;
+        self.load(root)
+    }
     fn save(&self, root: &Path, journal: &Journal) -> Result<Vec<u8>, String>;
     fn version(&self, root: &Path, source: &LibraryFile) -> Result<SourceVersion, String>;
     fn existing(&self, root: &Path, candidate: &Candidate) -> Result<Option<Transcript>, String>;
@@ -203,7 +207,7 @@ fn persist(store: &dyn QueueStore, root: &Path, journal: &mut Journal) -> Result
     Ok(())
 }
 fn plan(store: &dyn QueueStore, catalog: &Catalog, cancel: &AtomicBool) -> Result<Journal, String> {
-    let mut journal = store.load(&catalog.root)?;
+    let mut journal = store.load_cancellable(&catalog.root, cancel)?;
     for candidate in &catalog.sources {
         check(cancel)?;
         let version = match store.version(&catalog.root, &candidate.source) {

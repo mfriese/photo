@@ -1,34 +1,31 @@
-//! Durable queue index and merged transcript updates in the shared media YAML format.
+//! SQLite scheduling projection; transcripts and failures remain in authoritative media YAMLs.
 use crate::{
     domain::{
         tags::LibraryFile,
         transcript::{SourceVersion, Transcript},
     },
+    library_db::{self, Database, Section},
     media_records_fs::{self, Record},
     metadata_fs,
 };
-use photosuite_application::transcription::queue::{
-    Candidate, Job, JobState, Journal, Mode, QueueStore,
+use photosuite_application::transcription::queue::{Candidate, Job, JobState, Journal, QueueStore};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::Path,
+    sync::{Arc, atomic::AtomicBool},
+    time::UNIX_EPOCH,
 };
-use std::{collections::BTreeMap, fs, io::Read, path::Path, time::UNIX_EPOCH};
-pub struct YamlTranscriptionQueue;
-const FILE: &str = "yaml/transcription-jobs.yaml";
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Document {
-    version: u32,
-    mode: String,
-    jobs: BTreeMap<String, JobDto>,
+#[cfg_attr(test, derive(Default))]
+pub struct SqliteTranscriptionQueue {
+    pub database: Arc<Database>,
+    pub priority: Arc<photosuite_application::work_priority::WorkPriority>,
 }
+
 #[derive(serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JobDto {
-    record: String,
-    source_bytes: u64,
-    source_modified: String,
-    state: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    error: String,
+struct Revision {
+    index: Option<Vec<u8>>,
+    runtime: Option<Vec<u8>>,
 }
 fn source(root: &Path, file: &LibraryFile) -> Result<std::path::PathBuf, String> {
     if crate::domain::Media::from_audio_asset(file.as_str().into(), String::new()).is_none() {
@@ -41,119 +38,196 @@ fn source(root: &Path, file: &LibraryFile) -> Result<std::path::PathBuf, String>
     }
     Ok(path)
 }
-impl QueueStore for YamlTranscriptionQueue {
-    fn load(&self, root: &Path) -> Result<Journal, String> {
-        let path = metadata_fs::library_path(root, FILE, false)?;
-        if !metadata_fs::check_file(&path)? {
-            return Ok(Journal::default());
+fn pack(index: Option<Vec<u8>>, runtime: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&Revision { index, runtime }).map_err(|e| e.to_string())
+}
+impl SqliteTranscriptionQueue {
+    fn failure(
+        &self,
+        root: &Path,
+        candidate: &Candidate,
+        failure: Option<media_records_fs::Failure>,
+    ) -> Result<(), String> {
+        let path = media_records_fs::path(root, &candidate.record, false)?;
+        let previous = media_records_fs::read(&path)?;
+        let mut record = previous
+            .as_deref()
+            .map(media_records_fs::parse)
+            .transpose()?
+            .unwrap_or_else(|| Record::new(&candidate.record));
+        if record.file != candidate.record.as_str() {
+            return Err("Falsche Medien-YAML für Transkriptionsfehler".into());
         }
-        let mut bytes = Vec::new();
-        fs::File::open(path)
-            .map_err(|e| e.to_string())?
-            .take(32 * 1024 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() > 32 * 1024 * 1024 {
-            return Err("Transkriptionswarteschlange überschreitet 32 MiB".into());
+        if record.transcription_failures.get(candidate.source.as_str()) == failure.as_ref() {
+            return Ok(());
         }
-        let document: Document = metadata_fs::parse_large_yaml(&bytes, 32 * 1024 * 1024)
-            .map_err(|e| format!("Transkriptionswarteschlange bleibt unverändert: {e}"))?;
-        if document.version != 1 {
-            return Err("Unbekannte Transkriptionswarteschlange".into());
+        if let Some(failure) = failure {
+            record
+                .transcription_failures
+                .insert(candidate.source.as_str().into(), failure);
+        } else {
+            record
+                .transcription_failures
+                .remove(candidate.source.as_str());
         }
-        let mode = match document.mode.as_str() {
-            "running" => Mode::Running,
-            "paused" => Mode::Paused,
-            "stopped" => Mode::Stopped,
-            _ => return Err("Ungültiger Transkriptionsmodus".into()),
-        };
+        media_records_fs::write(root, &candidate.record, &record, previous.as_deref())
+    }
+    pub(crate) fn reconstruct(
+        &self,
+        root: &Path,
+        cancel: &AtomicBool,
+    ) -> Result<BTreeMap<LibraryFile, Job>, String> {
         let mut jobs = BTreeMap::new();
-        for (path, value) in document.jobs {
-            let file = LibraryFile::new(path)?;
-            if crate::domain::Media::from_audio_asset(file.as_str().into(), String::new()).is_none()
-            {
-                return Err("Warteschlange enthält ungültige Quelle".into());
-            }
-            let record = LibraryFile::new(value.record)?;
-            record.metadata_path()?;
-            if record != file
-                && !crate::domain::Media::from_path(record.as_str().into(), String::new())
-                    .is_some_and(|m| m.is_photo())
-            {
-                return Err("Ungültige Transkriptzuordnung".into());
-            }
-            let state = match value.state.as_str() {
-                "pending" => JobState::Pending,
-                "complete" => JobState::Complete,
-                "failed" => JobState::Failed(value.error),
-                _ => return Err("Ungültiger Auftragsstatus".into()),
-            };
-            jobs.insert(
-                file.clone(),
-                Job {
-                    candidate: Candidate {
-                        source: file,
-                        record,
+        media_records_fs::visit(root, cancel, &self.priority, |file, record, _| {
+            for (source, value) in record.transcription_failures {
+                let source = LibraryFile::new(source)?;
+                jobs.insert(
+                    source.clone(),
+                    Job {
+                        candidate: Candidate {
+                            source,
+                            record: file.clone(),
+                        },
+                        version: SourceVersion::new(value.source_bytes, value.source_modified)?,
+                        state: JobState::Failed(value.error),
                     },
-                    version: SourceVersion::new(value.source_bytes, value.source_modified)?,
-                    state,
-                },
-            );
+                );
+            }
+            for (source, value) in record.transcripts {
+                let source = LibraryFile::new(source)?;
+                let transcript = value.value()?;
+                if jobs
+                    .get(&source)
+                    .is_none_or(|job| job.version == *transcript.source())
+                {
+                    jobs.insert(
+                        source.clone(),
+                        Job {
+                            candidate: Candidate {
+                                source,
+                                record: file.clone(),
+                            },
+                            version: transcript.source().clone(),
+                            state: JobState::Complete,
+                        },
+                    );
+                }
+            }
+            Ok(())
+        })?;
+        Ok(jobs)
+    }
+}
+impl QueueStore for SqliteTranscriptionQueue {
+    fn load(&self, root: &Path) -> Result<Journal, String> {
+        self.load_cancellable(root, &AtomicBool::new(false))
+    }
+    fn load_cancellable(&self, root: &Path, cancel: &AtomicBool) -> Result<Journal, String> {
+        let (state, runtime) = crate::runtime_state_fs::read(root)?;
+        let (mut jobs,index)=self.database.transaction(root,|tx|{
+   let revision=library_db::revision(tx,Section::Transcription)?;let mut jobs=BTreeMap::new();
+   let mut stmt=tx.prepare("SELECT source_path,record_path,source_bytes,source_modified,status,error FROM transcription_jobs ORDER BY source_path")?;
+   for row in stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))? {
+    let (source,record,bytes,modified,status,error)=row?;let source=LibraryFile::new(source).map_err(library_db::invalid)?;
+    let state=match status.as_str(){"pending"=>JobState::Pending,"complete"=>JobState::Complete,"failed"=>JobState::Failed(error),_=>return Err(library_db::invalid("Ungültiger Auftragsstatus"))};
+    jobs.insert(source.clone(),Job {candidate:Candidate {source,record:LibraryFile::new(record).map_err(library_db::invalid)?},version:SourceVersion::new(bytes,modified).map_err(library_db::invalid)?,state});
+   }Ok((jobs,revision))
+  })?;
+        if index.is_none() {
+            jobs = self.reconstruct(root, cancel)?;
         }
         Ok(Journal {
             jobs,
-            mode,
-            revision: Some(bytes),
+            mode: state.transcription.mode,
+            revision: Some(pack(index, runtime)?),
         })
     }
     fn save(&self, root: &Path, journal: &Journal) -> Result<Vec<u8>, String> {
-        let jobs = journal
-            .jobs
-            .iter()
-            .map(|(source, job)| {
-                (
-                    source.as_str().to_owned(),
-                    JobDto {
-                        record: job.candidate.record.as_str().into(),
-                        source_bytes: job.version.bytes(),
-                        source_modified: job.version.modified().into(),
-                        state: match job.state {
-                            JobState::Pending => "pending",
-                            JobState::Complete => "complete",
-                            JobState::Failed(_) => "failed",
-                        }
-                        .into(),
-                        error: if let JobState::Failed(e) = &job.state {
-                            e.chars().take(8192).collect()
-                        } else {
-                            String::new()
-                        },
-                    },
-                )
-            })
-            .collect();
-        let document = Document {
-            version: 1,
-            mode: match journal.mode {
-                Mode::Running => "running",
-                Mode::Paused => "paused",
-                Mode::Stopped => "stopped",
-            }
-            .into(),
-            jobs,
-        };
-        let bytes = serde_saphyr::to_string(&document)
-            .map_err(|e| e.to_string())?
-            .into_bytes();
-        if bytes.len() > 32 * 1024 * 1024 {
-            return Err("Transkriptionswarteschlange überschreitet 32 MiB".into());
+        let expected: Revision = journal
+            .revision
+            .as_deref()
+            .map(serde_json::from_slice)
+            .transpose()
+            .map_err(|e| format!("Ungültige Queue-Revision: {e}"))?
+            .unwrap_or(Revision {
+                index: None,
+                runtime: None,
+            });
+        let (mut state, runtime) = crate::runtime_state_fs::read(root)?;
+        if runtime != expected.runtime {
+            return Err("runtime.yaml extern geändert; erneut laden".into());
         }
-        metadata_fs::atomic_write_if_current(
-            &metadata_fs::library_path(root, FILE, true)?,
-            &bytes,
-            journal.revision.as_deref(),
-        )?;
-        Ok(bytes)
+        let previous=self.database.transaction(root,|tx|{
+   if library_db::revision(tx,Section::Transcription)?!=expected.index{return Err(library_db::invalid("Warteschlange extern geändert"));}
+   let mut previous=BTreeMap::new();let mut stmt=tx.prepare("SELECT source_path,record_path,source_bytes,source_modified,error FROM transcription_jobs WHERE status='failed'")?;
+   for row in stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?)))?{let (source,record,source_bytes,source_modified,error)=row?;previous.insert(source,(record,media_records_fs::Failure{source_bytes,source_modified,error}));}Ok(previous)
+  })?;
+        for (source, (record, _)) in &previous {
+            if journal
+                .jobs
+                .get(source.as_str())
+                .is_none_or(|j| !matches!(j.state, JobState::Failed(_)))
+            {
+                self.failure(
+                    root,
+                    &Candidate {
+                        source: LibraryFile::new(source.clone())?,
+                        record: LibraryFile::new(record.clone())?,
+                    },
+                    None,
+                )?;
+            }
+        }
+        for job in journal.jobs.values() {
+            if let JobState::Failed(error) = &job.state {
+                let failure = media_records_fs::Failure {
+                    source_bytes: job.version.bytes(),
+                    source_modified: job.version.modified().into(),
+                    error: error.chars().take(8192).collect(),
+                };
+                if previous
+                    .get(job.candidate.source.as_str())
+                    .is_none_or(|(record, old)| {
+                        record != job.candidate.record.as_str() || old != &failure
+                    })
+                {
+                    self.failure(root, &job.candidate, Some(failure))?;
+                }
+            }
+        }
+        if state.transcription.mode != journal.mode || runtime.is_none() {
+            state.transcription.mode = journal.mode;
+        }
+        let new_runtime = if runtime.is_none() || crate::runtime_state_fs::read(root)?.0 != state {
+            Some(crate::runtime_state_fs::save(
+                root,
+                &state,
+                runtime.as_deref(),
+            )?)
+        } else {
+            runtime
+        };
+        let index = self.database.transaction(root, |tx| {
+            let revision = library_db::publish(tx, Section::Transcription, expected.index.as_deref())?;
+            tx.execute_batch("CREATE TEMP TABLE desired_jobs(source_path TEXT PRIMARY KEY,record_path TEXT,source_bytes INTEGER,source_modified TEXT,status TEXT,error TEXT) WITHOUT ROWID;")?;
+            {
+                let mut insert = tx.prepare("INSERT INTO desired_jobs VALUES(?1,?2,?3,?4,?5,?6)")?;
+                for job in journal.jobs.values() {
+                    library_db::media(tx, &job.candidate.source)?;
+                    library_db::media(tx, &job.candidate.record)?;
+                    let (status, error) = match &job.state {
+                        JobState::Pending => ("pending", String::new()),
+                        JobState::Complete => ("complete", String::new()),
+                        JobState::Failed(error) => ("failed", error.chars().take(8192).collect()),
+                    };
+                    insert.execute(rusqlite::params![job.candidate.source.as_str(), job.candidate.record.as_str(), job.version.bytes(), job.version.modified(), status, error])?;
+                }
+            }
+            tx.execute("DELETE FROM transcription_jobs WHERE source_path NOT IN(SELECT source_path FROM desired_jobs)", [])?;
+            tx.execute("INSERT INTO transcription_jobs SELECT * FROM desired_jobs WHERE 1 ON CONFLICT(source_path) DO UPDATE SET record_path=excluded.record_path,source_bytes=excluded.source_bytes,source_modified=excluded.source_modified,status=excluded.status,error=excluded.error WHERE transcription_jobs.record_path!=excluded.record_path OR transcription_jobs.source_bytes!=excluded.source_bytes OR transcription_jobs.source_modified!=excluded.source_modified OR transcription_jobs.status!=excluded.status OR transcription_jobs.error!=excluded.error", [])?;
+            Ok(revision)
+        })?;
+        pack(Some(index), new_runtime)
     }
     fn version(&self, root: &Path, file: &LibraryFile) -> Result<SourceVersion, String> {
         let path = source(root, file)?;
@@ -219,6 +293,9 @@ impl QueueStore for YamlTranscriptionQueue {
                     "Foto-Kommentarzuordnung wurde verändert; keine fremde YAML beschreiben".into(),
                 );
             }
+            record
+                .transcription_failures
+                .remove(candidate.source.as_str());
             record.transcripts.insert(
                 candidate.source.as_str().into(),
                 crate::transcript_codec::TranscriptDto::from_value(transcript),
@@ -239,6 +316,7 @@ mod tests {
         comments::Comment,
         transcript::{Segment, TranscriptStatus},
     };
+    use photosuite_application::transcription::queue::Mode;
     use photosuite_application::{comments::CommentRepository, organization::CatalogRepository};
     fn file(value: &str) -> LibraryFile {
         LibraryFile::new(value.into()).unwrap()
@@ -250,7 +328,7 @@ mod tests {
         fs::write(path, b"unchanged original media").unwrap();
         file
     }
-    fn value(store: &YamlTranscriptionQueue, root: &Path, source: &LibraryFile) -> Transcript {
+    fn value(store: &SqliteTranscriptionQueue, root: &Path, source: &LibraryFile) -> Transcript {
         Transcript::new(
             store.version(root, source).unwrap(),
             TranscriptStatus::Complete,
@@ -264,7 +342,7 @@ mod tests {
     #[test]
     fn transcript_at_supported_segment_limit_can_be_saved_reloaded_and_tagged() {
         let root = tempfile::tempdir().unwrap();
-        let store = YamlTranscriptionQueue;
+        let store = SqliteTranscriptionQueue::default();
         let source = media(root.path(), "2017/04/img_20170407_040311.mp4");
         let candidate = Candidate {
             source: source.clone(),
@@ -289,7 +367,7 @@ mod tests {
             store.existing(root.path(), &candidate).unwrap().as_ref(),
             Some(&transcript)
         );
-        let tags = crate::tag_store::YamlTags::default();
+        let tags = crate::tag_store::SqliteTags::default();
         let old = tags.read_file_tags(root.path(), &source).unwrap();
         tags.write_file_tags(
             root.path(),
@@ -311,7 +389,7 @@ mod tests {
     #[test]
     fn large_valid_queue_can_be_reopened_after_saving() {
         let root = tempfile::tempdir().unwrap();
-        let store = YamlTranscriptionQueue;
+        let store = SqliteTranscriptionQueue::default();
         let mut journal = Journal::default();
         for i in 0..40000 {
             let source = file(&format!("2017/04/img_20170407_040311_{i:05}.mp4"));
@@ -339,7 +417,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let photo = media(root.path(), "1980/09/img_19800916_035811.jpg");
         let audio = media(root.path(), "2026/audio/comments/com_20261115_120000.m4a");
-        let comments = crate::comments_fs::YamlComments {
+        let comments = crate::comments_fs::SqliteComments {
+            database: std::sync::Arc::default(),
             priority: Default::default(),
         };
         let comment = Comment::new(
@@ -349,7 +428,7 @@ mod tests {
         )
         .unwrap();
         comments.write_photo_record(root.path(), &comment).unwrap();
-        let tags = crate::tag_store::YamlTags::default();
+        let tags = crate::tag_store::SqliteTags::default();
         let old = tags.read_file_tags(root.path(), &photo).unwrap();
         tags.write_file_tags(
             root.path(),
@@ -358,7 +437,7 @@ mod tests {
             old.revision.as_deref(),
         )
         .unwrap();
-        let queue = YamlTranscriptionQueue;
+        let queue = SqliteTranscriptionQueue::default();
         let candidate = Candidate {
             source: audio.clone(),
             record: photo.clone(),
@@ -417,7 +496,7 @@ mod tests {
     fn diary_and_video_use_identical_media_payload_and_changed_or_corrupt_sources_are_not_overwritten()
      {
         let root = tempfile::tempdir().unwrap();
-        let store = YamlTranscriptionQueue;
+        let store = SqliteTranscriptionQueue::default();
         for path in [
             "2026/audio/diary/aud_20261115_120000.wav",
             "2026/11/img_20261115_120000.mp4",
@@ -457,11 +536,13 @@ mod tests {
     #[test]
     fn queue_modes_and_failures_round_trip_and_external_or_symbolic_metadata_remains_intact() {
         let root = tempfile::tempdir().unwrap();
-        let store = YamlTranscriptionQueue;
+        let store = SqliteTranscriptionQueue::default();
         assert!(store.load(root.path()).unwrap().jobs.is_empty());
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+
         let source = media(root.path(), "2026/audio/diary/aud_20261115_120000.wav");
+        let initial = store.load(root.path()).unwrap();
         let mut journal = Journal {
+            revision: initial.revision,
             mode: Mode::Paused,
             ..Default::default()
         };
@@ -480,7 +561,7 @@ mod tests {
         let loaded = store.load(root.path()).unwrap();
         assert_eq!(loaded.mode, Mode::Paused);
         assert!(matches!(&loaded.jobs[&source].state,JobState::Failed(e) if e=="codec error"));
-        let path = root.path().join(FILE);
+        let path = root.path().join(crate::library_db::FILE);
         fs::write(&path, b"outside change").unwrap();
         assert!(store.save(root.path(), &loaded).is_err());
         assert!(store.load(root.path()).is_err());

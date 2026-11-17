@@ -81,7 +81,6 @@ pub fn normalize_tag_name(value: &str) -> Result<String, String> {
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct TagCatalog {
     tags: BTreeMap<String, BTreeSet<LibraryFile>>,
-    albums: BTreeSet<String>,
 }
 impl TagCatalog {
     /// Derive managed tags without removing unseen files during a partial collection scan.
@@ -143,16 +142,12 @@ impl TagCatalog {
     fn replace_derived(&mut self, tag: &str, files: BTreeSet<LibraryFile>) {
         if files.is_empty() {
             self.tags.remove(tag);
-            self.albums.remove(tag);
         } else {
             self.tags.insert(tag.into(), files);
         }
     }
 
-    pub fn from_entries(
-        tags: BTreeMap<String, Vec<String>>,
-        albums: Vec<String>,
-    ) -> Result<Self, String> {
+    pub fn from_entries(tags: BTreeMap<String, Vec<String>>) -> Result<Self, String> {
         let mut catalog = Self::default();
         for (tag, files) in tags {
             let tag = normalize_tag_name(&tag)?;
@@ -163,20 +158,11 @@ impl TagCatalog {
                 catalog.assign(&tag, LibraryFile::new(file)?, true)?;
             }
         }
-        for album in albums {
-            catalog.set_album(&album, true)?;
-        }
+        catalog.prune_empty();
         Ok(catalog)
     }
-    pub fn definitions(&self) -> Self {
-        Self {
-            tags: self
-                .tags
-                .keys()
-                .map(|name| (name.clone(), BTreeSet::new()))
-                .collect(),
-            albums: self.albums.clone(),
-        }
+    pub fn prune_empty(&mut self) {
+        self.tags.retain(|_, files| !files.is_empty());
     }
     pub fn files(&self) -> BTreeSet<LibraryFile> {
         self.tags.values().flatten().cloned().collect()
@@ -220,9 +206,6 @@ impl TagCatalog {
             })
             .collect()
     }
-    pub fn albums(&self) -> &BTreeSet<String> {
-        &self.albums
-    }
     pub fn tags_for(&self, file: &LibraryFile) -> Vec<&str> {
         self.tags
             .iter()
@@ -252,22 +235,9 @@ impl TagCatalog {
         }
         Ok(())
     }
-    pub fn set_album(&mut self, tag: &str, album: bool) -> Result<(), String> {
-        let tag = normalize_tag_name(tag)?;
-        if !self.tags.contains_key(&tag) {
-            return Err("Album verweist auf einen unbekannten Tag".into());
-        }
-        if album {
-            self.albums.insert(tag);
-        } else {
-            self.albums.remove(&tag);
-        }
-        Ok(())
-    }
     pub fn remove(&mut self, tag: &str) -> Result<(), String> {
         let tag = normalize_tag_name(tag)?;
         self.tags.remove(&tag).ok_or("Tag nicht gefunden")?;
-        self.albums.remove(&tag);
         Ok(())
     }
     pub fn rename(&mut self, old: &str, new: &str) -> Result<String, String> {
@@ -284,9 +254,6 @@ impl TagCatalog {
         }
         let files = self.tags.remove(&old).ok_or("Tag nicht gefunden")?;
         self.tags.insert(new.clone(), files);
-        if self.albums.remove(&old) {
-            self.albums.insert(new.clone());
-        }
         Ok(new)
     }
 }
@@ -343,20 +310,16 @@ mod tests {
     }
     #[test]
     fn all_tag_boundaries_normalize_case_and_merge_legacy_variants_without_loss() {
-        let mut catalog = TagCatalog::from_entries(
-            BTreeMap::from([
-                ("Comment".into(), vec!["2023/01/a.jpg".into()]),
-                ("COMMENT".into(), vec!["2023/01/b.jpg".into()]),
-                ("comment".into(), vec!["2023/01/a.jpg".into()]),
-                ("ÄPFEL".into(), vec![]),
-            ]),
-            vec!["cOmMeNt".into()],
-        )
+        let mut catalog = TagCatalog::from_entries(BTreeMap::from([
+            ("Comment".into(), vec!["2023/01/a.jpg".into()]),
+            ("COMMENT".into(), vec!["2023/01/b.jpg".into()]),
+            ("comment".into(), vec!["2023/01/a.jpg".into()]),
+            ("ÄPFEL".into(), vec![]),
+        ]))
         .unwrap();
         assert_eq!(catalog.tags()["comment"].len(), 2);
-        assert_eq!(catalog.tags().len(), 2);
-        assert!(catalog.albums().contains("comment"));
-        assert!(catalog.tags().contains_key("äpfel"));
+        assert_eq!(catalog.tags().len(), 1);
+        assert!(!catalog.tags().contains_key("äpfel"));
         assert!(catalog.create("COMMENT").is_err());
         let file = LibraryFile::new("2023/01/c.jpg".into()).unwrap();
         catalog.assign("CoMmEnT", file.clone(), true).unwrap();
@@ -364,33 +327,28 @@ mod tests {
         assert_eq!(catalog.tags_for(&file), vec!["comment"]);
         assert_eq!(catalog.partitions("COMMENT"), BTreeSet::from(["2023"]));
         assert_eq!(catalog.rename("COMMENT", "CoMmEnT").unwrap(), "comment");
+        catalog.create("Äpfel").unwrap();
         assert!(catalog.rename("COMMENT", "Äpfel").is_err());
         assert_eq!(catalog.rename("COMMENT", "NOTIZEN").unwrap(), "notizen");
-        assert!(catalog.albums().contains("notizen"));
-        catalog.set_album("NOTIZEN", false).unwrap();
         catalog.remove("NoTiZeN").unwrap();
         assert!(!catalog.contains("notizen", file.as_str()));
-        assert!(catalog.albums().is_empty());
         assert!(catalog.create(&"İ".repeat(100)).is_err());
     }
     #[test]
-    fn membership_is_unique_and_rename_delete_preserve_album_invariants() {
+    fn membership_is_unique_and_rename_delete_preserve_membership() {
         let mut catalog = TagCatalog::default();
         catalog.create("Urlaub").unwrap();
         let file = LibraryFile::new("2023/12/img.jpg".into()).unwrap();
         catalog.assign("Urlaub", file.clone(), true).unwrap();
         catalog.assign("Urlaub", file, true).unwrap();
         assert_eq!(catalog.tags()["urlaub"].len(), 1);
-        catalog.set_album("Urlaub", true).unwrap();
         catalog.rename("Urlaub", "Reisen").unwrap();
-        assert!(catalog.albums().contains("reisen"));
         assert!(catalog.contains("Reisen", "2023/12/img.jpg"));
         catalog.remove("Reisen").unwrap();
         assert!(catalog.tags().is_empty());
-        assert!(catalog.albums().is_empty());
     }
     #[test]
-    fn invalid_paths_and_orphan_albums_are_rejected() {
+    fn invalid_paths_and_tags_are_rejected() {
         for path in [
             "",
             "../photo.jpg",
@@ -401,7 +359,6 @@ mod tests {
         ] {
             assert!(LibraryFile::new(path.into()).is_err());
         }
-        assert!(TagCatalog::from_entries(BTreeMap::new(), vec!["missing".into()]).is_err());
         let mut catalog = TagCatalog::default();
         assert!(catalog.create(" ").is_err());
         catalog.create("a").unwrap();

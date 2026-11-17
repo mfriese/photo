@@ -43,19 +43,7 @@ impl Settings {
         &self.language
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stage {
-    Loading,
-    Checking,
-    Downloading,
-    Saving,
-}
-#[derive(Clone, Copy, Debug)]
-pub struct Progress {
-    pub stage: Stage,
-    pub bytes: u64,
-    pub total: u64,
-}
+pub use crate::downloads::{AssetTransport as ModelTransport, Progress, Stage};
 #[derive(Clone, Debug, Default)]
 pub struct Prepared {
     pub settings: Settings,
@@ -82,23 +70,6 @@ pub trait ModelStore: Send + Sync + 'static {
         cancel: &AtomicBool,
         progress: &(dyn Fn(Progress) + Sync),
     ) -> Result<Prepared, String>;
-}
-/// Technical download/hash primitives, injected into the local store in the composition root.
-pub trait ModelTransport: Send + Sync + 'static {
-    fn download(
-        &self,
-        url: &str,
-        path: &std::path::Path,
-        expected: u64,
-        cancel: &AtomicBool,
-        progress: &(dyn Fn(Progress) + Sync),
-    ) -> Result<(), String>;
-    fn sha256(
-        &self,
-        path: &std::path::Path,
-        cancel: &AtomicBool,
-        progress: &(dyn Fn(Progress) + Sync),
-    ) -> Result<String, String>;
 }
 enum Event {
     Progress(Progress),

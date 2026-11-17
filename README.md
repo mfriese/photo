@@ -16,7 +16,7 @@ PhotoSuite macht deine nach **Jahr und Monat** geordnete Sammlung durchsuchbar �
 - **Audio-Diary:** gemeinsame Zeitachse mit Abschnitten proportional zur Aufnahmedauer, sofortigen Längenhinweisen aus einem YAML-Cache, täglichem Hintergrundabgleich und fünf zeitlich passenden Fotos.
 - **Gesprochene Kommentare:** direkt in der Großansicht oder im Aufnahmedialog zum Foto aufnehmen, bei Bildwechsel automatisch speichern und weiter aufnehmen, Mikrofon wählen, Pegel beobachten und vor dem Speichern vorhören.
 - **Lokale Transkription:** Audio und Video automatisch mit Whisper verschriftlichen; Modell und Sprache appweit wählen, Verarbeitung pausieren und fortsetzen. Ergebnisse liegen in den Medien-YAMLs.
-- **Tags und virtuelle Alben:** mehrere Tags pro Datei, kombinierbare Tagfilter in der Seitenleiste und Tags bereits beim Import. Neue Zuordnungen erscheinen automatisch.
+- **Tags und Filter:** mehrere Tags pro Datei, kombinierbare Tagfilter in der Seitenleiste und Tags bereits beim Import. Neue Zuordnungen erscheinen automatisch.
 - **Kontrollierter Import:** Prüflauf, kompakte Ergebnisse, datumsbasierte Namen mit gekennzeichnetem Dateisystem-Fallback, farbige Ergebnisse, optionale Fotoablage unter `Jahr/scans`, Kollisionsprüfung und separate Prüfung von Bildduplikaten.
 - **Native Bedienung:** macOS-Menüs, Tastenkürzel und bibliotheksbezogene Einstellungen; die letzte Bibliothek wird beim Start wieder geöffnet. Langsame Datenträger erhalten einen Wartedialog mit Wiederholung, Abbruch und alternativer Bibliothekswahl.
 
@@ -47,7 +47,7 @@ Weitere Installationsmöglichkeiten stehen im [Benutzerhandbuch](docs/USER_GUIDE
 1. **File → Open Library…** öffnet deine Sammlung. Der Pfad steht im Fenstertitel.
 2. Links ein Jahr oder einen Monat wählen; **Edit → Find… (⌘F)** öffnet die Suche.
 3. Ein Foto doppelklicken: **← / →** wechseln das Medium, **Escape** schließt die Großansicht. Bei Videos startet **Leertaste** die Wiedergabe.
-4. **View** enthält Vorschaugröße und Beschnitt, **Edit → Tags and Albums…** die Tagverwaltung.
+4. **View** enthält Vorschaugröße und Beschnitt, **Edit → Tags…** die Tagverwaltung.
 5. **File → Import…** importiert in die geöffnete Bibliothek, **File → Find Duplicates…** öffnet die separate Duplikatsuche; **PhotoSuite → Settings… (⌘,)** öffnet die Einstellungen.
 
 Links stehen die im gewählten Zeitraum verfügbaren Tags alphabetisch untereinander. Mehrere ausgewählte Tags werden mit **UND** verknüpft: Ein Medium muss alle besitzen. Erneuter Klick wählt ab, **Reset** hebt den Filter auf. Ohne Auswahl bleiben auch ungetaggte Medien sichtbar. Im Raster wählt ein Klick, Cmd-Klick ergänzt die Auswahl und Shift-Klick markiert einen Bereich. Das Kontextmenü bearbeitet Tags für die gesamte Auswahl oder verschiebt sie nach Bestätigung in den macOS-Papierkorb.
@@ -61,14 +61,13 @@ Bibliothek/
 ├── 2026/audio/comments/com_20261114_130000.m4a
 └── yaml/
     ├── settings.yaml
-    ├── tags.yaml
-    ├── tag-definitions.yaml
-    ├── comments-index.yaml
+    ├── runtime.yaml
+    ├── library.sqlite
     ├── 1980/09/img_19800916_035811.jpg.yaml
     └── 2026/11/com_20261114_130000.m4a.yaml
 ```
 
-Dateibezogene YAMLs liegen einheitlich unter **`yaml/Jahr/Monat/<Dateiname.ext>.yaml`**. Sie enthalten Tags und gegebenenfalls Kommentarverweise. Die Gesamtindizes lassen sich daraus neu aufbauen. Bibliothekspfad und globale Whisper-Auswahl bleiben lokal in den macOS-Preferences; Modelle liegen im appweiten Application Support.
+Dateibezogene YAMLs liegen einheitlich unter **`yaml/Jahr/Monat/<Dateiname.ext>.yaml`**. Sie enthalten Tags, Kommentarverweise und Transkripte. **SQLite ist ausschließlich ein neu aufbaubarer Index** für Tags, Kommentare, Aufträge und Audiolängen. Einstellungen und Betriebszustände bleiben lesbare YAMLs; es gibt keine Albumkennzeichnungen. Unter Settings → Allgemein lässt sich die Datenbank vollständig neu aufbauen. Bibliothekspfad und globale Whisper-Auswahl bleiben lokal in den macOS-Preferences; Modelle liegen im appweiten Application Support.
 
 **Import kopiert und löscht keine Quelldateien.** Quellen können erst in einem getrennten, ausdrücklich bestätigten Schritt nach erneutem Bytevergleich in den Papierkorb verschoben werden. Auch Duplikatentfernung erfordert Bestätigung. Optionales Speichern manueller JPEG-Drehungen verändert EXIF im Original ohne Neukompression oder dauerhaftes Backup. Verwaltungs-YAMLs werden unabhängig vom Nur-Lesen-Modus der Medien gespeichert.
 
@@ -98,3 +97,5 @@ cargo build --workspace
 - [Projektregeln](AGENTS.md)
 
 **Lizenz:** [GNU GPL v3](LICENSE).
+
+Unter **PhotoSuite → Settings… → Geodaten** lässt sich GeoNames cities500 für alle Bibliotheken herunterladen und vorbereiten. Der Dialog zeigt Speicherorte und Fortschritt. In diesem ersten Schritt erfolgt noch keine Ortszuordnung.

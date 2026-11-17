@@ -1,4 +1,4 @@
-//! In-memory tags/albums, a bounded serial persistence worker and explicit failure state.
+//! In-memory tags, a bounded serial persistence worker and explicit failure state.
 use crate::domain::{
     Media,
     tags::{LibraryFile, TagCatalog},
@@ -39,20 +39,6 @@ pub trait CatalogRepository: Send + Sync + 'static {
         _cancel: &std::sync::atomic::AtomicBool,
     ) -> Result<Vec<FileTags>, String> {
         Err("Einzeldateien nicht verfügbar".into())
-    }
-    fn load_definitions(&self, _root: &Path) -> Result<StoredCatalog, String> {
-        Ok(StoredCatalog {
-            catalog: Default::default(),
-            revision: None,
-        })
-    }
-    fn save_definitions(
-        &self,
-        _root: &Path,
-        _catalog: &TagCatalog,
-        _expected: Option<&[u8]>,
-    ) -> Result<(), String> {
-        Ok(())
     }
     fn index_revision(&self, root: &Path) -> Result<Option<Vec<u8>>, String> {
         self.load(root).map(|s| s.revision)
@@ -97,10 +83,6 @@ pub enum Action {
         tag: String,
         file: LibraryFile,
         present: bool,
-    },
-    Album {
-        tag: String,
-        enabled: bool,
     },
 }
 pub mod index;
@@ -261,11 +243,8 @@ impl OrganizationSession {
                 catalog.assign(&tag, file, present)?;
                 Change::Updated
             }
-            Action::Album { tag, enabled } => {
-                catalog.set_album(&tag, enabled)?;
-                Change::Updated
-            }
         };
+        catalog.prune_empty();
         if self.catalog.as_deref() == Some(&catalog) {
             return Ok(change);
         }
@@ -337,6 +316,7 @@ impl OrganizationSession {
             &self.automatic_audio,
             self.automatic_complete,
         );
+        catalog.prune_empty();
         if self.catalog.as_deref() == Some(&catalog) {
             return Ok(());
         }
@@ -635,10 +615,9 @@ mod tests {
         );
         assert_eq!(session.version(), version);
         session
-            .apply(Action::AssignMany {
-                tag: "URLAUB".into(),
+            .apply(Action::CreateMany {
+                name: "URLAUB".into(),
                 files: files.clone(),
-                present: true,
             })
             .unwrap();
         wait(&mut session, |s| !s.saving());
@@ -726,6 +705,12 @@ mod tests {
         )
         .unwrap();
         tags.create("Familie").unwrap();
+        tags.assign(
+            "familie",
+            LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap(),
+            true,
+        )
+        .unwrap();
         *repository.catalog.lock().unwrap() = tags;
         let mut comments = CommentCatalog::default();
         let photo = LibraryFile::new("2008/09/img_20080916_035811.jpg".into()).unwrap();
@@ -829,7 +814,7 @@ mod tests {
             session
                 .apply(Action::Create {
                     name: "  Familie  ".into(),
-                    file: None
+                    file: Some(LibraryFile::new("2023/01/test.jpg".into()).unwrap())
                 })
                 .unwrap(),
             Change::Created("familie".into())
@@ -843,7 +828,7 @@ mod tests {
             session
                 .apply(Action::Create {
                     name: format!("tag{i}"),
-                    file: None,
+                    file: Some(LibraryFile::new("2023/01/test.jpg".into()).unwrap()),
                 })
                 .unwrap();
         }
@@ -917,12 +902,6 @@ mod tests {
             })
             .unwrap();
         session
-            .apply(Action::Album {
-                tag: "Urlaub".into(),
-                enabled: true,
-            })
-            .unwrap();
-        session
             .apply(Action::Assign {
                 tag: "Urlaub".into(),
                 file: session
@@ -931,7 +910,6 @@ mod tests {
                 present: true,
             })
             .unwrap();
-        assert!(session.catalog().unwrap().albums().contains("urlaub"));
         let items = vec![
             Media::from_path("/photos/2023/01/a.jpg".into(), "2023/01".into()).unwrap(),
             Media::from_path("/photos/2024/01/a.jpg".into(), "2024/01".into()).unwrap(),
@@ -980,7 +958,7 @@ mod tests {
         session
             .apply(Action::Create {
                 name: "keep".into(),
-                file: None,
+                file: Some(LibraryFile::new("2023/01/test.jpg".into()).unwrap()),
             })
             .unwrap();
         wait(&mut session, |s| !s.saving());
@@ -996,7 +974,7 @@ mod tests {
         session
             .apply(Action::Create {
                 name: "discard".into(),
-                file: None,
+                file: Some(LibraryFile::new("2023/01/test.jpg".into()).unwrap()),
             })
             .unwrap();
         wait(&mut session, |s| !s.saving());
@@ -1015,17 +993,17 @@ mod tests {
         session
             .apply(Action::Create {
                 name: "a".into(),
-                file: None,
-            })
-            .unwrap();
-        session
-            .apply(Action::Album {
-                tag: "a".into(),
-                enabled: true,
+                file: Some(LibraryFile::new("2023/01/test.jpg".into()).unwrap()),
             })
             .unwrap();
         drop(session);
-        assert!(repository.catalog.lock().unwrap().albums().contains("a"));
+        assert!(
+            repository
+                .catalog
+                .lock()
+                .unwrap()
+                .contains("a", "2023/01/test.jpg")
+        );
     }
     #[test]
     fn worker_failure_finishes_loading_and_never_enables_editing() {
@@ -1046,7 +1024,7 @@ mod tests {
             session
                 .apply(Action::Create {
                     name: "a".into(),
-                    file: None
+                    file: Some(LibraryFile::new("2023/01/test.jpg".into()).unwrap())
                 })
                 .is_err()
         );

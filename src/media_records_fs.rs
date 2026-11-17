@@ -18,6 +18,15 @@ pub(crate) struct Record {
     pub comments: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub transcripts: BTreeMap<String, crate::transcript_codec::TranscriptDto>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub transcription_failures: BTreeMap<String, Failure>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Failure {
+    pub source_bytes: u64,
+    pub source_modified: String,
+    pub error: String,
 }
 impl Record {
     pub fn new(file: &LibraryFile) -> Self {
@@ -27,6 +36,7 @@ impl Record {
             tags: None,
             comments: Default::default(),
             transcripts: Default::default(),
+            transcription_failures: Default::default(),
         }
     }
 }
@@ -52,6 +62,19 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Record, String> {
         }
         transcript.value()?;
     }
+    for (source, failure) in &record.transcription_failures {
+        let source = LibraryFile::new(source.clone())?;
+        if crate::domain::Media::from_audio_asset(source.as_str().into(), String::new()).is_none()
+            || failure.error.chars().count() > 8192
+            || failure.error.is_empty()
+        {
+            return Err("Ungültiger Transkriptionsfehler".into());
+        }
+        crate::domain::transcript::SourceVersion::new(
+            failure.source_bytes,
+            failure.source_modified.clone(),
+        )?;
+    }
     let mut comments = crate::domain::comments::CommentCatalog::default();
     for (id, audio) in &record.comments {
         comments.insert(crate::domain::comments::Comment::new(
@@ -65,6 +88,15 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Record, String> {
         .values()
         .map(|c| (c.id().to_owned(), c.audio().as_str().to_owned()))
         .collect();
+    for source in record
+        .transcripts
+        .keys()
+        .chain(record.transcription_failures.keys())
+    {
+        if source != &record.file && !record.comments.values().any(|audio| audio == source) {
+            return Err("Transkriptquelle ist dem Medien-YAML nicht zugeordnet".into());
+        }
+    }
     Ok(record)
 }
 pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, String> {
@@ -203,7 +235,7 @@ mod tests {
         write(root.path(), &a, &record, None).unwrap();
         let destination = path(root.path(), &a, false).unwrap();
         let before = fs::read(&destination).unwrap();
-        let repository = crate::tag_store::YamlTags::default();
+        let repository = crate::tag_store::SqliteTags::default();
         assert!(repository.read_file_tags(root.path(), &b).is_err());
         assert!(
             repository

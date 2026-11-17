@@ -56,7 +56,8 @@ impl Suite {
         });
         self.transcription_queue.set_model(model);
         self.transcription_queue.set_hold(
-            self.comments.has_unsaved()
+            self.index_maintenance.busy()
+                || self.comments.has_unsaved()
                 || self.comments.is_saving()
                 || self.services.work_priority.audio_active(),
         );

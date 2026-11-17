@@ -7,7 +7,7 @@ impl super::Suite {
         }
         let previous_group = self.group.clone();
         let previous_tags = self.tag_view.filters.clone();
-        egui::SidePanel::left("albums")
+        egui::SidePanel::left("library")
             .default_width(180.).min_width(120.).max_width((ctx.content_rect().width() * 0.4).clamp(120., 260.))
             .frame(theme::panel(theme::SURFACE, 8))
             .show(ctx, |ui| {
@@ -54,8 +54,12 @@ impl super::Suite {
                     }
                     self.prepare_tag_filter();
                     let tags = self.tag_view.options_cache.as_ref().map(|c| c.tags.clone()).unwrap_or_default();
-                    ui.add_space(12.);theme::sidebar_heading(ui,"Tags");ui.add_space(8.);
-                    if ui.add_enabled(!self.tag_view.filters.is_empty(), egui::Button::new("Reset")).clicked() { self.tag_view.filters.clear(); }
+                    ui.add_space(12.);
+                    ui.horizontal(|ui| {
+                        theme::sidebar_heading(ui,"Tags");
+                        if ui.add_enabled(!self.tag_view.filters.is_empty(), egui::Button::new("Reset").min_size(egui::vec2(0.,theme::BADGE_HEIGHT))).clicked() { self.tag_view.filters.clear(); }
+                    });
+                    ui.add_space(8.);
                     for tag in tags {
                         let selected = self.tag_view.filters.contains(&tag);
                         if theme::tag_navigation(ui, selected, &tag).on_hover_text(format!("{tag}\nNur Medien mit allen ausgewählten Tags anzeigen.")).clicked()

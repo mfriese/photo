@@ -15,12 +15,16 @@ mod duplicates_ui;
 mod duration_cache_fs;
 mod exiftool;
 mod file_dates_fs;
+mod geodata_fs;
+mod geodata_ui;
 mod image_loader;
 mod import_cleanup_fs;
 mod import_cleanup_ui;
 mod import_fs;
 mod import_ui;
 mod infrastructure;
+mod library_db;
+mod library_index_fs;
 mod library_preferences_fs;
 mod media_records_fs;
 mod media_trash_fs;
@@ -30,6 +34,7 @@ mod muda_menu;
 mod options_ui;
 mod preferences_codec;
 mod presentation;
+mod runtime_state_fs;
 mod staging_fs;
 mod storyboard_ui;
 mod tag_store;
@@ -88,29 +93,49 @@ fn main() -> eframe::Result {
         tool: exiftool.clone(),
     });
     let model_transport = std::sync::Arc::new(whisper_models_native::NativeModelTransport);
+    let database = std::sync::Arc::new(library_db::Database);
     let services = application::Services {
+        index_rebuilder: std::sync::Arc::new(library_index_fs::SqliteRebuilder {
+            database: database.clone(),
+            priority: priority.clone(),
+        }),
         transcription_engine: std::sync::Arc::new(transcription_native::NativeEngine::new(
             model_transport.clone(),
         )),
-        transcription_queue: std::sync::Arc::new(transcription_queue_fs::YamlTranscriptionQueue),
+        transcription_queue: std::sync::Arc::new(
+            transcription_queue_fs::SqliteTranscriptionQueue {
+                database: database.clone(),
+                priority: priority.clone(),
+            },
+        ),
         transcription_power: std::sync::Arc::new(transcription_native::NativePower),
         transcription: std::sync::Arc::new(transcription_fs::WhisperModels::new(
             std::env::var_os("HOME")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default(),
+            model_transport.clone(),
+        )),
+        geodata: std::sync::Arc::new(geodata_fs::GeoData::new(
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default(),
             model_transport,
         )),
-        duration_cache: Some(std::sync::Arc::new(duration_cache_fs::YamlDurations)),
+        duration_cache: Some(std::sync::Arc::new(duration_cache_fs::SqliteDurations {
+            database: database.clone(),
+        })),
         comment_media: std::sync::Arc::new(comments_fs::CommentFiles {
             audio: audio_source.clone(),
             copier: importer.clone(),
         }),
-        comments: std::sync::Arc::new(comments_fs::YamlComments {
+        comments: std::sync::Arc::new(comments_fs::SqliteComments {
+            database: database.clone(),
             priority: priority.clone(),
         }),
         recorder: std::sync::Arc::new(comment_recorder::NativeCommentRecorder::new()),
         media_dates: importer.clone(),
-        organization: std::sync::Arc::new(tag_store::YamlTags {
+        organization: std::sync::Arc::new(tag_store::SqliteTags {
+            database: database.clone(),
             priority: priority.clone(),
         }),
         work_priority: priority.clone(),

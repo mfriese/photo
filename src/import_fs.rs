@@ -400,7 +400,7 @@ mod tests {
                 target.path().into(),
                 preview,
                 Some(import::TaggingOptions {
-                    repository: Arc::new(crate::tag_store::YamlTags::default()),
+                    repository: Arc::new(crate::tag_store::SqliteTags::default()),
                     tags,
                 }),
             );
@@ -440,11 +440,11 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        let repo = crate::tag_store::YamlTags::default();
+        let repo = crate::tag_store::SqliteTags::default();
         let stored = repo.load(target.path()).unwrap();
         assert!(stored.catalog.contains("scan", relative));
         assert!(stored.catalog.contains("dia", relative));
-        let index_before = fs::read(target.path().join("yaml/tags.yaml")).unwrap();
+        let index_before = fs::read(target.path().join(crate::library_db::FILE)).unwrap();
         let source_yaml = target
             .path()
             .join("yaml/2008/09/img_20080916_035811.jpg.yaml");
@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(skipped.decision, import::FileDecision::SkippedIdentical);
         assert!(skipped.tags.is_empty());
         assert_eq!(
-            fs::read(target.path().join("yaml/tags.yaml")).unwrap(),
+            fs::read(target.path().join(crate::library_db::FILE)).unwrap(),
             index_before
         );
         assert_eq!(fs::read(source_yaml).unwrap(), yaml_before);
@@ -584,7 +584,7 @@ mod tests {
         }
         // Tags still use flat year/month YAMLs and reference the actual scans media path.
         let tagged_target = tempfile::tempdir().unwrap();
-        let tags = Arc::new(crate::tag_store::YamlTags::default());
+        let tags = Arc::new(crate::tag_store::SqliteTags::default());
         let job = import::start_with_options(
             Arc::new(adapter()),
             source.path().into(),

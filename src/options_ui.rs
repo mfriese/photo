@@ -34,18 +34,24 @@ pub enum SettingsPage {
     #[default]
     General,
     Transcription,
+    Geodata,
 }
 #[derive(Default)]
 pub struct SettingsView {
     pub page: SettingsPage,
     pub transcription: crate::transcription_ui::View,
+    pub geodata: crate::geodata_ui::View,
 }
 pub struct SettingsContext<'a> {
+    pub index: Option<&'a mut photosuite_application::library_index::Session>,
+    pub root: Option<&'a std::path::Path>,
+    pub can_rebuild_index: bool,
     pub saving: bool,
     pub bindings: &'a mut bool,
     pub error: &'a str,
     pub comments: CommentIndexStatus<'a>,
     pub library_ready: bool,
+    pub geodata: Option<&'a mut photosuite_application::geodata::Session>,
     pub transcription: Option<&'a mut photosuite_application::transcription::ModelSession>,
 }
 pub fn show(
@@ -57,11 +63,15 @@ pub fn show(
 ) -> Option<CommentIndexAction> {
     let SettingsContext {
         saving,
+        index,
+        root,
+        can_rebuild_index,
         bindings,
         error,
         comments,
         library_ready,
         transcription,
+        geodata,
     } = state;
     let mut action = None;
     egui::Window::new("Einstellungen").open(open).default_width(480.).default_height(720.)
@@ -70,7 +80,13 @@ pub fn show(
             ui.horizontal_wrapped(|ui|{
                 ui.selectable_value(&mut view.page,SettingsPage::General,"Allgemein");
                 ui.selectable_value(&mut view.page,SettingsPage::Transcription,"Transkription");
+                ui.selectable_value(&mut view.page,SettingsPage::Geodata,"Geodaten");
             });ui.separator();
+            if view.page==SettingsPage::Geodata {
+                if let Some(session)=geodata {crate::geodata_ui::show(ui,session,&mut view.geodata);}
+                else {ui.label("Geodatenvorbereitung nicht verfügbar.");}
+                return;
+            }
             if view.page==SettingsPage::Transcription {
                 if let Some(session)=transcription{crate::transcription_ui::show(ui,session,&mut view.transcription);}
                 else{ui.label("Transkriptionsvorbereitung nicht verfügbar.");}
@@ -97,6 +113,13 @@ pub fn show(
                 ui.small("Deaktiviert: Manuelle Drehungen gelten nur für die Sitzung.");
             });
             section(ui,"Bedienung",|ui|{if ui.button("Befehle & Tastenkürzel …").clicked(){*bindings=true;}});
+            if let Some(index)=index {section(ui,"Bibliotheksdatenbank",|ui|{
+                ui.label("yaml/library.sqlite enthält ausschließlich neu aufbaubare Indizes und Caches.");
+                if let Some(root)=root {ui.add(egui::Label::new(root.join("yaml/library.sqlite").display().to_string()).truncate()).on_hover_text(root.join("yaml/library.sqlite").display().to_string());}
+                if ui.add_enabled(root.is_some() && can_rebuild_index && !index.busy(),egui::Button::new("Datenbank aus Einzel-YAMLs neu aufbauen")).clicked() && let Some(root)=root {index.start(root.into());}
+                if index.busy(){ui.spinner();ui.label(format!("{} Einzel-YAMLs geprüft",index.checked()));if ui.button("Neuaufbau abbrechen").clicked(){index.cancel();}}
+                if !index.error().is_empty(){ui.colored_label(crate::theme::DANGER,index.error());}
+            });}
             section(ui,"Audiokommentare",|ui|{
                 ui.label("Einzelne YAML-Dateien unter yaml/Jahr/Monat sind die dauerhafte Quelle der Zuordnungen.");
                 ui.small("Der Neuaufbau durchsucht die Bibliothek und ersetzt den Gesamtindex erst nach vollständiger Prüfung. Medien bleiben unverändert.");
@@ -137,12 +160,16 @@ mod tests {
                             &mut p,
                             &mut SettingsView::default(),
                             SettingsContext {
+                                index: None,
+                                root: None,
+                                can_rebuild_index: false,
                                 saving: false,
                                 bindings: &mut bindings,
                                 error: "",
                                 comments: CommentIndexStatus::default(),
                                 library_ready: true,
                                 transcription: None,
+                                geodata: None,
                             },
                         );
                     },

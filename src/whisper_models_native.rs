@@ -39,10 +39,11 @@ mod platform {
         i32::from(state.panicked.load(Ordering::Relaxed) || state.cancel.load(Ordering::Relaxed))
     }
     unsafe extern "C" {
-        fn photosuite_model_download(
+        fn photosuite_asset_download(
             url: *const std::ffi::c_char,
             fd: i32,
             expected: u64,
+            limit: u64,
             context: *mut c_void,
             progress: unsafe extern "C" fn(*mut c_void, u64),
             cancel: unsafe extern "C" fn(*mut c_void) -> i32,
@@ -74,6 +75,51 @@ mod platform {
         }
         Ok(file)
     }
+    fn download(
+        url: &str,
+        path: &Path,
+        expected: u64,
+        limit: u64,
+        stop: &AtomicBool,
+        notify: &(dyn Fn(Progress) + Sync),
+    ) -> Result<(), String> {
+        if stop.load(Ordering::Relaxed) {
+            return Err("Abgebrochen".into());
+        }
+        if !url.starts_with("https://") {
+            return Err("Nur HTTPS-Modellquellen sind erlaubt".into());
+        }
+        let file = checked(path, true)?;
+        let url = CString::new(url).map_err(|e| e.to_string())?;
+        let state = Context {
+            cancel: stop,
+            progress: notify,
+            stage: Stage::Downloading,
+            total: expected,
+            panicked: AtomicBool::new(false),
+        };
+        let mut error = [0i8; 1024];
+        // Native call completes all delegate writes before returning; file/context remain borrowed.
+        let status = unsafe {
+            photosuite_asset_download(
+                url.as_ptr(),
+                file.as_raw_fd(),
+                expected,
+                limit,
+                (&state as *const Context<'_>).cast_mut().cast(),
+                progress,
+                cancel,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        if status != 0 {
+            return Err(unsafe { CStr::from_ptr(error.as_ptr()) }
+                .to_string_lossy()
+                .into_owned());
+        }
+        file.sync_all().map_err(|e| e.to_string())
+    }
     impl ModelTransport for NativeModelTransport {
         fn download(
             &self,
@@ -83,41 +129,17 @@ mod platform {
             stop: &AtomicBool,
             notify: &(dyn Fn(Progress) + Sync),
         ) -> Result<(), String> {
-            if stop.load(Ordering::Relaxed) {
-                return Err("Abgebrochen".into());
-            }
-            if !url.starts_with("https://") {
-                return Err("Nur HTTPS-Modellquellen sind erlaubt".into());
-            }
-            let file = checked(path, true)?;
-            let url = CString::new(url).map_err(|e| e.to_string())?;
-            let state = Context {
-                cancel: stop,
-                progress: notify,
-                stage: Stage::Downloading,
-                total: expected,
-                panicked: AtomicBool::new(false),
-            };
-            let mut error = [0i8; 1024];
-            // Native call completes all delegate writes before returning; file/context remain borrowed.
-            let status = unsafe {
-                photosuite_model_download(
-                    url.as_ptr(),
-                    file.as_raw_fd(),
-                    expected,
-                    (&state as *const Context<'_>).cast_mut().cast(),
-                    progress,
-                    cancel,
-                    error.as_mut_ptr(),
-                    error.len(),
-                )
-            };
-            if status != 0 {
-                return Err(unsafe { CStr::from_ptr(error.as_ptr()) }
-                    .to_string_lossy()
-                    .into_owned());
-            }
-            file.sync_all().map_err(|e| e.to_string())
+            download(url, path, expected, expected, stop, notify)
+        }
+        fn download_bounded(
+            &self,
+            url: &str,
+            path: &Path,
+            limit: u64,
+            stop: &AtomicBool,
+            notify: &(dyn Fn(Progress) + Sync),
+        ) -> Result<(), String> {
+            download(url, path, 0, limit, stop, notify)
         }
         fn sha256(
             &self,
@@ -169,6 +191,16 @@ impl ModelTransport for NativeModelTransport {
         _: &(dyn Fn(Progress) + Sync),
     ) -> Result<(), String> {
         Err("Modelldownload derzeit nur auf macOS unterstützt".into())
+    }
+    fn download_bounded(
+        &self,
+        _: &str,
+        _: &Path,
+        _: u64,
+        _: &AtomicBool,
+        _: &(dyn Fn(Progress) + Sync),
+    ) -> Result<(), String> {
+        Err("Downloads derzeit nur auf macOS unterstützt".into())
     }
     fn sha256(
         &self,

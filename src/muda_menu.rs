@@ -126,7 +126,7 @@ impl MudaMenu {
         }
         edit.append(&PredefinedMenuItem::separator())
             .map_err(|e| e.to_string())?;
-        add(&edit, &mut items, Action::Tags, "Tags and Albums…", false)?;
+        add(&edit, &mut items, Action::Tags, "Tags…", false)?;
         add(
             &edit,
             &mut items,

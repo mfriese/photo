@@ -277,6 +277,16 @@ mod tests {
             }
             Ok(())
         }
+        fn download_bounded(
+            &self,
+            _: &str,
+            _: &std::path::Path,
+            _: u64,
+            _: &AtomicBool,
+            _: &(dyn Fn(Progress) + Sync),
+        ) -> Result<(), String> {
+            Err("unused".into())
+        }
         fn sha256(
             &self,
             _: &Path,

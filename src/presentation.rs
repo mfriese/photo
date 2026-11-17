@@ -25,6 +25,8 @@ pub struct Suite {
     transcription_seen: Option<transcription_control::Seen>,
     transcription_complete: bool,
     transcription: photosuite_application::transcription::ModelSession,
+    geodata: photosuite_application::geodata::Session,
+    index_maintenance: photosuite_application::library_index::Session,
     settings_view: crate::options_ui::SettingsView,
     gallery: gallery::GalleryState,
     comments: photosuite_application::comments::CommentSession,
@@ -80,6 +82,9 @@ impl Suite {
         self.load_library(path, remember, false);
     }
     fn load_library(&mut self, path: PathBuf, remember: bool, refresh_tags: bool) {
+        if self.root.as_ref() != Some(&path) {
+            self.index_maintenance.cancel();
+        }
         let path = if path.is_absolute() {
             path
         } else {
@@ -210,7 +215,15 @@ impl Suite {
             &mut self.settings_view,
             crate::options_ui::SettingsContext {
                 library_ready,
+                index: Some(&mut self.index_maintenance),
+                root: self.root.as_deref(),
+                can_rebuild_index: !self.comments.busy()
+                    && !self.comments.has_unsaved()
+                    && !self.organization.dirty()
+                    && !self.organization.saving()
+                    && !self.transcription_queue.busy(),
                 transcription: Some(&mut self.transcription),
+                geodata: Some(&mut self.geodata),
                 saving: self.editor.is_saving(),
                 bindings: &mut self.bindings.visible,
                 error: &self.preferences_error,
@@ -227,6 +240,11 @@ impl Suite {
             },
         );
         if let Some(path) = self.settings_view.transcription.take_reveal()
+            && let Err(error) = self.services.opener.reveal(&path)
+        {
+            self.status = error;
+        }
+        if let Some(path) = self.settings_view.geodata.take_reveal()
             && let Err(error) = self.services.opener.reveal(&path)
         {
             self.status = error;
@@ -323,6 +341,19 @@ impl Suite {
 }
 impl eframe::App for Suite {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.index_maintenance.poll();
+        if self.index_maintenance.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        if let Some(root) = self.index_maintenance.take_completed()
+            && self.root.as_ref() == Some(&root)
+        {
+            self.load_library(root, true, true);
+        }
+        self.geodata.poll();
+        if self.geodata.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.transcription.poll();
         if self.transcription.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -516,6 +547,10 @@ pub fn create(
         ),
         transcription_seen: None,
         transcription_complete: false,
+        geodata: photosuite_application::geodata::Session::new(services.geodata.clone()),
+        index_maintenance: photosuite_application::library_index::Session::new(
+            services.index_rebuilder.clone(),
+        ),
         transcription: photosuite_application::transcription::ModelSession::new(
             services.transcription.clone(),
         ),
