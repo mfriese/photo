@@ -1060,8 +1060,10 @@ fn sidebar_lists_all_tags_alphabetically_on_separate_rows() {
     assert!(bounds("Jahre").top() - bounds("Alles").bottom() >= 8.);
     assert!(bounds("2024").top() - bounds("Jahre").bottom() >= 8.);
     assert!(bounds("Tags").top() - bounds("2023").bottom() >= 12.);
-    for heading in ["Tags", "Jahre"] {
+    for heading in ["Tags", "Jahre", "Orte"] {
         assert!(output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text==heading && text.galley.job.sections.iter().all(|section|section.format.font_id.size>=18.))));
+        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text==heading && text.galley.job.sections.iter().all(|section|section.format.color==crate::theme::ACCENT))));
+        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(rect) if rect.fill==crate::theme::RAISED && rect.rect.contains_rect(bounds(heading)) && rect.rect.width()>100. && rect.rect.height()<34.)),"heading needs a compact full-width section strip");
     }
     assert!(
         bounds("a").bottom() < bounds("b").top() && bounds("b").bottom() < bounds("c").top(),

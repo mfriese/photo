@@ -284,23 +284,52 @@ pub fn section_heading(ui: &mut egui::Ui, text: &str) {
             .color(TEXT),
     );
 }
+/// Shared compact section strip; navigation and filter entries remain visually subordinate.
+fn sidebar_section(ui: &mut egui::Ui, title: &str, reset: Option<bool>) -> bool {
+    let section = egui::Frame::new()
+        .fill(RAISED)
+        .corner_radius(4)
+        .inner_margin(egui::Margin::symmetric(4, 3))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(title)
+                        .size(SECTION_HEADING_SIZE)
+                        .strong()
+                        .color(ACCENT),
+                );
+                reset.is_some_and(|enabled| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_enabled(
+                            enabled,
+                            egui::Button::new("Reset").min_size(egui::vec2(0., BADGE_HEIGHT)),
+                        )
+                        .clicked()
+                    })
+                    .inner
+                })
+            })
+            .inner
+        });
+    let rect = section.response.rect;
+    ui.painter().line_segment(
+        [
+            rect.left_top() + egui::vec2(1., 3.),
+            rect.left_bottom() + egui::vec2(1., -3.),
+        ],
+        Stroke::new(2_f32, ACCENT),
+    );
+    ui.painter()
+        .hline(rect.x_range(), rect.bottom(), Stroke::new(1_f32, BORDER));
+    section.inner
+}
 /// Filter heading with a stable trailing reset action across sidebar sections.
 pub fn filter_heading(ui: &mut egui::Ui, title: &str, can_reset: bool) -> bool {
-    ui.horizontal(|ui| {
-        sidebar_heading(ui, title);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_enabled(
-                can_reset,
-                egui::Button::new("Reset").min_size(egui::vec2(0., BADGE_HEIGHT)),
-            )
-            .clicked()
-        })
-        .inner
-    })
-    .inner
+    sidebar_section(ui, title, Some(can_reset))
 }
 pub fn sidebar_heading(ui: &mut egui::Ui, text: &str) {
-    section_heading(ui, text);
+    sidebar_section(ui, text, None);
 }
 /// Shared single-line badge typography; glyph bounds determine width, never height.
 pub fn tag_galley(ui: &egui::Ui, label: &str, width: f32) -> std::sync::Arc<egui::Galley> {
