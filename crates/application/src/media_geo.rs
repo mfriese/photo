@@ -36,7 +36,19 @@ pub struct Snapshot {
     pub position: Position,
     pub resolved: Option<ResolvedPlace>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocatedPhoto {
+    pub photo: LibraryFile,
+    pub country: String,
+    pub place_id: i64,
+    pub place_name: String,
+}
 pub trait Repository: Send + Sync + 'static {
+    /// Reconstructible, resolved photo locations; implementations must not read media YAMLs.
+    fn locations(&self, _root: &Path, _stop: &AtomicBool) -> Result<Vec<LocatedPhoto>, String> {
+        Ok(Vec::new())
+    }
+
     fn inspect(
         &self,
         root: &Path,

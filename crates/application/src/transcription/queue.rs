@@ -456,6 +456,9 @@ impl QueueSession {
             active.cancel.store(true, Ordering::Relaxed);
         }
     }
+    pub fn mode_loaded(&self) -> bool {
+        self.mode_loaded
+    }
     pub fn mode(&self) -> Mode {
         Mode::from_byte(self.mode.load(Ordering::Relaxed))
     }

@@ -48,7 +48,13 @@ impl Selection {
         }
     }
 }
-type Scope = (Option<PathBuf>, Option<String>, String, BTreeSet<String>);
+type Scope = (
+    Option<PathBuf>,
+    Option<String>,
+    String,
+    BTreeSet<String>,
+    BTreeSet<photosuite_application::place_filter::Selection>,
+);
 #[derive(Default)]
 pub(super) struct GalleryState {
     pub selection: Selection,
@@ -65,6 +71,7 @@ impl super::Suite {
             self.group.clone(),
             self.query.clone(),
             self.tag_view.filters.clone(),
+            self.place_filter.selected.clone(),
         );
         if self.gallery.scope.as_ref() != Some(&scope) {
             self.gallery.selection.clear();

@@ -183,6 +183,18 @@ pub(super) fn test_suite() -> Suite {
             adapters.clone(),
         ),
         location_open: false,
+        place_filter: photosuite_application::place_filter::Session::new(
+            adapters.clone(),
+            Arc::default(),
+        ),
+        place_scope: None,
+        place_refresh: None,
+        place_dataset: None,
+        place_options: None,
+        geo_sweep: photosuite_application::geo_sweep::Session::new(
+            adapters.clone(),
+            Arc::default(),
+        ),
         geo_markers: photosuite_application::media_geo::Catalog::new(
             adapters.clone(),
             Arc::default(),
@@ -2591,4 +2603,148 @@ impl photosuite_application::media_geo::Repository for UnusedAdapters {
     ) -> Result<(), String> {
         Err("unused".into())
     }
+}
+
+#[test]
+fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
+    use photosuite_application::{
+        media_geo::{Fingerprint, LocatedPhoto, Repository, ResolvedPlace, Snapshot},
+        place_filter::{Selection, Session},
+    };
+    use std::{path::Path, sync::atomic::AtomicBool};
+    struct Places;
+    impl Repository for Places {
+        fn locations(&self, _: &Path, _: &AtomicBool) -> Result<Vec<LocatedPhoto>, String> {
+            Ok(vec![
+                LocatedPhoto {
+                    photo: crate::domain::tags::LibraryFile::new("2020/01/a.jpg".into()).unwrap(),
+                    country: "DE".into(),
+                    place_id: 1,
+                    place_name: "Berlin".into(),
+                },
+                LocatedPhoto {
+                    photo: crate::domain::tags::LibraryFile::new("2020/01/b.jpg".into()).unwrap(),
+                    country: "FR".into(),
+                    place_id: 2,
+                    place_name: "Paris".into(),
+                },
+            ])
+        }
+        fn inspect(
+            &self,
+            _: &Path,
+            _: &crate::domain::tags::LibraryFile,
+            _: &AtomicBool,
+        ) -> Result<Snapshot, String> {
+            unreachable!()
+        }
+        fn save_place(
+            &self,
+            _: &Path,
+            _: &crate::domain::tags::LibraryFile,
+            _: &Fingerprint,
+            _: &ResolvedPlace,
+            _: &AtomicBool,
+        ) -> Result<(), String> {
+            unreachable!()
+        }
+    }
+    let mut suite = test_suite();
+    let root = std::path::PathBuf::from("/photos");
+    suite.root = Some(root.clone());
+    suite.videos_only = false;
+    suite.items = ["2020/01/a.jpg", "2020/01/b.jpg", "2020/01/c.jpg"]
+        .into_iter()
+        .map(|p| Media::from_path(root.join(p), "2020/01".into()).unwrap())
+        .collect();
+    suite.place_filter = Session::new(Arc::new(Places), Arc::default());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        suite.place_filter.poll(Some(&root));
+        if !suite.place_filter.pending() {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    ctx.style_mut(|s| s.animation_time = 0.);
+    let frame = |suite: &mut Suite, events| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800., 700.),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ctx| suite.library_sidebar(ctx),
+        )
+    };
+    let output = frame(&mut suite, vec![]);
+    let rect = |label: &str| {
+        output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == label => {
+                    Some(t.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    assert!(rect("Orte").top() > rect("Tags").bottom());
+    assert!(rect("DE").top() < rect("Berlin").top());
+    assert!(rect("Berlin").top() < rect("FR").top());
+    let click = |suite: &mut Suite, pos| {
+        let _ = frame(
+            suite,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        frame(
+            suite,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        )
+    };
+    let _ = click(&mut suite, rect("Berlin").center());
+    assert!(suite.place_filter.selected.contains(&Selection::Place(1)));
+    assert_eq!(suite.visible(), vec![0]);
+    assert!(suite.group.is_none());
+    let _ = click(&mut suite, rect("Berlin").center());
+    assert!(suite.place_filter.selected.is_empty());
+    assert_eq!(suite.visible(), vec![0, 1, 2]);
+    let _ = click(&mut suite, rect("DE").center());
+    assert_eq!(suite.visible(), vec![0]);
+    let _ = click(&mut suite, rect("Alles").center());
+    assert!(suite.place_filter.selected.is_empty());
+    assert_eq!(suite.visible(), vec![0, 1, 2]);
+    let _ = click(&mut suite, rect("DE").center());
+    let output = frame(&mut suite, vec![]);
+    let resets: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == "Reset" => Some(t.visual_bounding_rect()),
+            _ => None,
+        })
+        .collect();
+    let _ = click(&mut suite, resets.last().unwrap().center());
+    assert!(suite.place_filter.selected.is_empty());
+    assert_eq!(suite.visible(), vec![0, 1, 2]);
 }

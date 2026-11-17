@@ -49,6 +49,27 @@ fn cancelled(stop: &AtomicBool) -> Result<(), String> {
     }
 }
 impl Repository for SqlitePhotoGeo {
+    fn locations(
+        &self,
+        root: &Path,
+        stop: &AtomicBool,
+    ) -> Result<Vec<photosuite_application::media_geo::LocatedPhoto>, String> {
+        cancelled(stop)?;
+        self.database.transaction(root, |tx| {
+            let mut statement = tx.prepare("SELECT media_path,country_code,place_id,place_name FROM media_geo WHERE status='available' AND place_id IS NOT NULL AND length(country_code)=2 ORDER BY media_path")?;
+            let mut rows = statement.query([])?;
+            let mut locations = Vec::new();
+            while let Some(row) = rows.next()? {
+                if stop.load(Ordering::Relaxed) { return Err(library_db::invalid("Ortsliste abgebrochen")); }
+                locations.push(photosuite_application::media_geo::LocatedPhoto {
+                    photo: LibraryFile::new(row.get(0)?).map_err(library_db::invalid)?,
+                    country: row.get(1)?, place_id: row.get(2)?, place_name: row.get(3)?,
+                });
+            }
+            Ok(locations)
+        })
+    }
+
     fn inspect(
         &self,
         root: &Path,
@@ -139,6 +160,63 @@ mod tests {
         }
     }
     #[test]
+    fn library_sweep_persists_positive_negative_and_invalid_results_without_sidecars() {
+        struct Fixture;
+        impl CoordinateSource for Fixture {
+            fn coordinates(
+                &self,
+                _: &Path,
+                photo: &LibraryFile,
+                _: &AtomicBool,
+            ) -> Result<Option<Coordinates>, String> {
+                match photo.as_str() {
+                    "available.jpg" => Ok(Some(Coordinates::new(0., 0.).unwrap())),
+                    "missing.jpg" => Ok(None),
+                    _ => Err("Ungültige GPS-Daten".into()),
+                }
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let photos = ["available.jpg", "missing.jpg", "invalid.jpg"].map(|name| {
+            fs::write(root.path().join(name), b"original").unwrap();
+            LibraryFile::new(name.into()).unwrap()
+        });
+        let database = Arc::new(Database);
+        let repository = Arc::new(SqlitePhotoGeo {
+            database: database.clone(),
+            coordinates: Arc::new(Fixture),
+        });
+        let mut sweep = photosuite_application::geo_sweep::Session::new(repository, Arc::default());
+        sweep.sync(root.path(), photos.to_vec());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !sweep.complete() {
+            sweep.poll(true);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(sweep.progress().checked, 3);
+        database
+            .transaction(root.path(), |tx| {
+                for status in ["available", "missing", "invalid"] {
+                    let n: i64 = tx.query_row(
+                        "SELECT count(*) FROM media_geo WHERE status=?1",
+                        [status],
+                        |r| r.get(0),
+                    )?;
+                    assert_eq!(n, 1);
+                }
+                Ok(())
+            })
+            .unwrap();
+        for photo in photos {
+            assert!(!root.path().join(photo.metadata_path().unwrap()).exists());
+            assert_eq!(
+                fs::read(root.path().join(photo.as_str())).unwrap(),
+                b"original"
+            );
+        }
+    }
+    #[test]
     fn geo_cache_has_foreign_key_is_searchable_recalculates_after_loss_and_never_writes_yaml() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("photo.jpg"), b"original").unwrap();
@@ -180,6 +258,17 @@ mod tests {
                 .name,
             "Berlin"
         );
+        let locations = repo.locations(root.path(), &stop).unwrap();
+        assert_eq!(locations.len(), 1);
+        assert_eq!(
+            (
+                locations[0].country.as_str(),
+                locations[0].place_name.as_str()
+            ),
+            ("DE", "Berlin")
+        );
+        assert_eq!(locations[0].photo, photo);
+        assert!(repo.locations(root.path(), &AtomicBool::new(true)).is_err());
         database.transaction(root.path(),|tx|{let count:i64=tx.query_row("SELECT count(*) FROM geo_overview WHERE country_code='DE' AND place_name='Berlin'",[],|r|r.get(0))?;assert_eq!(count,1);let target:String=tx.query_row("SELECT \"table\" FROM pragma_foreign_key_list('media_geo')",[],|r|r.get(0))?;assert_eq!(target,"media");Ok(())}).unwrap();
         assert!(!root.path().join(photo.metadata_path().unwrap()).exists());
         assert_eq!(

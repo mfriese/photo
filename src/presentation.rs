@@ -30,6 +30,12 @@ pub struct Suite {
     photo_location: photosuite_application::photo_location::Session,
     location_open: bool,
     geo_markers: photosuite_application::media_geo::Catalog,
+    geo_sweep: photosuite_application::geo_sweep::Session,
+    place_filter: photosuite_application::place_filter::Session,
+    place_scope: Option<(Option<PathBuf>, Option<String>)>,
+    place_refresh: Option<(usize, bool, usize)>,
+    place_dataset: Option<String>,
+    place_options: Option<library::PlaceOptionsCache>,
     index_maintenance: photosuite_application::library_index::Session,
     settings_view: crate::options_ui::SettingsView,
     gallery: gallery::GalleryState,
@@ -119,6 +125,11 @@ impl Suite {
             startup.cancel_for_navigation();
         }
         self.transcription_queue.reset();
+        self.geo_sweep.reset();
+        self.place_filter.reset();
+        self.place_scope = None;
+        self.place_refresh = None;
+        self.place_options = None;
         self.transcription_seen = None;
         self.transcription_complete = false;
         self.audio_preparation.reset();
@@ -324,10 +335,7 @@ impl Suite {
     }
     fn visible(&self) -> Vec<usize> {
         let base = self.unfiltered_visible();
-        if self.tag_view.filters.is_empty() {
-            return base;
-        }
-        match (self.organization.root(), self.organization.catalog()) {
+        let tagged = match (self.organization.root(), self.organization.catalog()) {
             (Some(root), Some(catalog)) => photosuite_application::organization::filter_all(
                 &self.items,
                 root,
@@ -336,8 +344,18 @@ impl Suite {
                 &self.tag_view.filters,
             ),
             _ => base,
+        };
+        match &self.root {
+            Some(root) => self.place_filter.catalog().filter(
+                &self.items,
+                root,
+                &tagged,
+                &self.place_filter.selected,
+            ),
+            None => tagged,
         }
     }
+
     fn unfiltered_visible(&self) -> Vec<usize> {
         crate::application::visible(
             &self.items,
@@ -358,6 +376,19 @@ impl eframe::App for Suite {
         {
             self.load_library(root, true, true);
         }
+        let place_refresh = (
+            self.geo_sweep.progress().checked,
+            self.photo_location.busy(),
+            self.items.len(),
+        );
+        if self.place_refresh != Some(place_refresh) {
+            self.place_filter.refresh();
+            self.place_refresh = Some(place_refresh);
+        }
+        self.place_filter.poll(self.root.as_deref());
+        if self.place_filter.pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.geo_markers.poll();
         if self.geo_markers.loading() {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
@@ -367,6 +398,17 @@ impl eframe::App for Suite {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         self.geodata.poll();
+        let dataset = self
+            .geodata
+            .prepared()
+            .filter(|p| p.enabled && p.ready)
+            .and_then(|p| p.database.as_ref())
+            .map(|db| db.source_sha256.clone());
+        if dataset != self.place_dataset {
+            self.place_dataset = dataset;
+            self.geo_sweep.retry();
+            self.place_filter.refresh();
+        }
         if self.geodata.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
@@ -571,6 +613,19 @@ pub fn create(
             services.places.clone(),
         ),
         location_open: false,
+        geo_sweep: photosuite_application::geo_sweep::Session::new(
+            services.media_geo.clone(),
+            services.work_priority.clone(),
+        )
+        .with_places(services.geodata.clone(), services.places.clone()),
+        place_filter: photosuite_application::place_filter::Session::new(
+            services.media_geo.clone(),
+            services.work_priority.clone(),
+        ),
+        place_scope: None,
+        place_refresh: None,
+        place_dataset: None,
+        place_options: None,
         geo_markers: photosuite_application::media_geo::Catalog::new(
             services.media_geo.clone(),
             services.work_priority.clone(),

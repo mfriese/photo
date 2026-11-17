@@ -45,6 +45,15 @@ impl Suite {
                 }
                 self.transcription_queue
                     .sync(root, candidates, self.transcription_complete);
+                if self.transcription_complete {
+                    let photos = self
+                        .items
+                        .iter()
+                        .filter(|m| m.is_photo())
+                        .filter_map(|m| self.organization.file(m.path()).ok())
+                        .collect();
+                    self.geo_sweep.sync(root, photos);
+                }
                 self.transcription_seen = Some(observed);
             }
         }
@@ -55,14 +64,20 @@ impl Suite {
             })
         });
         self.transcription_queue.set_model(model);
+        self.geo_sweep.poll(
+            self.transcription_queue.mode_loaded()
+                && self.transcription_queue.mode() == Mode::Running
+                && !self.index_maintenance.busy(),
+        );
         self.transcription_queue.set_hold(
-            self.index_maintenance.busy()
+            (self.root.is_some() && (!self.transcription_complete || !self.geo_sweep.complete()))
+                || self.index_maintenance.busy()
                 || self.comments.has_unsaved()
                 || self.comments.is_saving()
                 || self.services.work_priority.audio_active(),
         );
         self.transcription_queue.poll();
-        if self.transcription_queue.busy() {
+        if self.transcription_queue.busy() || self.geo_sweep.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
     }
@@ -70,9 +85,9 @@ impl Suite {
         let model_busy = self.transcription.busy() && self.transcription_queue.waiting_for_model();
         let references_busy = self.comments.is_loading();
         let references_wait = self.root.is_some() && !self.comments.is_loaded();
-        let state = if model_busy || references_busy {
+        let state = if model_busy || references_busy || self.geo_sweep.busy() {
             Indicator::Busy
-        } else if references_wait {
+        } else if references_wait || (self.root.is_some() && !self.geo_sweep.complete()) {
             Indicator::Paused
         } else {
             self.transcription_queue.indicator()
@@ -122,20 +137,34 @@ impl Suite {
         ui.strong("Transkription · gesamte Bibliothek");
         let (done, total, failed) = self.transcription_queue.counts();
         ui.label(format!("Fertig: {done} / {total} · Fehler: {failed}"));
-        let status = if references_busy {
+        let geo = self.geo_sweep.progress();
+        ui.label(format!(
+            "GPS: {} / {} · mit Koordinaten: {} · ohne: {} · Fehler: {}",
+            geo.checked, geo.total, geo.available, geo.missing, geo.failed
+        ));
+        if geo.total > 0 && !self.geo_sweep.complete() {
+            ui.add(egui::ProgressBar::new(geo.checked as f32 / geo.total as f32).show_percentage());
+        }
+        let status = if self.geo_sweep.busy() {
+            "Fotos werden vor der Transkription auf GPS geprüft"
+        } else if self.root.is_some() && !self.transcription_complete {
+            "Bibliotheksinventar wird geladen"
+        } else if references_busy {
             "Kommentarzuordnungen werden geladen"
         } else if references_wait {
             "Wartet auf gültige Kommentarzuordnungen"
         } else if model_busy {
             "Modell wird vorbereitet"
-        } else if self.transcription_queue.held() {
-            "Wartet auf die laufende Audioaufnahme"
-        } else if self.transcription_queue.waiting_for_model() {
-            "Wartet auf ein geprüftes Whisper-Modell"
-        } else if self.transcription_queue.mode() == Mode::Stopped {
-            "Gestoppt"
         } else if self.transcription_queue.mode() == Mode::Paused {
             "Pausiert"
+        } else if self.transcription_queue.mode() == Mode::Stopped {
+            "Gestoppt"
+        } else if !self.geo_sweep.error().is_empty() {
+            "GPS-Prüfung fehlgeschlagen; erneute Prüfung erforderlich"
+        } else if self.transcription_queue.held() {
+            "Wartet auf GPS-Prüfung, Indexpflege oder Audioaufnahme"
+        } else if self.transcription_queue.waiting_for_model() {
+            "Wartet auf ein geprüftes Whisper-Modell"
         } else if self.transcription_queue.busy() {
             match self.transcription_queue.progress().phase {
                 Phase::Planning => "Mediendateien und gespeicherte Aufträge werden geprüft",
@@ -149,7 +178,16 @@ impl Suite {
         ui.label(status);
 
         let failures = self.transcription_queue.failures();
-        let mut errors = Vec::new();
+        let mut errors = self
+            .geo_sweep
+            .progress()
+            .errors
+            .iter()
+            .map(|(p, e)| (p.as_str(), e.as_str()))
+            .collect::<Vec<_>>();
+        if !self.geo_sweep.error().is_empty() {
+            errors.push(("GPS-Prüfung", self.geo_sweep.error()));
+        }
         if references_wait && !self.comments.error().is_empty() {
             errors.push(("Kommentarzuordnungen", self.comments.error()));
         }
@@ -157,6 +195,10 @@ impl Suite {
             errors.push(("Verarbeitung", self.transcription_queue.error()));
         }
         errors.extend(failures.iter().map(|(path, error)| (path.as_str(), *error)));
+        if let Some(photo) = &self.geo_sweep.progress().current {
+            ui.add(egui::Label::new(photo.as_str()).truncate())
+                .on_hover_text(photo.as_str());
+        }
         let has_text = !self.transcription_queue.log().is_empty();
         let section_id = ui.id().with("transcription_section");
         let mut section = ui.data_mut(|d| d.get_temp::<u8>(section_id).unwrap_or(0));
@@ -220,7 +262,10 @@ impl Suite {
                 "Fortsetzen"
             };
             if ui
-                .add_enabled(total > done, egui::Button::new(label))
+                .add_enabled(
+                    total > done || !self.geo_sweep.complete(),
+                    egui::Button::new(label),
+                )
                 .clicked()
             {
                 self.transcription_queue.set_mode(if running {
@@ -231,7 +276,7 @@ impl Suite {
             }
             if ui
                 .add_enabled(
-                    total > done || self.transcription_queue.busy(),
+                    total > done || self.transcription_queue.busy() || !self.geo_sweep.complete(),
                     egui::Button::new("Abbrechen"),
                 )
                 .clicked()
@@ -239,13 +284,18 @@ impl Suite {
                 self.transcription_queue.set_mode(Mode::Stopped);
             }
             if ui
-                .add_enabled(failed > 0, egui::Button::new("Fehler erneut versuchen"))
+                .add_enabled(
+                    failed > 0 || self.geo_sweep.progress().failed > 0,
+                    egui::Button::new("Fehler erneut versuchen"),
+                )
                 .clicked()
             {
+                self.geo_sweep.retry();
                 self.transcription_queue.retry_failed();
             }
         });
         if ui.button("Dateien erneut prüfen").clicked() {
+            self.geo_sweep.retry();
             self.transcription_queue.rescan();
         }
         if let Some(model) = self.transcription.prepared() {
@@ -660,10 +710,32 @@ mod tests {
         }
     }
     #[test]
+    fn incomplete_inventory_and_gps_preflight_hold_transcription() {
+        let mut suite = super::super::layout_tests::test_suite();
+        suite.root = Some("/Fotos".into());
+        let ctx = egui::Context::default();
+        suite.poll_transcription_queue(&ctx);
+        assert!(suite.transcription_queue.held());
+        suite.transcription_complete = true;
+        suite.poll_transcription_queue(&ctx);
+        assert!(
+            suite.transcription_queue.held(),
+            "GPS must finish before inference"
+        );
+    }
+    #[test]
     fn overview_places_transcription_to_the_right_of_the_player_without_overflow() {
         for width in [360., 600., 1280.] {
             let mut suite = super::super::layout_tests::test_suite();
             suite.root = Some("/Fotos".into());
+            suite.transcription_complete = true;
+            suite.geo_sweep.sync(std::path::Path::new("/Fotos"), vec![]);
+            let ready_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while !suite.geo_sweep.complete() {
+                suite.geo_sweep.poll(true);
+                assert!(std::time::Instant::now() < ready_deadline);
+                std::thread::yield_now();
+            }
             suite.comments.load("/Fotos".into());
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
             while !suite.comments.is_loaded() {

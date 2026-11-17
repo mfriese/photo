@@ -451,6 +451,33 @@ mod tests {
         }
     }
     #[test]
+    fn background_sweep_prepares_places_without_opening_photo_popup() {
+        let ports = Arc::new(Ports::default());
+        let mut sweep = crate::geo_sweep::Session::new(ports.clone(), Arc::default())
+            .with_places(ports.clone(), ports.clone());
+        sweep.sync(
+            Path::new("/lib"),
+            vec![
+                LibraryFile::new("photo.jpg".into()).unwrap(),
+                LibraryFile::new("missing.jpg".into()).unwrap(),
+            ],
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !sweep.complete() {
+            sweep.poll(true);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(ports.saves.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            ports.reads.load(Ordering::SeqCst),
+            1,
+            "prepare data only once per sweep"
+        );
+        assert_eq!(sweep.progress().available, 1);
+        assert_eq!(sweep.progress().missing, 1);
+    }
+    #[test]
     fn missing_or_invalid_gps_is_reported_without_touching_geodata_and_dense_queries_are_not_truncated()
      {
         let ports = Ports::default();

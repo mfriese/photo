@@ -42,3 +42,7 @@ pub mod library_index;
 pub mod media_geo;
 pub mod photo_location;
 pub mod runtime;
+
+pub mod geo_sweep;
+
+pub mod place_filter;

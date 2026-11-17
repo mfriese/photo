@@ -128,6 +128,7 @@ impl super::Suite {
                 Ok(location) => {
                     self.group = location.year;
                     self.tag_view.filters.clear();
+                    self.place_filter.selected.clear();
                     self.query.clear();
                     self.videos_only = false;
                     self.selected = None;
