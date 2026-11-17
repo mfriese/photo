@@ -43,12 +43,11 @@ pub struct LocatedPhoto {
     pub place_id: i64,
     pub place_name: String,
 }
+/// Read projection for navigation; independent of EXIF inspection and cache publication.
+pub trait LocationIndex: Send + Sync + 'static {
+    fn locations(&self, root: &Path, stop: &AtomicBool) -> Result<Vec<LocatedPhoto>, String>;
+}
 pub trait Repository: Send + Sync + 'static {
-    /// Reconstructible, resolved photo locations; implementations must not read media YAMLs.
-    fn locations(&self, _root: &Path, _stop: &AtomicBool) -> Result<Vec<LocatedPhoto>, String> {
-        Ok(Vec::new())
-    }
-
     fn inspect(
         &self,
         root: &Path,

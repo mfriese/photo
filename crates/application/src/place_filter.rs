@@ -1,7 +1,7 @@
 //! RAM-only location facets and a serial background projection reader.
 use crate::{
     domain::{Media, tags::LibraryFile},
-    media_geo::{LocatedPhoto, Repository},
+    media_geo::{LocatedPhoto, LocationIndex},
     work_priority::WorkPriority,
 };
 use std::{
@@ -97,7 +97,7 @@ struct Worker {
     root: PathBuf,
 }
 pub struct Session {
-    repository: Arc<dyn Repository>,
+    repository: Arc<dyn LocationIndex>,
     priority: Arc<WorkPriority>,
     root: Option<PathBuf>,
     worker: Option<Worker>,
@@ -109,7 +109,7 @@ pub struct Session {
     revision: u64,
 }
 impl Session {
-    pub fn new(repository: Arc<dyn Repository>, priority: Arc<WorkPriority>) -> Self {
+    pub fn new(repository: Arc<dyn LocationIndex>, priority: Arc<WorkPriority>) -> Self {
         Self {
             repository,
             priority,
@@ -173,8 +173,12 @@ impl Session {
                     self.worker = None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
+                    if self.root.as_ref() == Some(&worker.root)
+                        && !worker.stop.load(Ordering::Relaxed)
+                    {
+                        self.error = "Ortsliste konnte nicht geladen werden".into();
+                    }
                     self.worker = None;
-                    self.error = "Ortsliste konnte nicht geladen werden".into();
                 }
                 Err(mpsc::TryRecvError::Empty) => return,
             }
@@ -232,13 +236,107 @@ mod tests {
         }
     }
     #[test]
+    fn cancelled_worker_panic_does_not_report_failure_for_the_new_library() {
+        struct Index {
+            entered: AtomicBool,
+            release: AtomicBool,
+        }
+        impl LocationIndex for Index {
+            fn locations(
+                &self,
+                root: &Path,
+                stop: &AtomicBool,
+            ) -> Result<Vec<LocatedPhoto>, String> {
+                self.entered.store(true, Ordering::Relaxed);
+                if root == Path::new("old") {
+                    while !stop.load(Ordering::Relaxed) {
+                        std::thread::yield_now();
+                    }
+                    panic!("cancelled old worker");
+                }
+                while !self.release.load(Ordering::Relaxed) {
+                    std::thread::yield_now();
+                }
+                Ok(vec![located("new.jpg", "DE", 1, "Berlin")])
+            }
+        }
+        let index = Arc::new(Index {
+            entered: AtomicBool::new(false),
+            release: AtomicBool::new(false),
+        });
+        let mut session = Session::new(index.clone(), Arc::default());
+        session.poll(Some(Path::new("old")));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !index.entered.load(Ordering::Relaxed) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        loop {
+            session.poll(Some(Path::new("new")));
+            assert!(
+                session.error().is_empty(),
+                "stale error reached new library"
+            );
+            if session
+                .worker
+                .as_ref()
+                .is_some_and(|w| w.root == Path::new("new"))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        index.release.store(true, Ordering::Relaxed);
+        while session.pending() {
+            session.poll(Some(Path::new("new")));
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(session.catalog.entries.contains_key("new.jpg"));
+    }
+    #[test]
+    fn failed_refresh_preserves_previous_projection_and_explicit_retry_recovers() {
+        struct Index {
+            fail: AtomicBool,
+        }
+        impl LocationIndex for Index {
+            fn locations(&self, _: &Path, _: &AtomicBool) -> Result<Vec<LocatedPhoto>, String> {
+                if self.fail.load(Ordering::Relaxed) {
+                    Err("Datenträger nicht erreichbar".into())
+                } else {
+                    Ok(vec![located("photo.jpg", "DE", 1, "Berlin")])
+                }
+            }
+        }
+        let index = Arc::new(Index {
+            fail: AtomicBool::new(false),
+        });
+        let mut session = Session::new(index.clone(), Arc::default());
+        let root = Some(Path::new("library"));
+        for fail in [false, true, false] {
+            index.fail.store(fail, Ordering::Relaxed);
+            session.refresh();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                session.poll(root);
+                if !session.pending() {
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(session.catalog.entries.contains_key("photo.jpg"));
+            assert_eq!(session.error().is_empty(), !fail);
+        }
+    }
+    #[test]
     fn background_projection_rejects_cancelled_roots_and_does_not_poll_at_idle() {
-        use crate::media_geo::{Fingerprint, ResolvedPlace, Snapshot};
         use std::sync::atomic::AtomicUsize;
         struct Reader {
             calls: AtomicUsize,
         }
-        impl Repository for Reader {
+        impl LocationIndex for Reader {
             fn locations(
                 &self,
                 root: &Path,
@@ -260,24 +358,6 @@ mod tests {
                     1,
                     "Berlin",
                 )])
-            }
-            fn inspect(
-                &self,
-                _: &Path,
-                _: &LibraryFile,
-                _: &AtomicBool,
-            ) -> Result<Snapshot, String> {
-                unreachable!()
-            }
-            fn save_place(
-                &self,
-                _: &Path,
-                _: &LibraryFile,
-                _: &Fingerprint,
-                _: &ResolvedPlace,
-                _: &AtomicBool,
-            ) -> Result<(), String> {
-                unreachable!()
             }
         }
         let reader = Arc::new(Reader {

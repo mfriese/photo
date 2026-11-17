@@ -620,7 +620,7 @@ pub fn create(
         )
         .with_places(services.geodata.clone(), services.places.clone()),
         place_filter: photosuite_application::place_filter::Session::new(
-            services.media_geo.clone(),
+            services.location_index.clone(),
             services.work_priority.clone(),
         ),
         place_scope: None,

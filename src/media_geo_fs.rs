@@ -5,7 +5,7 @@ use crate::{
 };
 use photosuite_application::{
     geodata::Place,
-    media_geo::{Fingerprint, Position, Repository, ResolvedPlace, Snapshot},
+    media_geo::{Fingerprint, LocationIndex, Position, Repository, ResolvedPlace, Snapshot},
     photo_location::CoordinateSource,
 };
 use std::{
@@ -48,7 +48,7 @@ fn cancelled(stop: &AtomicBool) -> Result<(), String> {
         Ok(())
     }
 }
-impl Repository for SqlitePhotoGeo {
+impl LocationIndex for SqlitePhotoGeo {
     fn locations(
         &self,
         root: &Path,
@@ -69,7 +69,8 @@ impl Repository for SqlitePhotoGeo {
             Ok(locations)
         })
     }
-
+}
+impl Repository for SqlitePhotoGeo {
     fn inspect(
         &self,
         root: &Path,

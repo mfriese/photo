@@ -71,6 +71,7 @@ mod tests {
 /// Ports are supplied exclusively by the composition root.
 #[derive(Clone)]
 pub struct Services {
+    pub location_index: std::sync::Arc<dyn crate::media_geo::LocationIndex>,
     pub media_geo: std::sync::Arc<dyn crate::media_geo::Repository>,
     pub places: std::sync::Arc<dyn crate::geodata::PlaceIndex>,
     pub index_rebuilder: std::sync::Arc<dyn crate::library_index::Rebuilder>,

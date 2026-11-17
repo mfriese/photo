@@ -245,6 +245,7 @@ pub(super) fn test_suite() -> Suite {
             transcription_power: adapters.clone(),
             transcription: adapters.clone(),
             geodata: adapters.clone(),
+            location_index: adapters.clone(),
             media_geo: adapters.clone(),
             places: adapters.clone(),
             index_rebuilder: adapters.clone(),
@@ -2591,6 +2592,15 @@ impl photosuite_application::geodata::PlaceIndex for UnusedAdapters {
     }
 }
 
+impl photosuite_application::media_geo::LocationIndex for UnusedAdapters {
+    fn locations(
+        &self,
+        _: &std::path::Path,
+        _: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<photosuite_application::media_geo::LocatedPhoto>, String> {
+        Ok(Vec::new())
+    }
+}
 impl photosuite_application::media_geo::Repository for UnusedAdapters {
     fn inspect(
         &self,
@@ -2622,12 +2632,12 @@ impl photosuite_application::media_geo::Repository for UnusedAdapters {
 #[test]
 fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
     use photosuite_application::{
-        media_geo::{Fingerprint, LocatedPhoto, Repository, ResolvedPlace, Snapshot},
+        media_geo::{LocatedPhoto, LocationIndex},
         place_filter::{Selection, Session},
     };
     use std::{path::Path, sync::atomic::AtomicBool};
     struct Places;
-    impl Repository for Places {
+    impl LocationIndex for Places {
         fn locations(&self, _: &Path, _: &AtomicBool) -> Result<Vec<LocatedPhoto>, String> {
             Ok(vec![
                 LocatedPhoto {
@@ -2643,24 +2653,6 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
                     place_name: "Paris".into(),
                 },
             ])
-        }
-        fn inspect(
-            &self,
-            _: &Path,
-            _: &crate::domain::tags::LibraryFile,
-            _: &AtomicBool,
-        ) -> Result<Snapshot, String> {
-            unreachable!()
-        }
-        fn save_place(
-            &self,
-            _: &Path,
-            _: &crate::domain::tags::LibraryFile,
-            _: &Fingerprint,
-            _: &ResolvedPlace,
-            _: &AtomicBool,
-        ) -> Result<(), String> {
-            unreachable!()
         }
     }
     let mut suite = test_suite();

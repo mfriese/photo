@@ -2,7 +2,7 @@
 use crate::{
     domain::{geo::Coordinates, tags::LibraryFile},
     geodata::{Bounds, Place, PlaceIndex, Store},
-    media_geo::{Position, Repository, ResolvedPlace},
+    media_geo::{Position, Repository, ResolvedPlace, Snapshot},
 };
 use std::{
     path::{Path, PathBuf},
@@ -96,6 +96,73 @@ fn check(stop: &AtomicBool) -> Result<(), String> {
         Ok(())
     }
 }
+/// Prepared read-only dataset, borrowed for one lookup or an entire sweep.
+pub struct PreparedSearch<'a> {
+    index: &'a dyn PlaceIndex,
+    database: PathBuf,
+    hash: String,
+}
+impl<'a> PreparedSearch<'a> {
+    pub fn prepare(
+        store: &dyn Store,
+        index: &'a dyn PlaceIndex,
+        stop: &AtomicBool,
+    ) -> Result<Option<Self>, String> {
+        check(stop)?;
+        let prepared = store.inspect(stop, &|_| {})?;
+        check(stop)?;
+        if !prepared.enabled || !prepared.ready {
+            return Ok(None);
+        }
+        let hash = prepared
+            .database
+            .ok_or("Geodaten-Prüfnachweis fehlt")?
+            .source_sha256;
+        if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("Ungültiger Geodaten-Prüfnachweis".into());
+        }
+        Ok(Some(Self {
+            index,
+            database: store.locations().database,
+            hash,
+        }))
+    }
+    pub fn resolve(
+        &self,
+        source: &dyn Repository,
+        root: &Path,
+        photo: &LibraryFile,
+        snapshot: &Snapshot,
+        stop: &AtomicBool,
+    ) -> Result<Option<ResolvedPlace>, String> {
+        check(stop)?;
+        let coordinates = match &snapshot.position {
+            Position::Missing => return Ok(None),
+            Position::Invalid(error) => return Err(error.clone()),
+            Position::Present(point) => *point,
+        };
+        if let Some(cached) = snapshot
+            .resolved
+            .as_ref()
+            .filter(|r| r.dataset_sha256 == self.hash)
+        {
+            return Ok(Some(cached.clone()));
+        }
+        let Some((place, distance_meters)) =
+            nearest(self.index, &self.database, coordinates, stop)?
+        else {
+            return Ok(None);
+        };
+        let resolved = ResolvedPlace {
+            place,
+            distance_meters,
+            dataset_sha256: self.hash.clone(),
+        };
+        check(stop)?;
+        source.save_place(root, photo, &snapshot.fingerprint, &resolved, stop)?;
+        Ok(Some(resolved))
+    }
+}
 fn locate(
     source: &dyn Repository,
     store: &dyn Store,
@@ -114,48 +181,20 @@ fn locate(
         Position::Invalid(error) => return Err(error),
     };
     notify(Phase::CheckingData);
-    let prepared = store.inspect(stop, &|_| {})?;
-    check(stop)?;
-    if !prepared.enabled || !prepared.ready {
+    let Some(search) = PreparedSearch::prepare(store, index, stop)? else {
         return Ok(Outcome::DataUnavailable);
-    }
-    let hash = prepared
-        .database
-        .ok_or("Geodaten-Prüfnachweis fehlt")?
-        .source_sha256;
-    if let Some(resolved) = snapshot
-        .resolved
-        .filter(|value| value.dataset_sha256 == hash)
-    {
-        return Ok(Outcome::Found {
+    };
+    notify(Phase::Searching);
+    match search.resolve(source, root, photo, &snapshot, stop)? {
+        Some(resolved) => Ok(Outcome::Found {
             coordinates,
             place: resolved.place,
             distance_meters: resolved.distance_meters,
-        });
-    }
-    notify(Phase::Searching);
-    match nearest(index, &store.locations().database, coordinates, stop)? {
-        Some((place, distance_meters)) => {
-            source.save_place(
-                root,
-                photo,
-                &snapshot.fingerprint,
-                &ResolvedPlace {
-                    place: place.clone(),
-                    distance_meters,
-                    dataset_sha256: hash,
-                },
-                stop,
-            )?;
-            Ok(Outcome::Found {
-                coordinates,
-                place,
-                distance_meters,
-            })
-        }
+        }),
         None => Ok(Outcome::NoPlace { coordinates }),
     }
 }
+
 struct Request {
     root: PathBuf,
     photo: LibraryFile,
@@ -304,7 +343,7 @@ mod tests {
     use super::*;
     use crate::{
         geodata::{DatabaseInfo, Locations, Prepared, Progress},
-        media_geo::{Fingerprint, Snapshot},
+        media_geo::Fingerprint,
     };
     use std::sync::atomic::AtomicUsize;
     #[derive(Default)]
@@ -313,6 +352,9 @@ mod tests {
         saves: AtomicUsize,
         entered: AtomicBool,
         active: AtomicUsize,
+        broken_store: AtomicBool,
+        broken_search: AtomicBool,
+        dataset_revision: AtomicUsize,
     }
     fn place(id: i64, latitude: f64, longitude: f64) -> Place {
         Place {
@@ -382,13 +424,21 @@ mod tests {
             _: &(dyn Fn(Progress) + Sync),
         ) -> Result<Prepared, String> {
             self.reads.fetch_add(1, Ordering::SeqCst);
+            if self.broken_store.load(Ordering::Relaxed) {
+                return Err("Ortsdaten beschädigt".into());
+            }
             Ok(Prepared {
                 enabled: true,
                 ready: true,
                 archive_ready: true,
                 database: Some(DatabaseInfo {
                     places: 1,
-                    source_sha256: "a".repeat(64),
+                    source_sha256: if self.dataset_revision.load(Ordering::Relaxed) == 0 {
+                        "a"
+                    } else {
+                        "b"
+                    }
+                    .repeat(64),
                     imported_at: "now".into(),
                 }),
                 ..Default::default()
@@ -434,6 +484,9 @@ mod tests {
             stop: &AtomicBool,
             visit: &mut dyn FnMut(Place),
         ) -> Result<(), String> {
+            if self.broken_search.load(Ordering::Relaxed) {
+                return Err("Ortsabfrage fehlgeschlagen".into());
+            }
             check(stop)?;
             // Deliberately exceed the old 1000-row API limit; the nearest place must still be considered.
             for id in 1..=2001 {
@@ -448,6 +501,91 @@ mod tests {
             }
             visit(place(3000, 0., 0.));
             Ok(())
+        }
+    }
+    #[test]
+    fn resolution_reuses_only_matching_dataset_and_never_publishes_after_cancel() {
+        let ports = Ports::default();
+        let stop = AtomicBool::new(false);
+        let root = Path::new("/lib");
+        let file = LibraryFile::new("photo.jpg".into()).unwrap();
+        let mut snapshot = Repository::inspect(&ports, root, &file, &stop).unwrap();
+        let search = PreparedSearch::prepare(&ports, &ports, &stop)
+            .unwrap()
+            .unwrap();
+        snapshot.resolved = search
+            .resolve(&ports, root, &file, &snapshot, &stop)
+            .unwrap();
+        assert_eq!(ports.saves.load(Ordering::SeqCst), 1);
+        ports.broken_search.store(true, Ordering::Relaxed);
+        assert!(
+            search
+                .resolve(&ports, root, &file, &snapshot, &stop)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(ports.saves.load(Ordering::SeqCst), 1);
+        ports.dataset_revision.store(1, Ordering::Relaxed);
+        let updated = PreparedSearch::prepare(&ports, &ports, &stop)
+            .unwrap()
+            .unwrap();
+        assert!(
+            updated
+                .resolve(&ports, root, &file, &snapshot, &stop)
+                .is_err()
+        );
+        ports.broken_search.store(false, Ordering::Relaxed);
+        assert_eq!(
+            updated
+                .resolve(&ports, root, &file, &snapshot, &stop)
+                .unwrap()
+                .unwrap()
+                .dataset_sha256,
+            "b".repeat(64)
+        );
+        stop.store(true, Ordering::Relaxed);
+        assert!(
+            updated
+                .resolve(&ports, root, &file, &snapshot, &stop)
+                .is_err()
+        );
+        assert_eq!(ports.saves.load(Ordering::SeqCst), 2);
+    }
+    #[test]
+    fn sweep_exposes_dataset_errors_and_keeps_valid_gps_when_place_resolution_fails() {
+        for broken_dataset in [true, false] {
+            let ports = Arc::new(Ports::default());
+            ports.broken_store.store(broken_dataset, Ordering::Relaxed);
+            ports
+                .broken_search
+                .store(!broken_dataset, Ordering::Relaxed);
+            let mut sweep = crate::geo_sweep::Session::new(ports.clone(), Arc::default())
+                .with_places(ports.clone(), ports.clone());
+            sweep.sync(
+                Path::new("/lib"),
+                vec![
+                    LibraryFile::new("photo.jpg".into()).unwrap(),
+                    LibraryFile::new("missing.jpg".into()).unwrap(),
+                ],
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while !sweep.complete() {
+                sweep.poll(true);
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            let p = sweep.progress();
+            assert_eq!((p.checked, p.available, p.missing, p.failed), (2, 1, 1, 0));
+            assert_eq!(p.available + p.missing + p.failed, p.checked);
+            if broken_dataset {
+                assert_eq!(p.data_warning.as_deref(), Some("Ortsdaten beschädigt"));
+                assert_eq!(p.location_failed, 0);
+            } else {
+                assert!(p.data_warning.is_none());
+                assert_eq!(p.location_failed, 1);
+                assert_eq!(p.errors.len(), 1);
+            }
+            assert_eq!(ports.saves.load(Ordering::SeqCst), 0);
         }
     }
     #[test]

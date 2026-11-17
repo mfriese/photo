@@ -68,9 +68,15 @@ pub(super) fn paged_text(ui: &mut egui::Ui, id: egui::Id, text: &str, error: boo
     // Count line breaks as a full line, avoiding tall pages from many short lines.
     let mut pages = vec![String::new()];
     let mut used = 0;
+    // Leave room for both issue navigation and shared processing controls on compact windows.
+    let budget = if ui.ctx().content_rect().height() < 480. {
+        120
+    } else {
+        200
+    };
     for character in text.chars() {
         let cost = if character == '\n' { 40 } else { 1 };
-        if used + cost > 200 && used > 0 {
+        if used + cost > budget && used > 0 {
             pages.push(String::new());
             used = 0;
         }

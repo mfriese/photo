@@ -19,7 +19,10 @@ pub struct Progress {
     pub total: usize,
     pub available: usize,
     pub missing: usize,
+    /// Coordinate inspection failures; available + missing + failed == checked.
     pub failed: usize,
+    pub location_failed: usize,
+    pub data_warning: Option<String>,
     pub current: Option<LibraryFile>,
     /// Bounded recent failures; the total failure count remains exact.
     pub errors: Vec<(LibraryFile, String)>,
@@ -161,17 +164,26 @@ impl Session {
             if !priority.wait_background(&stop) {
                 return;
             }
-            let prepared = places.as_ref().and_then(|(store, index)| {
-                store
-                    .inspect(&stop, &|_| {})
-                    .ok()
-                    .filter(|p| p.enabled && p.ready)
-                    .and_then(|p| p.database)
-                    .map(|db| (store.locations().database, db.source_sha256, index.clone()))
-            });
             let mut progress = Progress {
                 total: photos.len(),
                 ..Progress::default()
+            };
+            let prepared = match places.as_ref() {
+                Some((store, index)) => match crate::photo_location::PreparedSearch::prepare(
+                    store.as_ref(),
+                    index.as_ref(),
+                    &stop,
+                ) {
+                    Ok(search) => search,
+                    Err(error) => {
+                        if stop.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        progress.data_warning = Some(error.chars().take(2048).collect());
+                        None
+                    }
+                },
+                None => None,
             };
             for photo in photos {
                 if !priority.wait_background(&stop) {
@@ -179,34 +191,7 @@ impl Session {
                 }
                 progress.current = Some(photo.clone());
                 let _ = sender.try_send(progress.clone());
-                let outcome = repo.inspect(&root, &photo, &stop).and_then(|snapshot| {
-                    if let (Position::Present(coordinates), Some((database, hash, index))) =
-                        (&snapshot.position, &prepared)
-                        && snapshot
-                            .resolved
-                            .as_ref()
-                            .is_none_or(|r| r.dataset_sha256 != *hash)
-                        && let Some((place, distance_meters)) = crate::photo_location::nearest(
-                            index.as_ref(),
-                            database,
-                            *coordinates,
-                            &stop,
-                        )?
-                    {
-                        repo.save_place(
-                            &root,
-                            &photo,
-                            &snapshot.fingerprint,
-                            &crate::media_geo::ResolvedPlace {
-                                place,
-                                distance_meters,
-                                dataset_sha256: hash.clone(),
-                            },
-                            &stop,
-                        )?;
-                    }
-                    Ok(snapshot)
-                });
+                let outcome = repo.inspect(&root, &photo, &stop);
                 if stop.load(Ordering::Relaxed) {
                     return;
                 }
@@ -214,6 +199,16 @@ impl Session {
                     Ok(snapshot) => match snapshot.position {
                         Position::Present(_) => {
                             progress.available += 1;
+                            if let Some(search) = &prepared
+                                && let Err(error) =
+                                    search.resolve(repo.as_ref(), &root, &photo, &snapshot, &stop)
+                            {
+                                if stop.load(Ordering::Relaxed) {
+                                    return;
+                                }
+                                progress.location_failed += 1;
+                                record_error(&mut progress, photo.clone(), error);
+                            }
                             None
                         }
                         Position::Missing => {
@@ -226,12 +221,7 @@ impl Session {
                 };
                 if let Some(error) = error {
                     progress.failed += 1;
-                    if progress.errors.len() == 16 {
-                        progress.errors.remove(0);
-                    }
-                    progress
-                        .errors
-                        .push((photo, error.chars().take(2048).collect()));
+                    record_error(&mut progress, photo, error);
                 }
                 progress.checked += 1;
                 let _ = sender.try_send(progress.clone());
@@ -259,6 +249,15 @@ impl Session {
         });
     }
 }
+fn record_error(progress: &mut Progress, photo: LibraryFile, error: String) {
+    if progress.errors.len() == 16 {
+        progress.errors.remove(0);
+    }
+    progress
+        .errors
+        .push((photo, error.chars().take(2048).collect()));
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         self.reset();

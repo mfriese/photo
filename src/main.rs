@@ -104,6 +104,7 @@ fn main() -> eframe::Result {
         coordinates: coordinates.clone(),
     });
     let services = application::Services {
+        location_index: media_geo.clone(),
         media_geo,
         places: places.clone(),
         index_rebuilder: std::sync::Arc::new(library_index_fs::SqliteRebuilder {

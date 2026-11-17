@@ -4,9 +4,7 @@ use super::{
     processing_ui::{self, page_selector, paged_text},
 };
 use eframe::egui;
-use photosuite_application::transcription::queue::{
-    Candidate, Indicator, Mode, ModelChoice, Phase,
-};
+use photosuite_application::transcription::queue::{Indicator, Mode, ModelChoice, Phase};
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct Seen {
     root: std::path::PathBuf,
@@ -26,36 +24,38 @@ impl Suite {
                 complete: self.transcription_complete,
             };
             if self.transcription_seen.as_ref() != Some(&observed) {
-                let mut candidates = self
-                    .items
-                    .iter()
-                    .filter(|m| m.is_audio() || m.is_video())
-                    .filter_map(|media| {
-                        let source = self.organization.file(media.path()).ok()?;
-                        let record = self
-                            .comments
-                            .catalog()
-                            .by_audio(&source)
-                            .map(|c| c.photo().clone())
-                            .unwrap_or_else(|| source.clone());
-                        Some(Candidate { source, record })
-                    })
-                    .collect::<Vec<_>>();
-                candidates.sort_by(|a, b| a.source.cmp(&b.source));
-                candidates.dedup_by(|a, b| a.source == b.source);
-                if !candidates.is_empty() {
+                let inventory = match photosuite_application::processing::inventory(
+                    root,
+                    &self.items,
+                    self.comments.catalog(),
+                ) {
+                    Ok(inventory) => inventory,
+                    Err(error) => {
+                        self.status = format!("Medienverarbeitung: {error}");
+                        photosuite_application::processing::advance(
+                            &mut self.geo_sweep,
+                            &mut self.transcription_queue,
+                            photosuite_application::processing::Readiness {
+                                library_open: true,
+                                ..Default::default()
+                            },
+                        );
+                        if self.geo_sweep.busy() || self.transcription_queue.busy() {
+                            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                        }
+                        return;
+                    }
+                };
+                if !inventory.transcriptions.is_empty() {
                     self.transcription.ensure_loaded();
                 }
-                self.transcription_queue
-                    .sync(root, candidates, self.transcription_complete);
+                self.transcription_queue.sync(
+                    root,
+                    inventory.transcriptions,
+                    self.transcription_complete,
+                );
                 if self.transcription_complete {
-                    let photos = self
-                        .items
-                        .iter()
-                        .filter(|m| m.is_photo())
-                        .filter_map(|m| self.organization.file(m.path()).ok())
-                        .collect();
-                    self.geo_sweep.sync(root, photos);
+                    self.geo_sweep.sync(root, inventory.photos);
                 }
                 self.transcription_seen = Some(observed);
             }
@@ -67,19 +67,18 @@ impl Suite {
             })
         });
         self.transcription_queue.set_model(model);
-        self.geo_sweep.poll(
-            self.transcription_queue.mode_loaded()
-                && self.transcription_queue.mode() == Mode::Running
-                && !self.index_maintenance.busy(),
+        photosuite_application::processing::advance(
+            &mut self.geo_sweep,
+            &mut self.transcription_queue,
+            photosuite_application::processing::Readiness {
+                library_open: self.root.is_some(),
+                inventory_complete: self.transcription_complete,
+                index_maintenance: self.index_maintenance.busy(),
+                comments_ready: self.comments.is_loaded(),
+                comments_pending: self.comments.has_unsaved() || self.comments.is_saving(),
+                audio_active: self.services.work_priority.audio_active(),
+            },
         );
-        self.transcription_queue.set_hold(
-            (self.root.is_some() && (!self.transcription_complete || !self.geo_sweep.complete()))
-                || self.index_maintenance.busy()
-                || self.comments.has_unsaved()
-                || self.comments.is_saving()
-                || self.services.work_priority.audio_active(),
-        );
-        self.transcription_queue.poll();
         if self.transcription_queue.busy() || self.geo_sweep.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
@@ -221,6 +220,9 @@ impl Suite {
             .iter()
             .map(|(p, e)| (p.as_str(), e.as_str()))
             .collect::<Vec<_>>();
+        if let Some(warning) = &self.geo_sweep.progress().data_warning {
+            errors.push(("Offline-Geodaten", warning.as_str()));
+        }
         if !self.geo_sweep.error().is_empty() {
             errors.push(("GPS-Prüfung", self.geo_sweep.error()));
         }
@@ -340,6 +342,12 @@ impl Suite {
                             geo.available, geo.missing, geo.failed
                         ),
                     );
+                    if geo.location_failed > 0 {
+                        ui.colored_label(
+                            crate::theme::DANGER,
+                            format!("Ortssuche: {} Fehler", geo.location_failed),
+                        );
+                    }
                     if self.geo_sweep.busy()
                         && let Some(photo) = &geo.current
                     {
@@ -409,7 +417,10 @@ impl Suite {
             }
             if ui
                 .add_enabled(
-                    failed > 0 || self.geo_sweep.progress().failed > 0,
+                    failed > 0
+                        || self.geo_sweep.progress().failed > 0
+                        || self.geo_sweep.progress().location_failed > 0
+                        || self.geo_sweep.progress().data_warning.is_some(),
                     egui::Button::new("Fehler erneut versuchen"),
                 )
                 .clicked()
@@ -664,6 +675,31 @@ mod tests {
                 unreachable!()
             }
         }
+        struct BrokenGeodata;
+        impl photosuite_application::geodata::Store for BrokenGeodata {
+            fn locations(&self) -> photosuite_application::geodata::Locations {
+                photosuite_application::geodata::Locations {
+                    archive: "archive.zip".into(),
+                    database: "places.sqlite".into(),
+                    preferences: "preferences.plist".into(),
+                }
+            }
+            fn inspect(
+                &self,
+                _: &AtomicBool,
+                _: &(dyn Fn(photosuite_application::geodata::Progress) + Sync),
+            ) -> Result<photosuite_application::geodata::Prepared, String> {
+                Err("Die lokalen Ortsdaten konnten nicht geprüft werden 日本語".repeat(100))
+            }
+            fn prepare(
+                &self,
+                _: bool,
+                _: &AtomicBool,
+                _: &(dyn Fn(photosuite_application::geodata::Progress) + Sync),
+            ) -> Result<photosuite_application::geodata::Prepared, String> {
+                unreachable!()
+            }
+        }
         for (width, height) in [(360., 400.), (600., 400.), (1280., 720.)] {
             let ctx = egui::Context::default();
             crate::theme::install(&ctx);
@@ -672,7 +708,8 @@ mod tests {
             suite.root = Some("/Fotos".into());
             suite.transcription_complete = true;
             suite.geo_sweep =
-                photosuite_application::geo_sweep::Session::new(Arc::new(Invalid), Arc::default());
+                photosuite_application::geo_sweep::Session::new(Arc::new(Invalid), Arc::default())
+                    .with_places(Arc::new(BrokenGeodata), suite.services.places.clone());
             suite.geo_sweep.sync(
                 Path::new("/Fotos"),
                 vec![LibraryFile::new(format!("2023/01/{}.jpg", "lang".repeat(100))).unwrap()],
