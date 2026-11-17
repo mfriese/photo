@@ -33,6 +33,10 @@ class InstallerTests(unittest.TestCase):
             bundled = resources / "Licenses/Rust/whisper-rs-sys-0.15.0"
             self.assertEqual((bundled / "LICENSE").read_text(), "Bindings notice")
             self.assertEqual((bundled / "whisper.cpp-LICENSE").read_text(), "MIT engine notice")
+            geo = resources / "Licenses/GeoLabels"
+            self.assertIn("UNICODE LICENSE V3", (geo / "LICENSE-Unicode.txt").read_text())
+            self.assertIn("creativecommons.org", (geo / "source.json").read_text())
+            self.assertIn("GeoNames", (resources / "Licenses/THIRD_PARTY.txt").read_text())
             (crate / "whisper.cpp/LICENSE").unlink()
             missing = root / "missing-license"
             missing.mkdir()

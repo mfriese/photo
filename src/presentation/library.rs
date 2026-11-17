@@ -4,7 +4,7 @@ pub(super) struct PlaceOptionsCache {
     revision: u64,
     count: usize,
     group: Option<String>,
-    rows: Vec<(String, Vec<(i64, String)>)>,
+    rows: Vec<photosuite_application::place_filter::CountryOption>,
 }
 impl super::Suite {
     pub(super) fn library_sidebar(&mut self, ctx: &egui::Context) {
@@ -85,24 +85,12 @@ impl super::Suite {
                             let rows=self.root.as_ref().map(|root|self.place_filter.catalog().options(&self.items,root,&candidates)).unwrap_or_default();
                             self.place_options=Some(PlaceOptionsCache {revision:self.place_filter.revision(),count:self.items.len(),group:self.group.clone(),rows});
                         }
-                        let options=self.place_options.as_ref().map(|cache|cache.rows.clone()).unwrap_or_default();
+                        let options=self.place_options.as_ref().map(|cache|cache.rows.as_slice()).unwrap_or(&[]);
                         if options.is_empty() {
                             ui.label(egui::RichText::new("Noch keine Orte ermittelt").small().color(theme::MUTED))
                                 .on_hover_text("Die Hintergrundprüfung ergänzt Orte aus den vorbereiteten Offline-Geodaten. Unter Settings → Geodaten vorbereiten.");
                         }
-                        for (country,places) in options {
-                            use photosuite_application::place_filter::Selection;
-                            let choice=Selection::Country(country.clone());
-                            if theme::tag_navigation(ui,self.place_filter.selected.contains(&choice),&country).on_hover_text("Land des nächstgelegenen Ortes. Alle gewählten Orts- und Tagfilter müssen zutreffen.").clicked() && !self.place_filter.selected.remove(&choice) {self.place_filter.selected.insert(choice);}
-                            ui.indent(("country",&country),|ui| {
-                                for (id,name) in places {
-                                    let choice=Selection::Place(id);
-                                    ui.push_id(id,|ui| {
-                                        if theme::tag_navigation(ui,self.place_filter.selected.contains(&choice),&name).on_hover_text(format!("{country} · {name}\nErneut klicken, um den Filter auszuschalten.")).clicked() && !self.place_filter.selected.remove(&choice) {self.place_filter.selected.insert(choice);}
-                                    });
-                                }
-                            });
-                        }
+                        super::place_tree::show(ui,self.root.as_deref(),options,&mut self.place_filter.selected);
                         if !self.place_filter.error().is_empty() {ui.colored_label(theme::DANGER,self.place_filter.error());}
                     });
                     if self.root.is_none() {

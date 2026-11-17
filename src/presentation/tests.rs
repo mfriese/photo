@@ -2645,12 +2645,19 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
                 LocatedPhoto {
                     photo: crate::domain::tags::LibraryFile::new("2020/01/a.jpg".into()).unwrap(),
                     country: "DE".into(),
+                    country_name: "Deutschland".into(),
+                    region: Some(photosuite_application::media_geo::AdministrativeRegion {
+                        code: "16".into(),
+                        name: "Berlin".into(),
+                    }),
                     place_id: 1,
                     place_name: "Berlin".into(),
                 },
                 LocatedPhoto {
                     photo: crate::domain::tags::LibraryFile::new("2020/01/b.jpg".into()).unwrap(),
                     country: "FR".into(),
+                    country_name: "Frankreich".into(),
+                    region: None,
                     place_id: 2,
                     place_name: "Paris".into(),
                 },
@@ -2691,22 +2698,18 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
             |ctx| suite.library_sidebar(ctx),
         )
     };
-    let output = frame(&mut suite, vec![]);
-    let rect = |label: &str| {
+    fn rect(output: &egui::FullOutput, label: &str) -> Option<egui::Rect> {
         output
             .shapes
             .iter()
-            .find_map(|s| match &s.shape {
+            .filter_map(|s| match &s.shape {
                 egui::Shape::Text(t) if t.galley.job.text == label => {
                     Some(t.visual_bounding_rect())
                 }
                 _ => None,
             })
-            .unwrap()
-    };
-    assert!(rect("Orte").top() > rect("Tags").bottom());
-    assert!(rect("DE").top() < rect("Berlin").top());
-    assert!(rect("Berlin").top() < rect("FR").top());
+            .next_back()
+    }
     let click = |suite: &mut Suite, pos| {
         let _ = frame(
             suite,
@@ -2720,7 +2723,7 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
                 },
             ],
         );
-        frame(
+        let _ = frame(
             suite,
             vec![egui::Event::PointerButton {
                 pos,
@@ -2728,22 +2731,76 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
                 pressed: false,
                 modifiers: Default::default(),
             }],
-        )
+        );
+        frame(suite, vec![])
     };
-    let _ = click(&mut suite, rect("Berlin").center());
+    let output = frame(&mut suite, vec![]);
+    assert!(rect(&output, "Orte").unwrap().top() > rect(&output, "Tags").unwrap().bottom());
+    assert!(
+        rect(&output, "Deutschland").unwrap().top() < rect(&output, "Frankreich").unwrap().top()
+    );
+    assert!(
+        rect(&output, "Berlin").is_none(),
+        "countries start collapsed"
+    );
+    let country = rect(&output, "Deutschland").unwrap();
+    let output = click(
+        &mut suite,
+        egui::pos2(country.left() - 14., country.center().y),
+    );
+    assert!(
+        suite.place_filter.selected.is_empty(),
+        "disclosure does not select a location"
+    );
+    let region = rect(&output, "Berlin").expect("country expands to regions");
+    assert_eq!(
+        output
+            .shapes
+            .iter()
+            .filter(|s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text=="Berlin"))
+            .count(),
+        1,
+        "region starts collapsed"
+    );
+    let output = click(
+        &mut suite,
+        egui::pos2(region.left() - 14., region.center().y),
+    );
+    let city = rect(&output, "Berlin").expect("region expands to places");
+    assert!(city.top() > region.top());
+    let counts: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == "1" => Some(t.visual_bounding_rect()),
+            _ => None,
+        })
+        .collect();
+    assert!(counts.len() >= 4);
+    assert!(
+        counts
+            .iter()
+            .all(|r| (r.right() - counts[0].right()).abs() < 1.),
+        "counts align across depths"
+    );
+    let output = click(&mut suite, city.center());
     assert!(suite.place_filter.selected.contains(&Selection::Place(1)));
     assert_eq!(suite.visible(), vec![0]);
     assert!(suite.group.is_none());
-    let _ = click(&mut suite, rect("Berlin").center());
+    let france = rect(&output, "Frankreich").unwrap();
+    let output = click(&mut suite, france.center());
+    assert_eq!(suite.visible(), vec![0, 1], "country OR city");
+    let output = click(&mut suite, rect(&output, "Berlin").unwrap().center());
+    assert_eq!(suite.visible(), vec![1], "city toggles off independently");
+    let output = click(&mut suite, rect(&output, "Frankreich").unwrap().center());
     assert!(suite.place_filter.selected.is_empty());
     assert_eq!(suite.visible(), vec![0, 1, 2]);
-    let _ = click(&mut suite, rect("DE").center());
+    let output = click(&mut suite, rect(&output, "Deutschland").unwrap().center());
     assert_eq!(suite.visible(), vec![0]);
-    let _ = click(&mut suite, rect("Alles").center());
+    let output = click(&mut suite, rect(&output, "Alles").unwrap().center());
     assert!(suite.place_filter.selected.is_empty());
-    assert_eq!(suite.visible(), vec![0, 1, 2]);
-    let _ = click(&mut suite, rect("DE").center());
-    let output = frame(&mut suite, vec![]);
+    let output = click(&mut suite, rect(&output, "Deutschland").unwrap().center());
+    assert_eq!(suite.visible(), vec![0]);
     let resets: Vec<_> = output
         .shapes
         .iter()
@@ -2755,4 +2812,43 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
     let _ = click(&mut suite, resets.last().unwrap().center());
     assert!(suite.place_filter.selected.is_empty());
     assert_eq!(suite.visible(), vec![0, 1, 2]);
+    for (label, expanded) in [
+        ("Alle Orte einklappen", false),
+        ("Alle Orte aufklappen", true),
+    ] {
+        let output = frame(&mut suite, vec![]);
+        let pos = rect(&output, "Deutschland").unwrap().center();
+        let _ = frame(
+            &mut suite,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                },
+            ],
+        );
+        let _ = frame(
+            &mut suite,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        );
+        let menu = frame(&mut suite, vec![]);
+        let pos = rect(&menu, label)
+            .expect("bulk disclosure actions are available")
+            .center();
+        let output = click(&mut suite, pos);
+        assert_eq!(rect(&output, "Berlin").is_some(), expanded);
+        assert_eq!(rect(&output, "Paris").is_some(), expanded);
+        assert!(
+            suite.place_filter.selected.is_empty(),
+            "disclosure leaves filters unchanged"
+        );
+    }
 }

@@ -55,15 +55,19 @@ impl LocationIndex for SqlitePhotoGeo {
         stop: &AtomicBool,
     ) -> Result<Vec<photosuite_application::media_geo::LocatedPhoto>, String> {
         cancelled(stop)?;
+        let labels = crate::geo_labels::labels()?;
         self.database.transaction(root, |tx| {
-            let mut statement = tx.prepare("SELECT media_path,country_code,place_id,place_name FROM media_geo WHERE status='available' AND place_id IS NOT NULL AND length(country_code)=2 ORDER BY media_path")?;
+            let mut statement = tx.prepare("SELECT media_path,country_code,place_id,place_name,admin1_code FROM media_geo WHERE status='available' AND place_id IS NOT NULL AND length(country_code)=2 ORDER BY media_path")?;
             let mut rows = statement.query([])?;
             let mut locations = Vec::new();
             while let Some(row) = rows.next()? {
                 if stop.load(Ordering::Relaxed) { return Err(library_db::invalid("Ortsliste abgebrochen")); }
+                let country:String=row.get(1)?;
+                let region:String=row.get(4)?;
                 locations.push(photosuite_application::media_geo::LocatedPhoto {
                     photo: LibraryFile::new(row.get(0)?).map_err(library_db::invalid)?,
-                    country: row.get(1)?, place_id: row.get(2)?, place_name: row.get(3)?,
+                    country_name:labels.country(&country),region:labels.region(&country,&region),
+                    country, place_id: row.get(2)?, place_name: row.get(3)?,
                 });
             }
             Ok(locations)
@@ -269,6 +273,8 @@ mod tests {
             ("DE", "Berlin")
         );
         assert_eq!(locations[0].photo, photo);
+        assert_eq!(locations[0].country_name, "Deutschland");
+        assert_eq!(locations[0].region.as_ref().unwrap().code, "16");
         assert!(repo.locations(root.path(), &AtomicBool::new(true)).is_err());
         database.transaction(root.path(),|tx|{let count:i64=tx.query_row("SELECT count(*) FROM geo_overview WHERE country_code='DE' AND place_name='Berlin'",[],|r|r.get(0))?;assert_eq!(count,1);let target:String=tx.query_row("SELECT \"table\" FROM pragma_foreign_key_list('media_geo')",[],|r|r.get(0))?;assert_eq!(target,"media");Ok(())}).unwrap();
         assert!(!root.path().join(photo.metadata_path().unwrap()).exists());

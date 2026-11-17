@@ -195,6 +195,18 @@ pub fn navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Respo
 pub fn tag_navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
     navigation_row(ui, selected, label, BADGE_HEIGHT)
 }
+/// Count stays at the trailing edge while long place labels truncate independently.
+pub fn place_navigation(
+    ui: &mut egui::Ui,
+    selected: bool,
+    label: &str,
+    count: usize,
+) -> egui::Response {
+    ui.add_sized([ui.available_width(),BADGE_HEIGHT],egui::Button::new(RichText::new(label).color(TEXT))
+        .right_text(RichText::new(count.to_string()).monospace().color(MUTED))
+        .selected(selected).frame(selected).wrap_mode(egui::TextWrapMode::Truncate))
+        .on_hover_text(format!("{label} · {count} Medien im gewählten Zeitraum\nKlick: Ortsfilter umschalten. Mehrere Ortsfilter werden mit ODER verknüpft; Tags gelten zusätzlich. Pfeil: Unterebenen auf-/zuklappen. Rechtsklick auf ein Land: alle Orte auf-/zuklappen."))
+}
 fn navigation_row(ui: &mut egui::Ui, selected: bool, label: &str, height: f32) -> egui::Response {
     ui.add_sized(
         [ui.available_width(), height],

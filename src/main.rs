@@ -15,6 +15,7 @@ mod duplicates_ui;
 mod duration_cache_fs;
 mod exiftool;
 mod file_dates_fs;
+mod geo_labels;
 mod geodata_db;
 mod geodata_fs;
 mod geodata_ui;

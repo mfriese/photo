@@ -37,9 +37,16 @@ pub struct Snapshot {
     pub resolved: Option<ResolvedPlace>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdministrativeRegion {
+    pub code: String,
+    pub name: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocatedPhoto {
     pub photo: LibraryFile,
     pub country: String,
+    pub country_name: String,
+    pub region: Option<AdministrativeRegion>,
     pub place_id: i64,
     pub place_name: String,
 }

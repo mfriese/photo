@@ -105,6 +105,11 @@ def rust_notices(resources, metadata):
             destination.parent.mkdir(exist_ok=True)
             shutil.copy2(source, destination)
             lines.append(f"whisper.cpp / GGML: MIT; see Rust/{name}/whisper.cpp-LICENSE")
+    labels = resources / "Licenses/GeoLabels"
+    labels.mkdir(parents=True)
+    for name in ["LICENSE-Unicode.txt", "LICENSE-GeoNames.txt", "README.md", "source.json"]:
+        shutil.copy2(ROOT / "assets/geo-labels" / name, labels / name)
+    lines.append("Country names: Unicode CLDR, Unicode License v3; Regions: GeoNames, CC BY 4.0 (https://www.geonames.org/); see GeoLabels/")
     (resources / "Licenses/THIRD_PARTY.txt").write_text("\n".join(lines) + "\n")
 
 

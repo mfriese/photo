@@ -1,0 +1,22 @@
+{
+  "description": "Offline display labels only; no per-media cache or geographic boundary data. Two-letter country labels from CLDR German; country.admin1 labels from GeoNames. Original rows reduced to key and name.",
+  "sources": {
+    "countries": {
+      "url": "https://raw.githubusercontent.com/unicode-org/cldr-json/main/cldr-json/cldr-localenames-full/main/de/territories.json",
+      "sha256": "e5b7a831cd70afeaad10a56360c08e2d970e9fe79f254ee8d937a7dfa13686b7"
+    },
+    "regions": {
+      "url": "https://download.geonames.org/export/dump/admin1CodesASCII.txt",
+      "sha256": "2e4867f5397acb056ea26377601b57af37cb4c81399770225018e9e439e91ad3"
+    },
+    "unicode_license": {
+      "url": "https://raw.githubusercontent.com/unicode-org/cldr-json/main/LICENSE",
+      "sha256": "220ba0e1c43b99530d2d5bdb892a99dca0989414f51ab695ecd90163eaa1ec3b"
+    },
+    "geonames_license": {
+      "url": "https://creativecommons.org/licenses/by/4.0/legalcode.txt",
+      "sha256": "9ba9550ad48438d0836ddab3da480b3b69ffa0aac7b7878b5a0039e7ab429411"
+    }
+  },
+  "retrieved_on": "2026-11-17"
+}

@@ -17,6 +17,7 @@ use std::{
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Selection {
     Country(String),
+    Region { country: String, code: String },
     Place(i64),
 }
 #[derive(Default)]
@@ -33,7 +34,7 @@ impl Catalog {
         let path = media.path().strip_prefix(root).ok()?.to_str()?;
         self.entries.get(path)
     }
-    /// An empty selection preserves photos without GPS. Otherwise all selected facets must match.
+    /// An empty selection preserves photos without GPS. Otherwise any selected location matches.
     pub fn filter(
         &self,
         items: &[Media],
@@ -52,45 +53,137 @@ impl Catalog {
                     .get(i)
                     .and_then(|m| self.entry(m, root))
                     .is_some_and(|entry| {
-                        selected.iter().all(|s| match s {
+                        selected.iter().any(|s| match s {
                             Selection::Country(c) => *c == entry.country,
+                            Selection::Region { country, code } => {
+                                *country == entry.country
+                                    && entry.region.as_ref().is_some_and(|r| r.code == *code)
+                            }
                             Selection::Place(id) => *id == entry.place_id,
                         })
                     })
             })
             .collect()
     }
-    /// Available choices follow the period, not the current tag/place selection.
+    /// Counts cover distinct media in the supplied period, before place/tag selection.
     pub fn options(
         &self,
         items: &[Media],
         root: &Path,
         candidates: &[usize],
-    ) -> Vec<(String, Vec<(i64, String)>)> {
-        let mut countries: BTreeMap<String, BTreeMap<i64, String>> = BTreeMap::new();
+    ) -> Vec<CountryOption> {
+        let mut countries: BTreeMap<String, CountryBuilder> = BTreeMap::new();
+        let mut seen = BTreeSet::new();
         for i in candidates {
-            if let Some(entry) = items.get(*i).and_then(|m| self.entry(m, root)) {
+            let Some(entry) = items.get(*i).and_then(|m| self.entry(m, root)) else {
+                continue;
+            };
+            if !seen.insert(&entry.photo) {
+                continue;
+            }
+            let country =
                 countries
                     .entry(entry.country.clone())
-                    .or_default()
-                    .insert(entry.place_id, entry.place_name.clone());
-            }
+                    .or_insert_with(|| CountryBuilder {
+                        code: entry.country.clone(),
+                        name: entry.country_name.clone(),
+                        count: 0,
+                        regions: BTreeMap::new(),
+                        places: BTreeMap::new(),
+                    });
+            country.count += 1;
+            let places = if let Some(region) = &entry.region {
+                let region = country
+                    .regions
+                    .entry(region.code.clone())
+                    .or_insert_with(|| RegionBuilder {
+                        code: region.code.clone(),
+                        name: region.name.clone(),
+                        count: 0,
+                        places: BTreeMap::new(),
+                    });
+                region.count += 1;
+                &mut region.places
+            } else {
+                &mut country.places
+            };
+            let place = places.entry(entry.place_id).or_insert_with(|| PlaceOption {
+                id: entry.place_id,
+                name: entry.place_name.clone(),
+                count: 0,
+            });
+            place.count += 1;
         }
-        countries
-            .into_iter()
-            .map(|(country, places)| {
-                let mut places: Vec<_> = places.into_iter().collect();
-                places.sort_by(|a, b| {
-                    a.1.to_lowercase()
-                        .cmp(&b.1.to_lowercase())
-                        .then(a.1.cmp(&b.1))
-                        .then(a.0.cmp(&b.0))
-                });
-                (country, places)
+        let mut result: Vec<_> = countries
+            .into_values()
+            .map(|country| {
+                let mut regions: Vec<_> = country
+                    .regions
+                    .into_values()
+                    .map(|region| RegionOption {
+                        code: region.code,
+                        name: region.name,
+                        count: region.count,
+                        places: sorted_places(region.places),
+                    })
+                    .collect();
+                regions.sort_by(|a, b| compare_name(&a.name, &b.name).then(a.code.cmp(&b.code)));
+                CountryOption {
+                    code: country.code,
+                    name: country.name,
+                    count: country.count,
+                    regions,
+                    places: sorted_places(country.places),
+                }
             })
-            .collect()
+            .collect();
+        result.sort_by(|a, b| compare_name(&a.name, &b.name).then(a.code.cmp(&b.code)));
+        result
     }
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaceOption {
+    pub id: i64,
+    pub name: String,
+    pub count: usize,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegionOption {
+    pub code: String,
+    pub name: String,
+    pub count: usize,
+    pub places: Vec<PlaceOption>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CountryOption {
+    pub code: String,
+    pub name: String,
+    pub count: usize,
+    pub regions: Vec<RegionOption>,
+    pub places: Vec<PlaceOption>,
+}
+struct RegionBuilder {
+    code: String,
+    name: String,
+    count: usize,
+    places: BTreeMap<i64, PlaceOption>,
+}
+struct CountryBuilder {
+    code: String,
+    name: String,
+    count: usize,
+    regions: BTreeMap<String, RegionBuilder>,
+    places: BTreeMap<i64, PlaceOption>,
+}
+fn compare_name(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase().cmp(&b.to_lowercase()).then(a.cmp(b))
+}
+fn sorted_places(places: BTreeMap<i64, PlaceOption>) -> Vec<PlaceOption> {
+    let mut places: Vec<_> = places.into_values().collect();
+    places.sort_by(|a, b| compare_name(&a.name, &b.name).then(a.id.cmp(&b.id)));
+    places
+}
+
 struct Worker {
     receiver: mpsc::Receiver<Result<Vec<LocatedPhoto>, String>>,
     stop: Arc<AtomicBool>,
@@ -231,8 +324,71 @@ mod tests {
         LocatedPhoto {
             photo: LibraryFile::new(photo.into()).unwrap(),
             country: country.into(),
+            country_name: match country {
+                "DE" => "Deutschland",
+                "FR" => "Frankreich",
+                _ => country,
+            }
+            .into(),
+            region: None,
             place_id: id,
             place_name: name.into(),
+        }
+    }
+    #[test]
+    fn region_union_is_country_scoped_and_parent_counts_equal_distinct_media() {
+        use crate::media_geo::AdministrativeRegion;
+        let root = Path::new("/photos");
+        let items: Vec<_> = ["a.jpg", "b.jpg", "c.jpg", "unknown.jpg"]
+            .into_iter()
+            .map(|p| Media::from_path(root.join(p), "2020/01".into()).unwrap())
+            .collect();
+        let mut first = located("a.jpg", "DE", 1, "Berlin");
+        first.region = Some(AdministrativeRegion {
+            code: "01".into(),
+            name: "Nord".into(),
+        });
+        let mut second = located("b.jpg", "DE", 2, "Bonn");
+        second.region = first.region.clone();
+        let mut third = located("c.jpg", "US", 3, "Boston");
+        third.country_name = "Vereinigte Staaten".into();
+        third.region = Some(AdministrativeRegion {
+            code: "01".into(),
+            name: "Süd".into(),
+        });
+        let catalog = Catalog::new(vec![first, second, third]);
+        let region = Selection::Region {
+            country: "DE".into(),
+            code: "01".into(),
+        };
+        assert_eq!(
+            catalog.filter(&items, root, &[0, 1, 2, 3], &[region.clone()].into()),
+            vec![0, 1]
+        );
+        assert_eq!(
+            catalog.filter(
+                &items,
+                root,
+                &[0, 1, 2, 3],
+                &[region, Selection::Place(3)].into()
+            ),
+            vec![0, 1, 2]
+        );
+        let rows = catalog.options(&items, root, &[0, 0, 1, 2, 3]);
+        assert_eq!(rows[0].count, 2);
+        assert_eq!(rows[0].regions[0].count, 2);
+        for country in rows {
+            assert_eq!(
+                country.count,
+                country.regions.iter().map(|r| r.count).sum::<usize>()
+                    + country.places.iter().map(|p| p.count).sum::<usize>()
+            );
+            for region in country.regions {
+                assert_eq!(
+                    region.count,
+                    region.places.iter().map(|p| p.count).sum::<usize>()
+                );
+            }
         }
     }
     #[test]
@@ -405,23 +561,44 @@ mod tests {
             located("2021/01/c.jpg", "DE", 1, "Aachen"),
             located("2020/01/d.jpg", "FR", 3, "Paris"),
         ]);
+        let all = catalog.options(&items, root, &[0, 1, 2, 3]);
         assert_eq!(
-            catalog.options(&items, root, &[0, 1, 2, 3]),
+            all.iter()
+                .map(|c| (c.code.as_str(), c.name.as_str(), c.count))
+                .collect::<Vec<_>>(),
+            vec![("DE", "Deutschland", 2), ("FR", "Frankreich", 2)]
+        );
+        assert_eq!(
+            all[0].places,
             vec![
-                (
-                    "DE".into(),
-                    vec![(1, "Aachen".into()), (2, "Berlin".into())]
-                ),
-                ("FR".into(), vec![(3, "Paris".into())])
+                PlaceOption {
+                    id: 1,
+                    name: "Aachen".into(),
+                    count: 1
+                },
+                PlaceOption {
+                    id: 2,
+                    name: "Berlin".into(),
+                    count: 1
+                }
             ]
         );
         assert_eq!(
-            catalog.options(&items, root, &[0, 3]),
-            vec![("FR".into(), vec![(3, "Paris".into())])]
+            all[1].places,
+            vec![PlaceOption {
+                id: 3,
+                name: "Paris".into(),
+                count: 2
+            }]
         );
+        let period = catalog.options(&items, root, &[0, 0, 3]);
+        assert_eq!(period.len(), 1);
+        assert_eq!(period[0].code, "FR");
+        assert_eq!(period[0].count, 2);
+        assert_eq!(period[0].places[0].count, 2);
     }
     #[test]
-    fn empty_selection_keeps_unknown_media_otherwise_and_filters_combine_with_tags() {
+    fn empty_selection_keeps_unknown_media_and_location_union_combines_with_tag_intersection() {
         let root = Path::new("/photos");
         let items: Vec<_> = ["a.jpg", "b.jpg", "c.jpg", "unknown.jpg"]
             .into_iter()
@@ -452,17 +629,25 @@ mod tests {
                 &[0, 1, 2, 3],
                 &[Selection::Country("DE".into()), Selection::Place(2)].into()
             ),
-            vec![1]
+            vec![0, 1]
         );
-        assert!(
-            catalog
-                .filter(
-                    &items,
-                    root,
-                    &[0, 1, 2, 3],
-                    &[Selection::Place(1), Selection::Place(2)].into()
-                )
-                .is_empty()
+        assert_eq!(
+            catalog.filter(
+                &items,
+                root,
+                &[0, 1, 2, 3],
+                &[Selection::Place(1), Selection::Place(2)].into()
+            ),
+            vec![0, 1]
+        );
+        assert_eq!(
+            catalog.filter(
+                &items,
+                root,
+                &[0, 1, 2, 3],
+                &[Selection::Country("FR".into()), Selection::Place(1)].into()
+            ),
+            vec![0, 2]
         );
         let mut tags = crate::domain::tags::TagCatalog::default();
         tags.create("scan").unwrap();
