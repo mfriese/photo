@@ -39,4 +39,6 @@ pub mod transcription;
 pub mod downloads;
 pub mod geodata;
 pub mod library_index;
+pub mod media_geo;
+pub mod photo_location;
 pub mod runtime;

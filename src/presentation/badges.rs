@@ -5,20 +5,28 @@ use std::sync::Arc;
 const INSET: f32 = 4.;
 const GAP: f32 = 3.;
 struct Badge {
-    galley: Arc<egui::Galley>,
+    galley: Option<Arc<egui::Galley>>,
     size: egui::Vec2,
 }
 fn badge(ui: &egui::Ui, label: &str, width: f32) -> Badge {
     let galley = theme::tag_galley(ui, label, width);
     let size = theme::tag_size(&galley);
-    Badge { galley, size }
+    Badge {
+        galley: Some(galley),
+        size,
+    }
 }
 fn used_width(row: &[Badge]) -> f32 {
     row.iter().map(|b| b.size.x).sum::<f32>() + GAP * row.len().saturating_sub(1) as f32
 }
-pub(super) fn paint_cloud(ui: &egui::Ui, image: egui::Rect, labels: &[&str]) {
-    if labels.is_empty() || image.width() < 24. || image.height() < 24. {
-        return;
+pub(super) fn paint_cloud(
+    ui: &egui::Ui,
+    image: egui::Rect,
+    labels: &[&str],
+    has_geo: bool,
+) -> Option<egui::Rect> {
+    if (labels.is_empty() && !has_geo) || image.width() < 24. || image.height() < 24. {
+        return None;
     }
     let width = image.width() - 2. * INSET;
     let row_height = theme::BADGE_HEIGHT;
@@ -26,6 +34,12 @@ pub(super) fn paint_cloud(ui: &egui::Ui, image: egui::Rect, labels: &[&str]) {
         as usize)
         .clamp(1, 3);
     let mut rows: Vec<Vec<Badge>> = vec![Vec::new()];
+    if has_geo {
+        rows[0].push(Badge {
+            galley: None,
+            size: egui::vec2(theme::BADGE_HEIGHT, theme::BADGE_HEIGHT),
+        });
+    }
     let mut shown = 0;
     for label in labels {
         let next = badge(ui, label, width);
@@ -49,6 +63,9 @@ pub(super) fn paint_cloud(ui: &egui::Ui, image: egui::Rect, labels: &[&str]) {
                 last.push(more);
                 break;
             }
+            if last.len() == 1 && last[0].galley.is_none() {
+                break;
+            }
             last.pop();
             hidden += 1;
         }
@@ -56,6 +73,7 @@ pub(super) fn paint_cloud(ui: &egui::Ui, image: egui::Rect, labels: &[&str]) {
     let height = row_height * rows.len() as f32 + GAP * rows.len().saturating_sub(1) as f32;
     let top = image.bottom() - INSET - height;
     let painter = ui.painter_at(image);
+    let mut geo_rect = None;
     for (index, row) in rows.iter().enumerate() {
         let mut x = image.left() + INSET;
         let y = top + index as f32 * (row_height + GAP);
@@ -65,11 +83,34 @@ pub(super) fn paint_cloud(ui: &egui::Ui, image: egui::Rect, labels: &[&str]) {
                 badge.size,
             );
             painter.rect_filled(rect, 3., theme::BADGE_BACKGROUND);
-            let text_origin = theme::tag_text_origin(rect, &badge.galley);
-            painter.galley(text_origin, badge.galley.clone(), theme::TEXT);
+            if let Some(galley) = &badge.galley {
+                let text_origin = theme::tag_text_origin(rect, galley);
+                painter.galley(text_origin, galley.clone(), theme::TEXT);
+            } else {
+                geo_rect = Some(rect);
+                let center = rect.center();
+                let radius = 6.;
+                let stroke = egui::Stroke::new(1_f32, theme::TEXT);
+                painter.circle_stroke(center, radius, stroke);
+                painter.line_segment(
+                    [
+                        center + egui::vec2(-radius, 0.),
+                        center + egui::vec2(radius, 0.),
+                    ],
+                    stroke,
+                );
+                let meridian: Vec<_> = (0..=24)
+                    .map(|i| {
+                        let angle = i as f32 / 24. * std::f32::consts::TAU;
+                        center + egui::vec2(angle.cos() * 3., angle.sin() * radius)
+                    })
+                    .collect();
+                painter.add(egui::Shape::closed_line(meridian, stroke));
+            }
             x += badge.size.x + GAP;
         }
     }
+    geo_rect
 }
 #[cfg(test)]
 mod tests {
@@ -100,6 +141,7 @@ mod tests {
                             "Reise",
                             "Arbeit",
                         ],
+                        false,
                     )
                 });
             });
@@ -135,6 +177,35 @@ mod tests {
             if width == 90. {
                 assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.job.text.starts_with('+'))));
             }
+        }
+    }
+    #[test]
+    fn globe_badge_is_drawn_without_unicode_and_keeps_the_same_height_as_tags() {
+        for width in [32., 90., 240.] {
+            let ctx = egui::Context::default();
+            theme::install(&ctx);
+            let image = egui::Rect::from_min_size(egui::pos2(10., 10.), egui::vec2(width, width));
+            let mut globe = None;
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    globe = paint_cloud(ui, image, &["scan", "reise"], true);
+                });
+            });
+            let globe = globe.expect("GPS badge remains visible even if tags overflow");
+            assert!(image.contains_rect(globe));
+            assert_eq!(
+                globe.size(),
+                egui::vec2(theme::BADGE_HEIGHT, theme::BADGE_HEIGHT)
+            );
+            assert!(
+                output
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape,egui::Shape::Circle(c) if globe.contains(c.center)))
+            );
+            assert!(!output.shapes.iter().any(
+                |s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.job.text.contains('🌐'))
+            ));
         }
     }
 }

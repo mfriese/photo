@@ -15,6 +15,7 @@ impl super::Suite {
                 return;
             };
             if !self.comments.is_open()
+                && !self.location_open
                 && !self.options_open
                 && !self.tag_view.open
                 && !self.bindings.visible
@@ -80,9 +81,16 @@ impl super::Suite {
                         self.storyboard.clear();
                         centered_preview(
                             ui,
-                            egui::Image::from_uri(image_uri(m.path(), self.editor.rotations())),
+                            egui::Image::from_uri(image_uri(m.path(), self.editor.rotations()))
+                                .sense(egui::Sense::click()),
                         )
-                        .on_hover_text(&date_detail);
+                        .on_hover_text(&date_detail)
+                        .context_menu(|ui| {
+                            if ui.button("Ort anzeigen …").clicked() {
+                                self.open_photo_location(&m);
+                                ui.close();
+                            }
+                        });
                     }
                 });
             if (!self.comments.is_open() || self.comment_view.inline) && !self.tag_view.open {

@@ -2,7 +2,7 @@
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior};
 use std::{path::Path, sync::Mutex, time::Duration};
 pub const FILE: &str = "yaml/library.sqlite";
-const SCHEMA: i64 = 1;
+const SCHEMA: i64 = 2;
 // Covers all connections, including independent adapters and database replacement.
 static ACCESS: Mutex<()> = Mutex::new(());
 #[derive(Default)]
@@ -46,6 +46,17 @@ CREATE TABLE media_tags (
 ) STRICT;
 CREATE INDEX media_tags_by_name ON media_tags(tag_name,media_path);
 CREATE VIEW tags AS SELECT tag_name AS name, count(*) AS media_count FROM media_tags GROUP BY tag_name;
+CREATE TABLE media_geo (
+ media_path TEXT PRIMARY KEY REFERENCES media(path),source_bytes INTEGER NOT NULL CHECK(source_bytes>=0),source_modified TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('missing','invalid','available')),latitude REAL,longitude REAL,error TEXT NOT NULL DEFAULT '',
+ place_id INTEGER,place_name TEXT,place_ascii_name TEXT,place_latitude REAL,place_longitude REAL,country_code TEXT,admin1_code TEXT,distance_meters REAL,dataset_sha256 TEXT,
+ CHECK((status='available' AND latitude BETWEEN -90 AND 90 AND longitude BETWEEN -180 AND 180 AND latitude IS NOT NULL AND longitude IS NOT NULL) OR (status!='available' AND latitude IS NULL AND longitude IS NULL)),
+ CHECK(place_id IS NULL OR (place_id>0 AND status='available' AND place_name IS NOT NULL AND place_ascii_name IS NOT NULL AND place_latitude IS NOT NULL AND place_longitude IS NOT NULL AND country_code IS NOT NULL AND admin1_code IS NOT NULL AND distance_meters IS NOT NULL AND distance_meters>=0 AND dataset_sha256 IS NOT NULL AND length(dataset_sha256)=64))
+) STRICT;
+CREATE INDEX geo_by_country_region ON media_geo(country_code,admin1_code,media_path) WHERE status='available';
+CREATE INDEX geo_by_place ON media_geo(place_id,media_path) WHERE place_id IS NOT NULL;
+CREATE INDEX geo_by_coordinates ON media_geo(latitude,longitude) WHERE status='available';
+CREATE VIEW geo_overview AS SELECT media_path,status,latitude,longitude,place_name,country_code,admin1_code,distance_meters FROM media_geo;
 CREATE TABLE audio_comments (
  id TEXT PRIMARY KEY, photo_path TEXT NOT NULL REFERENCES media(path), audio_path TEXT NOT NULL REFERENCES media(path),
  UNIQUE(audio_path)
@@ -69,7 +80,7 @@ CREATE VIEW media_overview AS SELECT m.path,m.kind,m.metadata_path,m.recorded_at
  (SELECT seconds FROM audio_durations WHERE media_path=m.path) AS audio_seconds
  FROM media m;
 CREATE VIEW transcription_overview AS SELECT source_path,record_path,status,error,source_bytes,source_modified FROM transcription_jobs;
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 PRAGMA application_id=1347634516;
 ";
 impl Database {

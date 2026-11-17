@@ -98,4 +98,4 @@ cargo build --workspace
 
 **Lizenz:** [GNU GPL v3](LICENSE).
 
-Unter **PhotoSuite → Settings… → Geodaten** lässt sich GeoNames cities500 für alle Bibliotheken herunterladen, prüfen und in eine lokale SQLite-Ortsdatenbank mit räumlichem Index importieren. Der Dialog zeigt ZIP-/Importstatus, Ortszahl, Speicherorte und Fortschritt und bietet einen erneuten Import an. Die automatische Ortszuordnung zu Fotos folgt separat.
+Unter **PhotoSuite → Settings… → Geodaten** lässt sich GeoNames cities500 für alle Bibliotheken herunterladen, prüfen und in eine lokale SQLite-Ortsdatenbank mit räumlichem Index importieren. Der Dialog zeigt ZIP-/Importstatus, Ortszahl, Speicherorte und Fortschritt und bietet einen erneuten Import an. Fotos mit erkannten GPS-Koordinaten zeigen einen anklickbaren Globus. Rechtsklick → Ort anzeigen… funktioniert auch in der Großansicht. Die lokale Suche nennt den nächstgelegenen Ort; Geo-Ergebnisse bleiben ausschließlich im rekonstruierbaren SQLite-Cache.

@@ -9,6 +9,7 @@ mod icons;
 mod inline_recording;
 mod library;
 mod menu;
+mod photo_location;
 mod startup;
 mod tag_filter;
 mod tags;
@@ -26,6 +27,9 @@ pub struct Suite {
     transcription_complete: bool,
     transcription: photosuite_application::transcription::ModelSession,
     geodata: photosuite_application::geodata::Session,
+    photo_location: photosuite_application::photo_location::Session,
+    location_open: bool,
+    geo_markers: photosuite_application::media_geo::Catalog,
     index_maintenance: photosuite_application::library_index::Session,
     settings_view: crate::options_ui::SettingsView,
     gallery: gallery::GalleryState,
@@ -83,6 +87,9 @@ impl Suite {
     }
     fn load_library(&mut self, path: PathBuf, remember: bool, refresh_tags: bool) {
         if self.root.as_ref() != Some(&path) {
+            self.geo_markers.clear();
+            self.photo_location.cancel();
+            self.location_open = false;
             self.index_maintenance.cancel();
         }
         let path = if path.is_absolute() {
@@ -142,6 +149,7 @@ impl Suite {
         self.gallery.selection.clear();
         self.known_media.clear();
         self.media_dates.clear();
+        self.geo_markers.clear();
         self.media_counts = Default::default();
         self.highlighted_photo = None;
         self.scroll_to_photo = None;
@@ -350,6 +358,14 @@ impl eframe::App for Suite {
         {
             self.load_library(root, true, true);
         }
+        self.geo_markers.poll();
+        if self.geo_markers.loading() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+        }
+        self.photo_location.poll();
+        if self.photo_location.busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         self.geodata.poll();
         if self.geodata.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -492,6 +508,7 @@ impl eframe::App for Suite {
             self.execute(command, ctx);
         }
         self.tag_view.show(ctx, &mut self.organization);
+        self.photo_location_dialog(ctx);
         self.comment_dialog(ctx);
         self.bindings.show(ctx);
         self.settings(ctx);
@@ -548,6 +565,16 @@ pub fn create(
         transcription_seen: None,
         transcription_complete: false,
         geodata: photosuite_application::geodata::Session::new(services.geodata.clone()),
+        photo_location: photosuite_application::photo_location::Session::new(
+            services.media_geo.clone(),
+            services.geodata.clone(),
+            services.places.clone(),
+        ),
+        location_open: false,
+        geo_markers: photosuite_application::media_geo::Catalog::new(
+            services.media_geo.clone(),
+            services.work_priority.clone(),
+        ),
         index_maintenance: photosuite_application::library_index::Session::new(
             services.index_rebuilder.clone(),
         ),

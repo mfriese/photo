@@ -133,6 +133,14 @@ pub trait PlaceIndex: Send + Sync + 'static {
         bounds: Bounds,
         limit: usize,
     ) -> Result<Vec<Place>, String>;
+    /// Stream every matching place; no truncation that could hide the nearest locality.
+    fn visit_candidates(
+        &self,
+        database: &std::path::Path,
+        bounds: Bounds,
+        stop: &AtomicBool,
+        visit: &mut dyn FnMut(Place),
+    ) -> Result<(), String>;
 }
 pub trait Store: Send + Sync + 'static {
     /// Pure path calculation only; no I/O.

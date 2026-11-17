@@ -117,13 +117,22 @@ impl super::Suite {
                             ui.horizontal(|ui| {
                                 ui.set_min_height(row_height);
                                 for &index in visible.iter().skip(row * columns).take(columns) {
-                                    let m = &self.items[index];
-                                    let tags = self.organization.tags_for(m.path());
-                                    let tooltip = if tags.is_empty() {
+                                    let m = self.items[index].clone();
+                                    let tags:Vec<String> = self.organization.tags_for(m.path()).into_iter().map(str::to_owned).collect();
+                                    let mut tooltip = if tags.is_empty() {
                                         m.path().display().to_string()
                                     } else {
                                         format!("{}\nTags: {}", m.path().display(), tags.join(", "))
                                     };
+                                    let mut has_geo=false;
+                                    if m.is_photo() && let Some(root)=&self.root && let Ok(relative)=m.path().strip_prefix(root) && let Some(relative)=relative.to_str() && let Ok(file)=crate::domain::tags::LibraryFile::new(relative.into()) {
+                                        match self.geo_markers.get(root,&file) {
+                                            Some(Ok(snapshot))=>{has_geo=matches!(snapshot.position,photosuite_application::media_geo::Position::Present(_));},
+                                            Some(Err(error))=>tooltip.push_str(&format!("\nGPS-Prüfung: {error}")),
+                                            None=>{},
+                                        }
+                                    }
+                                    if has_geo {tooltip.push_str("\nGPS-Koordinaten vorhanden · Rechtsklick → Ort anzeigen …");}
                                     ui.vertical(|ui| {
                                         ui.spacing_mut().item_spacing.y = 2.;
                                         ui.set_width(tile);
@@ -212,8 +221,10 @@ impl super::Suite {
                                             if m.is_video() {
                                                 badges.push("Video");
                                             }
-                                            badges.extend(tags.iter().copied());
-                                            super::badges::paint_cloud(ui, paint_rect, &badges);
+                                            badges.extend(tags.iter().map(String::as_str));
+                                            if let Some(geo_rect)=super::badges::paint_cloud(ui, paint_rect, &badges,has_geo)
+                                                && ui.interact(geo_rect,response.id.with("geo_location"),egui::Sense::click()).on_hover_text("GPS-Koordinaten vorhanden · Ort anzeigen").clicked(){self.open_photo_location(&m);}
+
                                             response.on_hover_cursor(egui::CursorIcon::PointingHand)
                                         };
                                         if response.secondary_clicked() {self.gallery.selection.context(m.path());}
@@ -226,6 +237,7 @@ impl super::Suite {
                                                 self.record_photo = Some(index);
                                                 ui.close();
                                             }
+                                            if count==1 && m.is_photo() && ui.button("Ort anzeigen …").clicked(){self.open_photo_location(&m);ui.close();}
                                             if ui.button(format!("Tags bearbeiten … ({count})")).clicked() {
                                                 let files:Result<Vec<_>,_>=self.gallery.selection.paths.iter().map(|path|self.organization.file(path)).collect();
                                                 match files {Ok(files)=>self.tag_view.edit_many(files),Err(error)=>self.status=error}
@@ -253,7 +265,7 @@ impl super::Suite {
                                             if m.is_audio() {
                                                 if let Err(error) = self.diary.start(
                                                     &self.items,
-                                                    m,
+                                                    &m,
                                                     self.services.audio_source.clone(),
                                                 ) {
                                                     self.status = error;
@@ -265,7 +277,7 @@ impl super::Suite {
                                         super::captions::caption(
                                             ui,
                                             &mut self.media_dates,
-                                            m,
+                                            &m,
                                             tile,
                                         );
                                     });

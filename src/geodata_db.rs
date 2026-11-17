@@ -397,6 +397,39 @@ impl PlaceIndex for SqlitePlaces {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())
     }
+    fn visit_candidates(
+        &self,
+        database: &Path,
+        bounds: Bounds,
+        stop: &AtomicBool,
+        visit: &mut dyn FnMut(Place),
+    ) -> Result<(), String> {
+        cancelled(stop)?;
+        let conn = open(database, false)?;
+        schema(&conn)?;
+        let mut stmt=conn.prepare("SELECT p.geoname_id,p.name,p.ascii_name,p.latitude,p.longitude,p.country_code,p.admin1_code FROM place_coordinates r JOIN places p ON p.geoname_id=r.geoname_id WHERE r.min_longitude<=?1 AND r.max_longitude>=?2 AND r.min_latitude<=?3 AND r.max_latitude>=?4 AND p.longitude BETWEEN ?2 AND ?1 AND p.latitude BETWEEN ?4 AND ?3").map_err(|e|e.to_string())?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![bounds.east(), bounds.west(), bounds.north(), bounds.south()],
+                |r| {
+                    Ok(Place {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        ascii_name: r.get(2)?,
+                        latitude: r.get(3)?,
+                        longitude: r.get(4)?,
+                        country_code: r.get(5)?,
+                        admin1_code: r.get(6)?,
+                    })
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            cancelled(stop)?;
+            visit(row.map_err(|e| e.to_string())?);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -592,5 +625,45 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fs::read(outside).unwrap(), b"untouched");
+    }
+    #[test]
+    fn nearest_search_uses_real_rtree_across_date_line_and_near_poles() {
+        use crate::domain::geo::Coordinates;
+        let root = tempfile::tempdir().unwrap();
+        let lines = row(1, "Date line", "0", "-179.9", "FJ", "01")
+            + &row(2, "Polar", "89.95", "-40", "NO", "01")
+            + &row(3, "Further polar", "89", "140", "NO", "01");
+        let archive = archive(root.path(), &lines);
+        let database = root.path().join("places.sqlite");
+        let stop = AtomicBool::new(false);
+        SqlitePlaces
+            .prepare(
+                &archive,
+                &database,
+                &"a".repeat(64),
+                &stop,
+                &|_| {},
+                &|| Ok(()),
+            )
+            .unwrap();
+        let result = photosuite_application::photo_location::nearest(
+            &SqlitePlaces,
+            &database,
+            Coordinates::new(0., 179.9).unwrap(),
+            &stop,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.0.id, 1);
+        assert!(result.1 < 23_000.);
+        let result = photosuite_application::photo_location::nearest(
+            &SqlitePlaces,
+            &database,
+            Coordinates::new(89.9, 140.).unwrap(),
+            &stop,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.0.id, 2);
     }
 }

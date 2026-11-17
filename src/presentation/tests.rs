@@ -177,6 +177,16 @@ pub(super) fn test_suite() -> Suite {
         transcription_complete: false,
         transcription: photosuite_application::transcription::ModelSession::new(adapters.clone()),
         geodata: photosuite_application::geodata::Session::new(adapters.clone()),
+        photo_location: photosuite_application::photo_location::Session::new(
+            adapters.clone(),
+            adapters.clone(),
+            adapters.clone(),
+        ),
+        location_open: false,
+        geo_markers: photosuite_application::media_geo::Catalog::new(
+            adapters.clone(),
+            Arc::default(),
+        ),
         index_maintenance: photosuite_application::library_index::Session::new(adapters.clone()),
         settings_view: Default::default(),
         gallery: Default::default(),
@@ -223,6 +233,8 @@ pub(super) fn test_suite() -> Suite {
             transcription_power: adapters.clone(),
             transcription: adapters.clone(),
             geodata: adapters.clone(),
+            media_geo: adapters.clone(),
+            places: adapters.clone(),
             index_rebuilder: adapters.clone(),
             duration_cache: None,
             media_trash: adapters.clone(),
@@ -2498,6 +2510,84 @@ impl photosuite_application::library_index::Rebuilder for UnusedAdapters {
         _: &std::path::Path,
         _: &std::sync::atomic::AtomicBool,
         _: &(dyn Fn(usize) + Sync),
+    ) -> Result<(), String> {
+        Err("unused".into())
+    }
+}
+
+impl photosuite_application::photo_location::CoordinateSource for UnusedAdapters {
+    fn coordinates(
+        &self,
+        _: &std::path::Path,
+        _: &crate::domain::tags::LibraryFile,
+        _: &std::sync::atomic::AtomicBool,
+    ) -> Result<Option<crate::domain::geo::Coordinates>, String> {
+        Ok(None)
+    }
+}
+impl photosuite_application::geodata::PlaceIndex for UnusedAdapters {
+    fn inspect(
+        &self,
+        _: &std::path::Path,
+        _: Option<&str>,
+        _: &std::sync::atomic::AtomicBool,
+        _: &(dyn Fn(photosuite_application::geodata::Progress) + Sync),
+    ) -> Result<photosuite_application::geodata::DatabaseInfo, String> {
+        Err("unused".into())
+    }
+    fn prepare(
+        &self,
+        _: &std::path::Path,
+        _: &std::path::Path,
+        _: &str,
+        _: &std::sync::atomic::AtomicBool,
+        _: &(dyn Fn(photosuite_application::geodata::Progress) + Sync),
+        _: &(dyn Fn() -> Result<(), String> + Sync),
+    ) -> Result<photosuite_application::geodata::DatabaseInfo, String> {
+        Err("unused".into())
+    }
+    fn candidates(
+        &self,
+        _: &std::path::Path,
+        _: photosuite_application::geodata::Bounds,
+        _: usize,
+    ) -> Result<Vec<photosuite_application::geodata::Place>, String> {
+        Err("unused".into())
+    }
+    fn visit_candidates(
+        &self,
+        _: &std::path::Path,
+        _: photosuite_application::geodata::Bounds,
+        _: &std::sync::atomic::AtomicBool,
+        _: &mut dyn FnMut(photosuite_application::geodata::Place),
+    ) -> Result<(), String> {
+        Err("unused".into())
+    }
+}
+
+impl photosuite_application::media_geo::Repository for UnusedAdapters {
+    fn inspect(
+        &self,
+        _: &std::path::Path,
+        _: &crate::domain::tags::LibraryFile,
+        _: &std::sync::atomic::AtomicBool,
+    ) -> Result<photosuite_application::media_geo::Snapshot, String> {
+        Ok(photosuite_application::media_geo::Snapshot {
+            fingerprint: photosuite_application::media_geo::Fingerprint {
+                bytes: 0,
+                modified: "0".into(),
+            },
+            position: photosuite_application::media_geo::Position::Missing,
+            resolved: None,
+        })
+    }
+    fn save_place(
+        &self,
+        _: &std::path::Path,
+        _: &crate::domain::tags::LibraryFile,
+        _: &photosuite_application::media_geo::Fingerprint,
+        _: &photosuite_application::media_geo::ResolvedPlace,
+        _: &std::sync::atomic::AtomicBool,
     ) -> Result<(), String> {
         Err("unused".into())
     }

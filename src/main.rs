@@ -27,12 +27,14 @@ mod infrastructure;
 mod library_db;
 mod library_index_fs;
 mod library_preferences_fs;
+mod media_geo_fs;
 mod media_records_fs;
 mod media_trash_fs;
 mod metadata_fs;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod muda_menu;
 mod options_ui;
+mod photo_coordinates_fs;
 mod preferences_codec;
 mod presentation;
 mod runtime_state_fs;
@@ -95,7 +97,15 @@ fn main() -> eframe::Result {
     });
     let model_transport = std::sync::Arc::new(whisper_models_native::NativeModelTransport);
     let database = std::sync::Arc::new(library_db::Database);
+    let places = std::sync::Arc::new(geodata_db::SqlitePlaces);
+    let coordinates = std::sync::Arc::new(photo_coordinates_fs::ExifCoordinates);
+    let media_geo = std::sync::Arc::new(media_geo_fs::SqlitePhotoGeo {
+        database: database.clone(),
+        coordinates: coordinates.clone(),
+    });
     let services = application::Services {
+        media_geo,
+        places: places.clone(),
         index_rebuilder: std::sync::Arc::new(library_index_fs::SqliteRebuilder {
             database: database.clone(),
             priority: priority.clone(),
@@ -121,7 +131,7 @@ fn main() -> eframe::Result {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default(),
             model_transport,
-            std::sync::Arc::new(geodata_db::SqlitePlaces),
+            places,
         )),
         duration_cache: Some(std::sync::Arc::new(duration_cache_fs::SqliteDurations {
             database: database.clone(),
