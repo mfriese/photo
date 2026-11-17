@@ -10,7 +10,7 @@ mod inline_recording;
 mod library;
 mod menu;
 mod startup;
-mod tag_cloud;
+mod tag_filter;
 mod tags;
 mod transcription_control;
 mod viewer;
@@ -302,7 +302,7 @@ impl Suite {
             return base;
         }
         match (self.organization.root(), self.organization.catalog()) {
-            (Some(root), Some(catalog)) => photosuite_application::organization::filter_any(
+            (Some(root), Some(catalog)) => photosuite_application::organization::filter_all(
                 &self.items,
                 root,
                 catalog,
@@ -312,32 +312,7 @@ impl Suite {
             _ => base,
         }
     }
-    fn prepare_tag_cloud(&mut self) {
-        let scope = (
-            self.root.clone(),
-            self.group.clone(),
-            self.tag_view.active.clone(),
-        );
-        if self.tag_view.cloud_scope.as_ref() != Some(&scope) {
-            self.tag_view.filters.clear();
-            self.tag_view.cloud_cache = None;
-            self.tag_view.cloud_scope = Some(scope);
-        }
-    }
     fn unfiltered_visible(&self) -> Vec<usize> {
-        if let Some(tag) = &self.tag_view.active {
-            return match (self.organization.root(), self.organization.catalog()) {
-                (Some(root), Some(catalog)) => photosuite_application::organization::visible(
-                    &self.items,
-                    &self.query,
-                    self.videos_only,
-                    root,
-                    catalog,
-                    tag,
-                ),
-                _ => Vec::new(),
-            };
-        }
         crate::application::visible(
             &self.items,
             &self.query,
@@ -455,17 +430,6 @@ impl eframe::App for Suite {
         }
         self.poll_transcription_queue(ctx);
         if self.collection.is_loading() {
-            if let (Some(tag), Some(catalog)) = (&self.tag_view.active, self.organization.catalog())
-                && catalog.tags().contains_key(tag)
-            {
-                let years = catalog.partitions(tag);
-                if let Some(year) = years.into_iter().rev().find(|year| {
-                    self.collection.years().iter().any(|y| y == year)
-                        && !self.collection.partition_loaded(year)
-                }) {
-                    self.collection.prioritize(year);
-                }
-            }
             self.status = "Weitere Jahre werden gelesen …".into();
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -485,7 +449,7 @@ impl eframe::App for Suite {
         self.search_dialog(ctx);
         self.status_bar(ctx);
         self.library_sidebar(ctx);
-        self.prepare_tag_cloud();
+        self.prepare_tag_filter();
         let visible = self.visible();
         self.photo_wall(ctx, &visible);
         let viewer_visible = self.viewer_items(&visible);
@@ -496,15 +460,7 @@ impl eframe::App for Suite {
         for command in pending {
             self.execute(command, ctx);
         }
-        let previous_tag = self.tag_view.active.clone();
         self.tag_view.show(ctx, &mut self.organization);
-        if self.tag_view.active != previous_tag {
-            self.group = None;
-            self.selected = None;
-            self.scroll_to_photo = None;
-            self.highlighted_photo = None;
-            self.storyboard.clear();
-        }
         self.comment_dialog(ctx);
         self.bindings.show(ctx);
         self.settings(ctx);

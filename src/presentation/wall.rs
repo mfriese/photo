@@ -58,7 +58,7 @@ impl super::Suite {
                     });
                     return;
                 }
-                let title = self.tag_view.active.clone().unwrap_or_else(|| {
+                let title = {
                     let group = self.group.as_deref().unwrap_or("Sammlung");
                     match group.split_once(std::path::MAIN_SEPARATOR) {
                         Some((year, "scans")) => format!("Scans {year}"),
@@ -67,9 +67,8 @@ impl super::Suite {
                         }
                         _ => group.into(),
                     }
-                });
+                };
                 self.page_heading(ui, &title);
-                let visible = self.tag_cloud(ui, visible);
                 self.prepare_gallery_selection();
                 ui.small(format!("{} ausgewählt · Cmd-Klick: Mehrfachauswahl · Shift-Klick: Bereich · Doppelklick: Öffnen", self.gallery.selection.paths.len()));
                 ui.add_space(4.);
@@ -96,7 +95,7 @@ impl super::Suite {
                     "photo_wall",
                     &self.root,
                     &self.group,
-                    &self.tag_view.active,
+                    &self.tag_view.filters,
                 ));
                 if let Some(path) = self.scroll_to_photo.take()
                     && let Some(position) = visible

@@ -16,7 +16,7 @@ PhotoSuite macht deine nach **Jahr und Monat** geordnete Sammlung durchsuchbar �
 - **Audio-Diary:** gemeinsame Zeitachse mit Abschnitten proportional zur Aufnahmedauer, sofortigen Längenhinweisen aus einem YAML-Cache, täglichem Hintergrundabgleich und fünf zeitlich passenden Fotos.
 - **Gesprochene Kommentare:** direkt in der Großansicht oder im Aufnahmedialog zum Foto aufnehmen, bei Bildwechsel automatisch speichern und weiter aufnehmen, Mikrofon wählen, Pegel beobachten und vor dem Speichern vorhören.
 - **Lokale Transkription:** Audio und Video automatisch mit Whisper verschriftlichen; Modell und Sprache appweit wählen, Verarbeitung pausieren und fortsetzen. Ergebnisse liegen in den Medien-YAMLs.
-- **Tags und virtuelle Alben:** mehrere Tags pro Datei, Tagwolken zum Filtern und Tags bereits beim Import. Neue Zuordnungen erscheinen automatisch.
+- **Tags und virtuelle Alben:** mehrere Tags pro Datei, kombinierbare Tagfilter in der Seitenleiste und Tags bereits beim Import. Neue Zuordnungen erscheinen automatisch.
 - **Kontrollierter Import:** Prüflauf, kompakte Ergebnisse, datumsbasierte Namen mit gekennzeichnetem Dateisystem-Fallback, farbige Ergebnisse, optionale Fotoablage unter `Jahr/scans`, Kollisionsprüfung und separate Prüfung von Bildduplikaten.
 - **Native Bedienung:** macOS-Menüs, Tastenkürzel und bibliotheksbezogene Einstellungen; die letzte Bibliothek wird beim Start wieder geöffnet. Langsame Datenträger erhalten einen Wartedialog mit Wiederholung, Abbruch und alternativer Bibliothekswahl.
 
@@ -50,7 +50,7 @@ Weitere Installationsmöglichkeiten stehen im [Benutzerhandbuch](docs/USER_GUIDE
 4. **View** enthält Vorschaugröße und Beschnitt, **Edit → Tags and Albums…** die Tagverwaltung.
 5. **File → Import…** importiert in die geöffnete Bibliothek, **File → Find Duplicates…** öffnet die separate Duplikatsuche; **PhotoSuite → Settings… (⌘,)** öffnet die Einstellungen.
 
-In der Tagwolke zeigt keine Auswahl alle Medien; mehrere ausgewählte Tags werden mit **ODER** verknüpft. **Reset** hebt den Filter auf. Links stehen die Tags alphabetisch untereinander. Im Raster wählt ein Klick, Cmd-Klick ergänzt die Auswahl und Shift-Klick markiert einen Bereich. Das Kontextmenü bearbeitet Tags für die gesamte Auswahl oder verschiebt sie nach Bestätigung in den macOS-Papierkorb.
+Links stehen die im gewählten Zeitraum verfügbaren Tags alphabetisch untereinander. Mehrere ausgewählte Tags werden mit **UND** verknüpft: Ein Medium muss alle besitzen. Erneuter Klick wählt ab, **Reset** hebt den Filter auf. Ohne Auswahl bleiben auch ungetaggte Medien sichtbar. Im Raster wählt ein Klick, Cmd-Klick ergänzt die Auswahl und Shift-Klick markiert einen Bereich. Das Kontextmenü bearbeitet Tags für die gesamte Auswahl oder verschiebt sie nach Bestätigung in den macOS-Papierkorb.
 
 ## Deine Dateien bleiben zugänglich
 

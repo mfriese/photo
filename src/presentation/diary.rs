@@ -46,7 +46,7 @@ impl super::Suite {
         egui::CentralPanel::default().frame(theme::panel(theme::CANVAS,12)).show(ctx,|ui| {
             let kind=crate::domain::diary::AudioScope::parse(self.group.as_deref().unwrap_or("")).map(|scope|scope.kind()).unwrap_or(crate::domain::diary::AudioKind::All);
             self.page_heading(ui,&format!("{} · {year}",crate::audio_labels::kind_label(kind)));
-        let mut ordered=self.tag_cloud(ui,visible);
+        let mut ordered=visible.to_vec();
         ordered.sort_by(|&a, &b| {
             let date = |i: usize| {
                 self.diary_catalog
@@ -127,7 +127,7 @@ impl super::Suite {
             match crate::application::locate_photo(&self.items, &path) {
                 Ok(location) => {
                     self.group = location.year;
-                    self.tag_view.active = None;
+                    self.tag_view.filters.clear();
                     self.query.clear();
                     self.videos_only = false;
                     self.selected = None;

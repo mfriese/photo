@@ -48,13 +48,7 @@ impl Selection {
         }
     }
 }
-type Scope = (
-    Option<PathBuf>,
-    Option<String>,
-    Option<String>,
-    String,
-    BTreeSet<String>,
-);
+type Scope = (Option<PathBuf>, Option<String>, String, BTreeSet<String>);
 #[derive(Default)]
 pub(super) struct GalleryState {
     pub selection: Selection,
@@ -69,7 +63,6 @@ impl super::Suite {
         let scope = (
             self.root.clone(),
             self.group.clone(),
-            self.tag_view.active.clone(),
             self.query.clone(),
             self.tag_view.filters.clone(),
         );

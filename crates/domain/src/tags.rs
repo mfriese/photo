@@ -181,19 +181,27 @@ impl TagCatalog {
     pub fn files(&self) -> BTreeSet<LibraryFile> {
         self.tags.values().flatten().cloned().collect()
     }
-    /// A prepared OR projection. None means no restriction, including untagged files.
+    /// Prepared intersection; no selection also includes untagged files.
     pub fn selected_files(&self, selected: &BTreeSet<String>) -> Option<BTreeSet<&str>> {
-        (!selected.is_empty()).then(|| {
-            selected
-                .iter()
-                .filter_map(|tag| self.files_for(tag))
-                .flatten()
-                .map(LibraryFile::as_str)
-                .collect()
-        })
-    }
-    pub fn matches_any(&self, file: &LibraryFile, selected: &BTreeSet<String>) -> bool {
-        selected.is_empty() || selected.iter().any(|tag| self.contains(tag, file.as_str()))
+        let mut tags = selected.iter();
+        let first = tags.next()?;
+        let mut files: BTreeSet<&str> = self
+            .files_for(first)
+            .into_iter()
+            .flatten()
+            .map(LibraryFile::as_str)
+            .collect();
+        for tag in tags {
+            if let Some(members) = self.files_for(tag) {
+                files.retain(|file| members.contains(*file));
+            } else {
+                files.clear();
+            }
+            if files.is_empty() {
+                break;
+            }
+        }
+        Some(files)
     }
     pub fn tags(&self) -> &BTreeMap<String, BTreeSet<LibraryFile>> {
         &self.tags

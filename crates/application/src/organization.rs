@@ -471,8 +471,8 @@ impl Drop for OrganizationSession {
         self.receiver.take();
     }
 }
-/// RAM-only OR selection; an empty selection preserves all candidates, including untagged media.
-pub fn filter_any(
+/// RAM-only AND selection; an empty selection preserves all candidates, including untagged media.
+pub fn filter_all(
     items: &[Media],
     root: &Path,
     catalog: &TagCatalog,
@@ -1057,7 +1057,7 @@ mod tests {
 mod period_filter_tests {
     use super::*;
     #[test]
-    fn cloud_uses_or_and_keeps_untagged_media_when_no_tag_is_selected() {
+    fn selection_uses_and_and_keeps_untagged_media_when_no_tag_is_selected() {
         let items: Vec<_> = ["a.jpg", "b.jpg", "c.jpg"]
             .iter()
             .map(|n| {
@@ -1084,22 +1084,49 @@ mod period_filter_tests {
         let root = Path::new("/library");
         let selected = Default::default();
         assert_eq!(
-            filter_any(&items, root, &catalog, &[0, 1, 2], &selected),
+            filter_all(&items, root, &catalog, &[0, 1, 2], &selected),
             vec![0, 1, 2]
         );
         assert_eq!(
-            filter_any(&items, root, &catalog, &[0, 1, 2], &["SCAN".into()].into()),
+            filter_all(&items, root, &catalog, &[0, 1, 2], &["SCAN".into()].into()),
             vec![0]
         );
         assert_eq!(
-            filter_any(
+            filter_all(
                 &items,
                 root,
                 &catalog,
                 &[0, 1, 2],
                 &["scan".into(), "dia".into()].into()
             ),
-            vec![0, 1]
+            Vec::<usize>::new()
+        );
+        catalog
+            .assign(
+                "dia",
+                LibraryFile::new("2023/12/a.jpg".into()).unwrap(),
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            filter_all(
+                &items,
+                root,
+                &catalog,
+                &[0, 1, 2],
+                &["SCAN".into(), "dia".into()].into()
+            ),
+            vec![0]
+        );
+        assert!(
+            filter_all(
+                &items,
+                root,
+                &catalog,
+                &[0, 1, 2],
+                &["missing".into()].into()
+            )
+            .is_empty()
         );
         assert_eq!(
             available_tags(&items, root, &catalog, &[0, 1, 2]),

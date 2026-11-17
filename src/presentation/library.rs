@@ -6,7 +6,7 @@ impl super::Suite {
             return;
         }
         let previous_group = self.group.clone();
-        let previous_tag = self.tag_view.active.clone();
+        let previous_tags = self.tag_view.filters.clone();
         egui::SidePanel::left("albums")
             .default_width(180.).min_width(120.).max_width((ctx.content_rect().width() * 0.4).clamp(120., 260.))
             .frame(theme::panel(theme::SURFACE, 8))
@@ -29,8 +29,8 @@ impl super::Suite {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    if theme::root_navigation(ui,self.group.is_none() && self.tag_view.active.is_none(),"Alles").clicked() {
-                        self.group=None;self.tag_view.active=None;
+                    if theme::root_navigation(ui,self.group.is_none(),"Alles").clicked() {
+                        self.group=None;self.tag_view.filters.clear();
                     }
                     ui.add_space(8.);theme::sidebar_heading(ui,"Jahre");ui.add_space(8.);
                     for (year, months) in years.into_iter().rev() {
@@ -42,24 +42,25 @@ impl super::Suite {
                                     if g == year || crate::domain::diary::audio_year(&g).is_some() {continue;}
                                     let label=g.strip_prefix(&format!("{year}/")).unwrap_or(&g);
                                     if theme::navigation(ui,self.group.as_ref()==Some(&g),month_label(label)).clicked() {
-                                        self.group=Some(g);self.tag_view.active=None;
+                                        self.group=Some(g);self.tag_view.filters.clear();
                                     }
                                 }
                             });
                         if response.header_response.clicked() {
                             self.collection.prioritize(&year);
-                            self.group = Some(year.clone());self.tag_view.active=None;
+                            self.group = Some(year.clone());self.tag_view.filters.clear();
                         }
                         ui.add_space(2.);
                     }
-                    let tags:Vec<_>=self.organization.catalog().map(|catalog|catalog.tags().keys().cloned().collect()).unwrap_or_default();
-                    {
-                        ui.add_space(12.);theme::sidebar_heading(ui,"Tags");ui.add_space(8.);
-                        for tag in tags {
-                            let selected=self.tag_view.active.as_ref()==Some(&tag);
-                            if theme::tag_navigation(ui, selected, &tag).on_hover_text(&tag).clicked(){
-                                self.tag_view.active=(!selected).then_some(tag);self.group=None;
-                            }
+                    self.prepare_tag_filter();
+                    let tags = self.tag_view.options_cache.as_ref().map(|c| c.tags.clone()).unwrap_or_default();
+                    ui.add_space(12.);theme::sidebar_heading(ui,"Tags");ui.add_space(8.);
+                    if ui.add_enabled(!self.tag_view.filters.is_empty(), egui::Button::new("Reset")).clicked() { self.tag_view.filters.clear(); }
+                    for tag in tags {
+                        let selected = self.tag_view.filters.contains(&tag);
+                        if theme::tag_navigation(ui, selected, &tag).on_hover_text(format!("{tag}\nNur Medien mit allen ausgewählten Tags anzeigen.")).clicked()
+                            && !self.tag_view.filters.remove(&tag) {
+                            self.tag_view.filters.insert(tag);
                         }
                     }
                     if self.root.is_none() {
@@ -67,14 +68,16 @@ impl super::Suite {
                     }
                 });
             });
-        if self.group != previous_group || self.tag_view.active != previous_tag {
+        if self.group != previous_group || self.tag_view.filters != previous_tags {
             self.selected = None;
             self.gallery.selection.clear();
             self.highlighted_photo = None;
             self.scroll_to_photo = None;
             self.storyboard.clear();
-            self.diary_catalog.cancel();
-            self.audio_preparation.cancel();
+            if self.group != previous_group {
+                self.diary_catalog.cancel();
+                self.audio_preparation.cancel();
+            }
         }
     }
 }

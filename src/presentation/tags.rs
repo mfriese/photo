@@ -2,7 +2,7 @@
 use crate::domain::tags::LibraryFile;
 use eframe::egui;
 use photosuite_application::organization::{Action, Change, OrganizationSession};
-pub(super) struct CloudCache {
+pub(super) struct TagOptionsCache {
     pub version: (u64, u64),
     pub count: usize,
     pub tags: Vec<String>,
@@ -10,10 +10,9 @@ pub(super) struct CloudCache {
 #[derive(Default)]
 pub(super) struct TagView {
     pub open: bool,
-    pub cloud_cache: Option<CloudCache>,
+    pub options_cache: Option<TagOptionsCache>,
     pub filters: std::collections::BTreeSet<String>,
-    pub cloud_scope: Option<(Option<std::path::PathBuf>, Option<String>, Option<String>)>,
-    pub active: Option<String>,
+    pub filter_scope: Option<(Option<std::path::PathBuf>, Option<String>)>,
     pub files: Vec<LibraryFile>,
     selected: Option<String>,
     new_name: String,
@@ -45,7 +44,7 @@ impl TagView {
         egui::Window::new("Tags und Alben").open(&mut self.open).default_width(520.)
             .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
                 crate::options_ui::spacing(ui);
-                ui.label("Tags ordnen Dateien zu. Ein als Album markierter Tag erscheint links.");
+                ui.label("Tags ordnen Dateien zu. Links filtern Tags die aktuelle Ansicht.");
                 ui.small("Originaldateien bleiben unverändert. Tags in Medien-YAMLs speichern; yaml/tags.yaml ist der schnelle Index.");
                 if !self.files.is_empty(){
                     ui.label(format!("{} Datei(en) ausgewählt",self.files.len()));
@@ -72,7 +71,7 @@ impl TagView {
                                 }else if ui.selectable_label(self.selected.as_ref()==Some(&name),&name).clicked(){self.selected=Some(name.clone());self.rename=name.clone();}
                                 ui.label(format!("({count})"));
                                 if ui.checkbox(&mut album,"Album").changed(){actions.push(Action::Album{tag:name.clone(),enabled:album});}
-                                if ui.small_button("Anzeigen").clicked(){self.active=Some(name.clone());}
+                                if ui.small_button("Anzeigen").clicked(){self.filters.clear();self.filters.insert(name.clone());}
                             });
                         }
                     });
@@ -106,8 +105,8 @@ impl TagView {
                     match change {
                         Change::Created(_) => self.new_name.clear(),
                         Change::Renamed { old, new } => {
-                            if self.active.as_ref() == Some(&old) {
-                                self.active = Some(new.clone());
+                            if self.filters.remove(&old) {
+                                self.filters.insert(new.clone());
                             }
                             self.selected = Some(new.clone());
                             self.rename = new;
@@ -125,13 +124,7 @@ impl TagView {
             self.error = error;
         }
         if let Some(catalog) = session.catalog() {
-            if self
-                .active
-                .as_ref()
-                .is_some_and(|tag| !catalog.tags().contains_key(tag))
-            {
-                self.active = None;
-            }
+            self.filters.retain(|tag| catalog.tags().contains_key(tag));
             if self
                 .selected
                 .as_ref()

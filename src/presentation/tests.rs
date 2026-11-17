@@ -997,7 +997,7 @@ fn sidebar_lists_all_tags_alphabetically_on_separate_rows() {
             .organization
             .apply(Action::Create {
                 name: name.into(),
-                file: None,
+                file: Some(suite.organization.file(suite.items[0].path()).unwrap()),
             })
             .unwrap();
     }
@@ -1066,10 +1066,10 @@ fn sidebar_lists_all_tags_alphabetically_on_separate_rows() {
         ]),
         |ctx| suite.library_sidebar(ctx),
     );
-    assert_eq!(suite.tag_view.active.as_deref(), Some("urlaub"));
+    assert!(suite.tag_view.filters.contains("urlaub"));
     suite.videos_only = false;
     assert_eq!(suite.visible(), vec![0]);
-    suite.tag_view.active = None;
+    suite.tag_view.filters.clear();
     suite.group = Some("2024".into());
     assert_eq!(suite.visible(), vec![1]);
     let point = bounds("Alles").center();
@@ -1091,7 +1091,7 @@ fn sidebar_lists_all_tags_alphabetically_on_separate_rows() {
         ]),
         |ctx| suite.library_sidebar(ctx),
     );
-    assert!(suite.group.is_none() && suite.tag_view.active.is_none());
+    assert!(suite.group.is_none() && suite.tag_view.filters.is_empty());
     assert_eq!(suite.visible(), vec![0, 1]);
 }
 #[test]
@@ -1917,7 +1917,7 @@ fn unselected_all_has_the_same_framed_background_and_type_size_as_years() {
 }
 
 #[test]
-fn period_tag_cloud_is_inline_keeps_reset_and_filters_with_or() {
+fn sidebar_tags_filter_period_with_and_and_keep_options_visible() {
     use photosuite_application::organization::Action;
     fn input(events: Vec<egui::Event>, width: f32) -> egui::RawInput {
         egui::RawInput {
@@ -1953,10 +1953,7 @@ fn period_tag_cloud_is_inline_keeps_reset_and_filters_with_or() {
         width: f32,
     ) -> Vec<(String, egui::Rect)> {
         let output = ctx.run(input(events, width), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let candidates = suite.unfiltered_visible();
-                suite.tag_cloud(ui, &candidates);
-            });
+            suite.library_sidebar(ctx);
         });
         output
             .shapes
@@ -1969,7 +1966,7 @@ fn period_tag_cloud_is_inline_keeps_reset_and_filters_with_or() {
             })
             .collect()
     }
-    for width in [220., 360., 800.] {
+    for width in [360., 600., 800.] {
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         ctx.style_mut(|s| s.animation_time = 0.);
@@ -2005,9 +2002,8 @@ fn period_tag_cloud_is_inline_keeps_reset_and_filters_with_or() {
         }
         let labels = draw(&mut suite, &ctx, vec![], width);
         let rect = |label: &str| labels.iter().find(|(s, _)| s == label).unwrap().1;
-        assert!((rect("Tags").center().y - rect("Reset").center().y).abs() < 2.);
-        assert!((rect("Reset").center().y - rect("dia").center().y).abs() < 2.);
-        assert!(rect("dia").left() > rect("Reset").right());
+        assert!(rect("Tags").bottom() < rect("Reset").top());
+        assert!(rect("dia").bottom() < rect("scan").top());
         assert!(suite.tag_view.filters.is_empty());
         assert_eq!(suite.visible(), vec![0, 1, 2]);
         draw(&mut suite, &ctx, click(rect("Reset").center()), width);
@@ -2018,7 +2014,8 @@ fn period_tag_cloud_is_inline_keeps_reset_and_filters_with_or() {
         assert!(labels.iter().any(|(s, _)| s == "dia"));
         let dia = labels.iter().find(|(s, _)| s == "dia").unwrap().1.center();
         draw(&mut suite, &ctx, click(dia), width);
-        assert_eq!(suite.visible(), vec![0, 1]);
+        assert!(suite.visible().is_empty());
+        assert_eq!(suite.group.as_deref(), Some("2023/12"));
         let labels = draw(&mut suite, &ctx, vec![], width);
         let reset = labels
             .iter()
@@ -2042,6 +2039,32 @@ fn period_tag_cloud_is_inline_keeps_reset_and_filters_with_or() {
                 .iter()
                 .any(|(name, rect)| name.starts_with("zzz") && rect.height() <= 22.)
         );
+        suite
+            .organization
+            .apply(Action::Create {
+                name: "unused".into(),
+                file: None,
+            })
+            .unwrap();
+        let labels = draw(&mut suite, &ctx, vec![], width);
+        assert!(!labels.iter().any(|(name, _)| name == "unused"));
+        suite.tag_view.filters.insert("scan".into());
+        // Text search does not hide the remaining period's tag choices.
+        suite.query = "no match".into();
+        let labels = draw(&mut suite, &ctx, vec![], width);
+        assert!(labels.iter().any(|(name, _)| name == "dia"));
+        suite.query.clear();
+        suite.group = Some("2024".into());
+        let labels = draw(&mut suite, &ctx, vec![], width);
+        assert!(suite.tag_view.filters.is_empty());
+        assert!(
+            !labels
+                .iter()
+                .any(|(name, _)| name == "scan" || name == "dia")
+        );
+        suite.group = None;
+        let labels = draw(&mut suite, &ctx, vec![], width);
+        assert!(labels.iter().any(|(name, _)| name == "scan"));
     }
 }
 #[test]
