@@ -67,7 +67,7 @@ Bibliothek/
     └── 2026/11/com_20261114_130000.m4a.yaml
 ```
 
-Dateibezogene YAMLs liegen einheitlich unter **`yaml/Jahr/Monat/<Dateiname.ext>.yaml`**. Sie enthalten Tags, Kommentarverweise und Transkripte. **SQLite ist ausschließlich ein neu aufbaubarer Index** für Tags, Kommentare, Aufträge und Audiolängen. Einstellungen und Betriebszustände bleiben lesbare YAMLs; es gibt keine Albumkennzeichnungen. Unter Settings → Allgemein lässt sich die Datenbank vollständig neu aufbauen. Bibliothekspfad und globale Whisper-Auswahl bleiben lokal in den macOS-Preferences; Modelle liegen im appweiten Application Support.
+Dateibezogene YAMLs liegen einheitlich unter **`yaml/Jahr/Monat/<Dateiname.ext>.yaml`**. Sie enthalten Tags, Kommentarverweise und Transkripte. **SQLite ist ausschließlich ein neu aufbaubarer Index** für Tags, Kommentare, Aufträge und Audiolängen. Einstellungen und Betriebszustände bleiben lesbare YAMLs; es gibt keine Albumkennzeichnungen. Unter Settings → Datenbank lässt sich die Datenbank vollständig neu aufbauen. Bibliothekspfad und globale Whisper-Auswahl bleiben lokal in den macOS-Preferences; Modelle liegen im appweiten Application Support.
 
 **Import kopiert und löscht keine Quelldateien.** Quellen können erst in einem getrennten, ausdrücklich bestätigten Schritt nach erneutem Bytevergleich in den Papierkorb verschoben werden. Auch Duplikatentfernung erfordert Bestätigung. Optionales Speichern manueller JPEG-Drehungen verändert EXIF im Original ohne Neukompression oder dauerhaftes Backup. Verwaltungs-YAMLs werden unabhängig vom Nur-Lesen-Modus der Medien gespeichert.
 

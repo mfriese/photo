@@ -60,12 +60,16 @@ impl Suite {
                 self.transcription_seen = Some(observed);
             }
         }
-        let model = self.transcription.prepared().and_then(|p| {
-            p.ready_path.as_ref().map(|path| ModelChoice {
-                path: path.clone(),
-                settings: p.settings.clone(),
-            })
-        });
+        let model = self
+            .transcription
+            .prepared()
+            .filter(|_| !self.transcription.busy() && self.transcription.error().is_empty())
+            .and_then(|p| {
+                p.ready_path.as_ref().map(|path| ModelChoice {
+                    path: path.clone(),
+                    settings: p.settings.clone(),
+                })
+            });
         self.transcription_queue.set_model(model);
         photosuite_application::processing::advance(
             &mut self.geo_sweep,
@@ -89,7 +93,10 @@ impl Suite {
         let references_wait = self.root.is_some() && !self.comments.is_loaded();
         let state = if model_busy || references_busy || self.geo_sweep.busy() {
             Indicator::Busy
-        } else if references_wait || (self.root.is_some() && !self.geo_sweep.complete()) {
+        } else if references_wait
+            || !self.transcription.error().is_empty()
+            || (self.root.is_some() && !self.geo_sweep.complete())
+        {
             Indicator::Paused
         } else {
             self.transcription_queue.indicator()
@@ -150,8 +157,14 @@ impl Suite {
             "Verarbeitung pausiert"
         } else if self.transcription_queue.mode() == Mode::Stopped {
             "Verarbeitung gestoppt"
+        } else if !self.transcription_queue.error().is_empty() {
+            "Transkriptionswarteschlange benötigt einen Neustart"
+        } else if !self.transcription.error().is_empty() {
+            "Whisper-Modell konnte nicht geprüft werden"
         } else if self.geo_sweep.busy() {
             "GPS und Ortszuordnungen werden geprüft"
+        } else if !self.transcription_complete && !self.collection.is_loading() {
+            "Medienbestand unvollständig – bitte erneut einlesen"
         } else if !self.transcription_complete {
             "Bibliotheksinventar wird geladen"
         } else if references_busy {
@@ -178,8 +191,14 @@ impl Suite {
                 Phase::Transcribing => "Tonspur wird transkribiert",
                 Phase::Saving => "Transkript wird gespeichert",
             }
+        } else if failed > 0 {
+            "Fehlgeschlagene Aufträge warten auf Wiederholung"
+        } else if self.transcription_queue.pending() > 0 {
+            "Offene Transkriptionsaufträge werden gestartet"
+        } else if total == 0 {
+            "Keine Audio- oder Videodateien zur Transkription vorhanden"
         } else {
-            "Keine laufende Verarbeitung"
+            "Alle Transkriptionsaufträge sind abgeschlossen"
         };
         ui.add_space(4.);
         let busy = self.geo_sweep.busy()
@@ -189,6 +208,10 @@ impl Suite {
         let paused = self.transcription_queue.mode() != Mode::Running
             || (self.transcription_queue.held() && !self.geo_sweep.busy())
             || references_wait;
+        let attention = !self.transcription_queue.error().is_empty()
+            || !self.transcription.error().is_empty()
+            || !self.geo_sweep.error().is_empty()
+            || (failed > 0 && self.transcription_queue.pending() == 0);
         ui.horizontal_wrapped(|ui| {
             crate::theme::status_label(
                 ui,
@@ -196,6 +219,8 @@ impl Suite {
                     "Pausiert"
                 } else if self.transcription_queue.mode() == Mode::Stopped {
                     "Gestoppt"
+                } else if attention {
+                    "Fehler"
                 } else if busy && !paused {
                     "Aktiv"
                 } else if paused {
@@ -203,7 +228,9 @@ impl Suite {
                 } else {
                     "Bereit"
                 },
-                if busy && !paused {
+                if attention {
+                    crate::theme::DANGER
+                } else if busy && !paused {
                     crate::theme::ACCENT
                 } else {
                     crate::theme::MUTED
@@ -228,6 +255,15 @@ impl Suite {
         }
         if references_wait && !self.comments.error().is_empty() {
             errors.push(("Kommentarzuordnungen", self.comments.error()));
+        }
+        if !self.transcription.error().is_empty() {
+            errors.push(("Whisper-Modell", self.transcription.error()));
+        }
+        if !self.transcription.busy()
+            && let Some(model) = self.transcription.prepared()
+            && !model.warning.is_empty()
+        {
+            errors.push(("Whisper-Modell", model.warning.as_str()));
         }
         if !self.transcription_queue.error().is_empty() {
             errors.push(("Verarbeitung", self.transcription_queue.error()));
@@ -266,7 +302,7 @@ impl Suite {
                         true,
                     );
                     if references_wait && ui.button("Kommentar-Einstellungen …").clicked() {
-                        self.settings_view.page = crate::options_ui::SettingsPage::General;
+                        self.settings_view.page = crate::options_ui::SettingsPage::Database;
                         self.options_open = true;
                     }
                 });
@@ -382,26 +418,40 @@ impl Suite {
         }
         ui.add_space(6.);
         ui.horizontal_wrapped(|ui| {
-            let running = self.transcription_queue.mode() == Mode::Running;
-            let label = if running {
-                "Pause"
-            } else if self.transcription_queue.mode() == Mode::Stopped {
-                "Starten"
-            } else {
-                "Fortsetzen"
+            use photosuite_application::processing::{self, Control};
+            let primary = processing::primary_control(
+                &self.geo_sweep,
+                &self.transcription_queue,
+                &self.transcription,
+            );
+            let label = match primary {
+                Control::Pause => "Pause",
+                Control::Retry => "Fehler wiederholen",
+                _ if self.transcription_queue.mode() == Mode::Stopped => "Starten",
+                _ if !self.transcription_queue.error().is_empty()
+                    || !self.transcription.error().is_empty() =>
+                {
+                    "Erneut starten"
+                }
+                _ => "Fortsetzen",
             };
             if ui
                 .add_enabled(
-                    self.root.is_some() && (total > done || !self.geo_sweep.complete()),
+                    self.root.is_some()
+                        && (total > done
+                            || !self.geo_sweep.complete()
+                            || !self.transcription_queue.error().is_empty()
+                            || !self.transcription.error().is_empty()),
                     egui::Button::new(label),
                 )
                 .clicked()
             {
-                self.transcription_queue.set_mode(if running {
-                    Mode::Paused
-                } else {
-                    Mode::Running
-                });
+                processing::control(
+                    primary,
+                    &mut self.geo_sweep,
+                    &mut self.transcription_queue,
+                    &mut self.transcription,
+                );
             }
             if ui
                 .add_enabled(
@@ -413,11 +463,18 @@ impl Suite {
                 )
                 .clicked()
             {
-                self.transcription_queue.set_mode(Mode::Stopped);
+                processing::control(
+                    Control::Stop,
+                    &mut self.geo_sweep,
+                    &mut self.transcription_queue,
+                    &mut self.transcription,
+                );
             }
             if ui
                 .add_enabled(
-                    failed > 0
+                    !self.transcription_queue.error().is_empty()
+                        || !self.transcription.error().is_empty()
+                        || failed > 0
                         || self.geo_sweep.progress().failed > 0
                         || self.geo_sweep.progress().location_failed > 0
                         || self.geo_sweep.progress().data_warning.is_some(),
@@ -425,8 +482,12 @@ impl Suite {
                 )
                 .clicked()
             {
-                self.geo_sweep.retry();
-                self.transcription_queue.retry_failed();
+                processing::control(
+                    Control::Retry,
+                    &mut self.geo_sweep,
+                    &mut self.transcription_queue,
+                    &mut self.transcription,
+                );
             }
         });
         if ui
@@ -436,8 +497,20 @@ impl Suite {
             )
             .clicked()
         {
-            self.geo_sweep.retry();
-            self.transcription_queue.rescan();
+            if !self.transcription_complete
+                && !self.collection.is_loading()
+                && let Some(root) = self.root.clone()
+            {
+                self.load_library(root, true, true);
+                self.transcription.reload();
+            } else {
+                photosuite_application::processing::control(
+                    photosuite_application::processing::Control::Rescan,
+                    &mut self.geo_sweep,
+                    &mut self.transcription_queue,
+                    &mut self.transcription,
+                );
+            }
         }
         if section == 0
             && self.transcription_queue.waiting_for_model()
@@ -530,6 +603,76 @@ fn paint(ui: &egui::Ui, response: &egui::Response, state: Indicator) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn model_errors_are_visible_and_restart_rechecks_the_model_without_restarting_finished_gps() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        ctx.style_mut(|s| s.animation_time = 0.);
+        let mut suite = super::super::layout_tests::test_suite();
+        suite.root = Some("/Fotos".into());
+        suite.transcription_complete = true;
+        suite.geo_sweep.sync(std::path::Path::new("/Fotos"), vec![]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !suite.geo_sweep.complete() {
+            suite.geo_sweep.poll(true);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        suite
+            .transcription
+            .report_error("Modellprüfung fehlgeschlagen".into());
+        let frame = |suite: &mut Suite, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(360., 400.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default()
+                        .show(ctx, |ui| suite.transcription_popup(ui, false, false, false));
+                },
+            )
+        };
+        fn position(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+            output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == label => {
+                    Some(t.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+        }
+        let output = frame(&mut suite, vec![]);
+        assert!(position(&output, "Whisper-Modell konnte nicht geprüft werden").is_some());
+        assert!(position(&output, "Fehler (1)").is_some());
+        let pos = position(&output, "Erneut starten").unwrap();
+        for pressed in [true, false] {
+            let _ = frame(
+                &mut suite,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+            );
+        }
+        assert!(suite.transcription.error().is_empty());
+        assert!(suite.geo_sweep.complete());
+        while suite.transcription.busy() {
+            suite.transcription.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(suite.transcription.prepared().is_some());
+        assert_eq!(suite.transcription_queue.mode(), Mode::Running);
+    }
     #[test]
     fn pinned_popup_only_closes_when_its_parent_button_is_clicked_again() {
         fn frame(

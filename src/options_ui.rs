@@ -29,10 +29,11 @@ pub enum CommentIndexAction {
     Rebuild,
     Cancel,
 }
-#[derive(Default, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsPage {
     #[default]
     General,
+    Database,
     Transcription,
     Geodata,
 }
@@ -79,6 +80,7 @@ pub fn show(
             spacing(ui);
             ui.horizontal_wrapped(|ui|{
                 ui.selectable_value(&mut view.page,SettingsPage::General,"Allgemein");
+                ui.selectable_value(&mut view.page,SettingsPage::Database,"Datenbank");
                 ui.selectable_value(&mut view.page,SettingsPage::Transcription,"Transkription");
                 ui.selectable_value(&mut view.page,SettingsPage::Geodata,"Geodaten");
             });ui.separator();
@@ -90,6 +92,25 @@ pub fn show(
             if view.page==SettingsPage::Transcription {
                 if let Some(session)=transcription{crate::transcription_ui::show(ui,session,&mut view.transcription);}
                 else{ui.label("Transkriptionsvorbereitung nicht verfügbar.");}
+                return;
+            }
+            if view.page==SettingsPage::Database {
+                if root.is_none() {ui.label("Zum Verwalten der Datenbank eine Bibliothek öffnen.");}
+            if let Some(index)=index {section(ui,"Bibliotheksdatenbank",|ui|{
+                ui.label("yaml/library.sqlite enthält ausschließlich neu aufbaubare Indizes und Caches.");
+                if let Some(root)=root {ui.add(egui::Label::new(root.join("yaml/library.sqlite").display().to_string()).truncate()).on_hover_text(root.join("yaml/library.sqlite").display().to_string());}
+                if ui.add_enabled(root.is_some() && can_rebuild_index && !index.busy(),egui::Button::new("Datenbank aus Einzel-YAMLs neu aufbauen")).clicked() && let Some(root)=root {index.start(root.into());}
+                if index.busy(){ui.spinner();ui.label(format!("{} Einzel-YAMLs geprüft",index.checked()));if ui.button("Neuaufbau abbrechen").clicked(){index.cancel();}}
+                if !index.error().is_empty(){ui.colored_label(crate::theme::DANGER,index.error());}
+            });}
+            section(ui,"Audiokommentare",|ui|{
+                ui.label("Einzelne YAML-Dateien unter yaml/Jahr/Monat sind die dauerhafte Quelle der Zuordnungen.");
+                ui.small("Der Neuaufbau durchsucht die Bibliothek und ersetzt den Gesamtindex erst nach vollständiger Prüfung. Medien bleiben unverändert.");
+                if ui.add_enabled(comments.available,egui::Button::new("Kommentarindex vollständig neu aufbauen")).clicked(){action=Some(CommentIndexAction::Rebuild);}
+                if comments.rebuilding {ui.spinner();if ui.button("Neuaufbau abbrechen").clicked(){action=Some(CommentIndexAction::Cancel);}}
+                if !comments.message.is_empty(){ui.label(comments.message);}
+                if !comments.error.is_empty(){ui.strong(comments.error);}
+            });
                 return;
             }
             if !library_ready {ui.spinner();ui.label("Bibliotheks-Einstellungen werden geladen …");return;}
@@ -113,21 +134,6 @@ pub fn show(
                 ui.small("Deaktiviert: Manuelle Drehungen gelten nur für die Sitzung.");
             });
             section(ui,"Bedienung",|ui|{if ui.button("Befehle & Tastenkürzel …").clicked(){*bindings=true;}});
-            if let Some(index)=index {section(ui,"Bibliotheksdatenbank",|ui|{
-                ui.label("yaml/library.sqlite enthält ausschließlich neu aufbaubare Indizes und Caches.");
-                if let Some(root)=root {ui.add(egui::Label::new(root.join("yaml/library.sqlite").display().to_string()).truncate()).on_hover_text(root.join("yaml/library.sqlite").display().to_string());}
-                if ui.add_enabled(root.is_some() && can_rebuild_index && !index.busy(),egui::Button::new("Datenbank aus Einzel-YAMLs neu aufbauen")).clicked() && let Some(root)=root {index.start(root.into());}
-                if index.busy(){ui.spinner();ui.label(format!("{} Einzel-YAMLs geprüft",index.checked()));if ui.button("Neuaufbau abbrechen").clicked(){index.cancel();}}
-                if !index.error().is_empty(){ui.colored_label(crate::theme::DANGER,index.error());}
-            });}
-            section(ui,"Audiokommentare",|ui|{
-                ui.label("Einzelne YAML-Dateien unter yaml/Jahr/Monat sind die dauerhafte Quelle der Zuordnungen.");
-                ui.small("Der Neuaufbau durchsucht die Bibliothek und ersetzt den Gesamtindex erst nach vollständiger Prüfung. Medien bleiben unverändert.");
-                if ui.add_enabled(comments.available,egui::Button::new("Kommentarindex vollständig neu aufbauen")).clicked(){action=Some(CommentIndexAction::Rebuild);}
-                if comments.rebuilding {ui.spinner();if ui.button("Neuaufbau abbrechen").clicked(){action=Some(CommentIndexAction::Cancel);}}
-                if !comments.message.is_empty(){ui.label(comments.message);}
-                if !comments.error.is_empty(){ui.strong(comments.error);}
-            });
             if !error.is_empty(){ui.colored_label(egui::Color32::LIGHT_RED,error);}
         });
     action
@@ -136,6 +142,96 @@ pub fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn database_maintenance_has_its_own_tab_and_does_not_require_loaded_preferences() {
+        use std::{
+            path::Path,
+            sync::{Arc, atomic::AtomicBool},
+        };
+        struct Rebuilder;
+        impl photosuite_application::library_index::Rebuilder for Rebuilder {
+            fn rebuild(
+                &self,
+                _: &Path,
+                _: &AtomicBool,
+                _: &(dyn Fn(usize) + Sync),
+            ) -> Result<(), String> {
+                panic!("opening settings must not rebuild data")
+            }
+        }
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        ctx.style_mut(|s| s.animation_time = 0.);
+        let mut index = photosuite_application::library_index::Session::new(Arc::new(Rebuilder));
+        let mut view = SettingsView::default();
+        let mut p = Preferences::default();
+        let mut open = true;
+        let mut bindings = false;
+        let mut render = |events, view: &mut SettingsView| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(600., 650.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    show(
+                        ctx,
+                        &mut open,
+                        &mut p,
+                        view,
+                        SettingsContext {
+                            index: Some(&mut index),
+                            root: Some(Path::new("/Fotos")),
+                            can_rebuild_index: true,
+                            saving: false,
+                            bindings: &mut bindings,
+                            error: "",
+                            comments: CommentIndexStatus::default(),
+                            library_ready: view.page != SettingsPage::Database,
+                            geodata: None,
+                            transcription: None,
+                        },
+                    );
+                },
+            )
+        };
+        let _ = render(vec![], &mut view);
+        let output = render(vec![], &mut view);
+        fn text(output: &egui::FullOutput, label: &str) -> Option<egui::Pos2> {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.job.text == label => {
+                    Some(t.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+        }
+        assert!(text(&output, "Darstellung").is_some());
+        assert!(text(&output, "Bibliotheksdatenbank").is_none());
+        let pos = text(&output, "Datenbank").unwrap();
+        for pressed in [true, false] {
+            let _ = render(
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Default::default(),
+                    },
+                ],
+                &mut view,
+            );
+        }
+        let output = render(vec![], &mut view);
+        assert_eq!(view.page, SettingsPage::Database);
+        assert!(text(&output, "Bibliotheksdatenbank").is_some());
+        assert!(text(&output, "Audiokommentare").is_some());
+        assert!(text(&output, "Darstellung").is_none());
+    }
     #[test]
     fn settings_dialog_fits_supported_widths() {
         for width in [360., 600., 1280.] {

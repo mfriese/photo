@@ -41,8 +41,19 @@ fn source(root: &Path, file: &LibraryFile) -> Result<std::path::PathBuf, String>
 fn pack(index: Option<Vec<u8>>, runtime: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&Revision { index, runtime }).map_err(|e| e.to_string())
 }
+fn ownership_error(path: &Path, expected: &LibraryFile, actual: &str) -> String {
+    format!(
+        "Medien-YAML gehört zu einer anderen Datei.\nYAML: {}\nErwartet: {}\nEnthält: {}\nDie bestehende YAML bleibt unverändert.",
+        path.display(),
+        expected.as_str(),
+        actual
+    )
+}
 impl SqliteTranscriptionQueue {
-    fn failure(
+    /// Diagnostic markers may only change the record that belongs to this medium.
+    /// A conflicting sidecar is already a per-job error from existing/write_transcript;
+    /// keep that reconstructible failure in SQLite without blocking unrelated jobs.
+    fn update_failure_if_owned(
         &self,
         root: &Path,
         candidate: &Candidate,
@@ -56,7 +67,7 @@ impl SqliteTranscriptionQueue {
             .transpose()?
             .unwrap_or_else(|| Record::new(&candidate.record));
         if record.file != candidate.record.as_str() {
-            return Err("Falsche Medien-YAML für Transkriptionsfehler".into());
+            return Ok(());
         }
         if record.transcription_failures.get(candidate.source.as_str()) == failure.as_ref() {
             return Ok(());
@@ -168,7 +179,7 @@ impl QueueStore for SqliteTranscriptionQueue {
                 .get(source.as_str())
                 .is_none_or(|j| !matches!(j.state, JobState::Failed(_)))
             {
-                self.failure(
+                self.update_failure_if_owned(
                     root,
                     &Candidate {
                         source: LibraryFile::new(source.clone())?,
@@ -191,7 +202,7 @@ impl QueueStore for SqliteTranscriptionQueue {
                         record != job.candidate.record.as_str() || old != &failure
                     })
                 {
-                    self.failure(root, &job.candidate, Some(failure))?;
+                    self.update_failure_if_owned(root, &job.candidate, Some(failure))?;
                 }
             }
         }
@@ -250,7 +261,7 @@ impl QueueStore for SqliteTranscriptionQueue {
         };
         let record = media_records_fs::parse(&bytes)?;
         if record.file != candidate.record.as_str() {
-            return Err("Medien-YAML gehört zu einer anderen Datei".into());
+            return Err(ownership_error(&path, &candidate.record, &record.file));
         }
         record
             .transcripts
@@ -281,7 +292,7 @@ impl QueueStore for SqliteTranscriptionQueue {
                 .transpose()?
                 .unwrap_or_else(|| Record::new(&candidate.record));
             if record.file != candidate.record.as_str() {
-                return Err("Medien-YAML gehört zu einer anderen Datei".into());
+                return Err(ownership_error(&path, &candidate.record, &record.file));
             }
             if candidate.record != candidate.source
                 && !record
@@ -338,6 +349,173 @@ mod tests {
             vec![Segment::new(0, 1000, "Grüße".into()).unwrap()],
         )
         .unwrap()
+    }
+    #[test]
+    fn one_conflicting_sidecar_does_not_block_other_transcripts_or_modify_foreign_metadata() {
+        use photosuite_application::transcription::{
+            Settings,
+            queue::{
+                AwakeLease, Engine, EngineOutput, ModelChoice, PowerManager, QueueSession,
+                WorkProgress,
+            },
+        };
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct TestEngine {
+            calls: Mutex<Vec<std::path::PathBuf>>,
+        }
+        impl Engine for TestEngine {
+            fn transcribe(
+                &self,
+                _: &ModelChoice,
+                path: &Path,
+                _: &AtomicBool,
+                _: &(dyn Fn(WorkProgress) + Sync),
+            ) -> Result<EngineOutput, String> {
+                self.calls.lock().unwrap().push(path.into());
+                Ok(EngineOutput {
+                    language: "de".into(),
+                    segments: vec![],
+                    no_audio: false,
+                })
+            }
+        }
+        struct Lease;
+        impl AwakeLease for Lease {}
+        struct Power;
+        impl PowerManager for Power {
+            fn acquire(&self) -> Result<Arc<dyn AwakeLease>, String> {
+                Ok(Arc::new(Lease))
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let store = Arc::new(SqliteTranscriptionQueue::default());
+        let owner = media(root.path(), "2020/01/img_20200101_120000.mp4");
+        let bad = media(root.path(), "2020/scans/img_20200101_120000.mp4");
+        let good = media(root.path(), "2020/01/img_20200102_120000.mp4");
+        let mut record = Record::new(&owner);
+        record.tags = Some(["keep".into()].into());
+        media_records_fs::write(root.path(), &owner, &record, None).unwrap();
+        let metadata = root.path().join(owner.metadata_path().unwrap());
+        let original = fs::read(&metadata).unwrap();
+        assert_eq!(owner.metadata_path().unwrap(), bad.metadata_path().unwrap());
+        let engine = Arc::new(TestEngine::default());
+        let mut queue = QueueSession::new(store.clone(), engine.clone(), Arc::new(Power));
+        queue.set_model(Some(ModelChoice {
+            path: "unused-test-model".into(),
+            settings: Settings::new("tiny", "de").unwrap(),
+        }));
+        queue.sync(
+            root.path(),
+            vec![
+                Candidate {
+                    source: bad.clone(),
+                    record: bad.clone(),
+                },
+                Candidate {
+                    source: good.clone(),
+                    record: good.clone(),
+                },
+            ],
+            true,
+        );
+        for retry in [false, true] {
+            if retry {
+                queue.retry_failed();
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+            loop {
+                queue.poll();
+                assert!(
+                    queue.error().is_empty(),
+                    "one media failure stopped the queue: {}",
+                    queue.error()
+                );
+                if !queue.busy() && queue.counts() == (1, 2, 1) {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "queue stalled: {:?}",
+                    queue.counts()
+                );
+                std::thread::yield_now();
+            }
+            assert_eq!(
+                engine.calls.lock().unwrap().as_slice(),
+                &[root.path().join(good.as_str())]
+            );
+            assert_eq!(fs::read(&metadata).unwrap(), original);
+            let errors = queue.failures();
+            let error = errors.iter().find(|(source, _)| **source == bad).unwrap().1;
+            assert!(
+                error.contains(owner.as_str())
+                    && error.contains(bad.as_str())
+                    && error.contains("YAML:")
+            );
+            assert!(matches!(
+                store.load(root.path()).unwrap().jobs[&bad].state,
+                JobState::Failed(_)
+            ));
+        }
+        drop(queue);
+        fs::remove_file(root.path().join(crate::library_db::FILE)).unwrap();
+        let mut rebuilt = QueueSession::new(store.clone(), engine.clone(), Arc::new(Power));
+        rebuilt.set_model(Some(ModelChoice {
+            path: "unused-test-model".into(),
+            settings: Settings::new("tiny", "de").unwrap(),
+        }));
+        rebuilt.sync(
+            root.path(),
+            vec![
+                Candidate {
+                    source: bad.clone(),
+                    record: bad.clone(),
+                },
+                Candidate {
+                    source: good.clone(),
+                    record: good.clone(),
+                },
+            ],
+            true,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        loop {
+            rebuilt.poll();
+            assert!(
+                rebuilt.error().is_empty(),
+                "reconstructed queue stalled: {}",
+                rebuilt.error()
+            );
+            if !rebuilt.busy() && rebuilt.counts() == (1, 2, 1) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            engine.calls.lock().unwrap().as_slice(),
+            &[root.path().join(good.as_str())]
+        );
+        assert_eq!(fs::read(&metadata).unwrap(), original);
+        assert!(
+            store
+                .existing(
+                    root.path(),
+                    &Candidate {
+                        source: good.clone(),
+                        record: good
+                    }
+                )
+                .unwrap()
+                .is_some()
+        );
+        for file in [&owner, &bad] {
+            assert_eq!(
+                fs::read(root.path().join(file.as_str())).unwrap(),
+                b"unchanged original media"
+            );
+        }
     }
     #[test]
     fn transcript_at_supported_segment_limit_can_be_saved_reloaded_and_tagged() {

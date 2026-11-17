@@ -195,6 +195,58 @@ pub fn navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Respo
 pub fn tag_navigation(ui: &mut egui::Ui, selected: bool, label: &str) -> egui::Response {
     navigation_row(ui, selected, label, BADGE_HEIGHT)
 }
+/// Same framed disclosure row for library years and countries; optional count reserves its space.
+pub fn tree_header<R>(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    label: &str,
+    selected: bool,
+    count: Option<usize>,
+    open: Option<bool>,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::collapsing_header::CollapsingResponse<R> {
+    let count = count.map(|count| {
+        egui::WidgetText::from(RichText::new(count.to_string()).monospace().color(MUTED))
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                TextStyle::Button,
+            )
+    });
+    let reserve = count.as_ref().map_or(0., |g| g.size().x + 12.);
+    let width =
+        (ui.available_width() - ui.spacing().indent - ui.spacing().button_padding.x - reserve)
+            .max(1.);
+    let label_galley =
+        egui::WidgetText::from(RichText::new(label).size(14.).strong().color(if selected {
+            ACCENT
+        } else {
+            TEXT
+        }))
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            width,
+            TextStyle::Button,
+        );
+    let mut result = egui::CollapsingHeader::new(label_galley)
+        .id_salt(id)
+        .default_open(false)
+        .open(open)
+        .show_background(true)
+        .show(ui, body);
+    if let Some(galley) = count {
+        let rect = result.header_response.rect;
+        let pos = egui::pos2(
+            rect.right() - galley.size().x,
+            rect.center().y - galley.size().y / 2.,
+        );
+        ui.painter().galley(pos, galley, MUTED);
+    }
+    result.header_response = result.header_response.on_hover_text(label);
+    result
+}
 /// Count stays at the trailing edge while long place labels truncate independently.
 pub fn place_navigation(
     ui: &mut egui::Ui,

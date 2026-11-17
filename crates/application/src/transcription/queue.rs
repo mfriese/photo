@@ -194,6 +194,7 @@ pub struct QueueSession {
     log: VecDeque<LogEntry>,
     error: String,
     controls_dirty: bool,
+    retry_pending: bool,
 }
 fn check(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
@@ -400,6 +401,7 @@ impl QueueSession {
             log: VecDeque::new(),
             error: String::new(),
             controls_dirty: false,
+            retry_pending: false,
         }
     }
     pub fn reset(&mut self) {
@@ -418,6 +420,7 @@ impl QueueSession {
         self.mode = Arc::new(AtomicU8::new(0));
         self.mode_loaded = false;
         self.controls_dirty = false;
+        self.retry_pending = false;
     }
     pub fn sync(&mut self, root: &Path, sources: Vec<Candidate>, complete: bool) {
         let catalog = Catalog {
@@ -434,6 +437,7 @@ impl QueueSession {
             }
             self.generation += 1;
             self.journal = None;
+            self.retry_pending = false;
             self.mode = Arc::new(AtomicU8::new(0));
             self.mode_loaded = false;
             self.last = None;
@@ -476,16 +480,32 @@ impl QueueSession {
         self.error.clear();
         self.reconcile = true;
     }
+    /// Explicit recovery also re-plans a queue whose initial load/publication failed.
+    pub fn resume(&mut self) {
+        self.error.clear();
+        if self.journal.is_none() {
+            self.reconcile = true;
+        }
+        self.set_mode(Mode::Running);
+    }
     pub fn retry_failed(&mut self) {
+        self.retry_pending = true;
+        self.resume();
+        self.apply_retry();
+    }
+    fn apply_retry(&mut self) {
+        if !self.retry_pending || self.active.is_some() {
+            return;
+        }
         if let Some(journal) = &mut self.journal {
             for job in journal.jobs.values_mut() {
                 if matches!(job.state, JobState::Failed(_)) {
                     job.state = JobState::Pending;
                 }
             }
+            self.retry_pending = false;
+            self.controls_dirty = true;
         }
-        self.error.clear();
-        self.set_mode(Mode::Running);
     }
     pub fn error(&self) -> &str {
         &self.error
@@ -552,8 +572,12 @@ impl QueueSession {
     pub fn busy(&self) -> bool {
         self.active.is_some()
     }
+    pub fn pending(&self) -> usize {
+        let (done, total, failed) = self.counts();
+        total.saturating_sub(done + failed)
+    }
     pub fn waiting_for_model(&self) -> bool {
-        self.model.is_none() && self.counts().1 > self.counts().0
+        self.model.is_none() && self.pending() > 0
     }
     pub fn held(&self) -> bool {
         self.hold
@@ -629,6 +653,7 @@ impl QueueSession {
             }
             self.current = None;
         }
+        self.apply_retry();
         self.schedule();
         if self.active.is_none() {
             self.awake = None;
@@ -974,6 +999,165 @@ mod tests {
             engine,
             power,
         )
+    }
+    struct GpsSource {
+        blocked: AtomicBool,
+        calls: AtomicUsize,
+    }
+    impl crate::media_geo::Repository for GpsSource {
+        fn inspect(
+            &self,
+            _: &Path,
+            _: &LibraryFile,
+            stop: &AtomicBool,
+        ) -> Result<crate::media_geo::Snapshot, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            while self.blocked.load(Ordering::SeqCst) && !stop.load(Ordering::Relaxed) {
+                std::thread::yield_now();
+            }
+            Ok(crate::media_geo::Snapshot {
+                fingerprint: crate::media_geo::Fingerprint {
+                    bytes: 1,
+                    modified: "1".into(),
+                },
+                position: crate::media_geo::Position::Missing,
+                resolved: None,
+            })
+        }
+        fn save_place(
+            &self,
+            _: &Path,
+            _: &LibraryFile,
+            _: &crate::media_geo::Fingerprint,
+            _: &crate::media_geo::ResolvedPlace,
+            _: &AtomicBool,
+        ) -> Result<(), String> {
+            unreachable!()
+        }
+    }
+    fn ready() -> crate::processing::Readiness {
+        crate::processing::Readiness {
+            library_open: true,
+            inventory_complete: true,
+            comments_ready: true,
+            ..Default::default()
+        }
+    }
+    fn pipeline_until(
+        gps: &mut crate::geo_sweep::Session,
+        queue: &mut QueueSession,
+        condition: impl Fn(&crate::geo_sweep::Session, &QueueSession) -> bool,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while !condition(gps, queue) {
+            crate::processing::advance(gps, queue, ready());
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pipeline stalled: {} {:?}, gps {}",
+                queue.error(),
+                queue.counts(),
+                gps.complete()
+            );
+            std::thread::yield_now();
+        }
+    }
+    #[test]
+    fn retry_requested_during_inference_is_preserved_when_the_active_job_returns() {
+        let (mut queue, store, engine, _power) = setup();
+        let root = Path::new("/library");
+        let second = candidate("b.wav");
+        let mut journal = Journal::default();
+        journal.jobs.insert(
+            second.source.clone(),
+            Job {
+                candidate: second.clone(),
+                version: SourceVersion::new(1, "0".into()).unwrap(),
+                state: JobState::Failed("previous failure".into()),
+            },
+        );
+        store.journals.lock().unwrap().insert(root.into(), journal);
+        engine.block.store(true, Ordering::SeqCst);
+        queue.sync(root, vec![candidate("a.wav"), second], true);
+        queue.set_model(Some(choice()));
+        until(&mut queue, |q| {
+            q.current().is_some() && engine.calls.load(Ordering::SeqCst) == 1
+        });
+        queue.retry_failed();
+        engine.block.store(false, Ordering::SeqCst);
+        until(&mut queue, |q| q.counts() == (2, 2, 0));
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 2);
+    }
+    #[test]
+    fn gps_completion_automatically_starts_transcription_without_another_ui_action() {
+        let (mut queue, _store, engine, _power) = setup();
+        let source = Arc::new(GpsSource {
+            blocked: AtomicBool::new(true),
+            calls: AtomicUsize::new(0),
+        });
+        let mut gps = crate::geo_sweep::Session::new(source.clone(), Arc::default());
+        let root = Path::new("/library");
+        gps.sync(root, vec![LibraryFile::new("photo.jpg".into()).unwrap()]);
+        queue.sync(root, vec![candidate("a.wav")], true);
+        queue.set_model(Some(choice()));
+        pipeline_until(&mut gps, &mut queue, |_, _| {
+            source.calls.load(Ordering::SeqCst) > 0
+        });
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 0);
+        assert!(queue.held());
+        source.blocked.store(false, Ordering::SeqCst);
+        pipeline_until(&mut gps, &mut queue, |_, q| q.counts() == (1, 1, 0));
+        assert!(gps.complete());
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(queue.pending(), 0);
+    }
+    #[test]
+    fn retry_after_failed_initial_planning_rebuilds_the_queue_and_advances_after_gps() {
+        let (mut queue, store, engine, _power) = setup();
+        let source = Arc::new(GpsSource {
+            blocked: AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+        });
+        let mut gps = crate::geo_sweep::Session::new(source.clone(), Arc::default());
+        let root = Path::new("/library");
+        gps.sync(root, vec![LibraryFile::new("photo.jpg".into()).unwrap()]);
+        store.fail_journal.store(true, Ordering::SeqCst);
+        queue.sync(root, vec![candidate("a.wav")], true);
+        queue.set_model(Some(choice()));
+        pipeline_until(&mut gps, &mut queue, |_, q| !q.error().is_empty());
+        assert!(queue.journal.is_none());
+        queue.set_mode(Mode::Running);
+        pipeline_until(&mut gps, &mut queue, |g, _| g.complete());
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 0);
+        store.fail_journal.store(false, Ordering::SeqCst);
+        queue.retry_failed();
+        pipeline_until(&mut gps, &mut queue, |_, q| q.counts() == (1, 1, 0));
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            source.calls.load(Ordering::SeqCst),
+            1,
+            "transcription recovery must not re-read all photos"
+        );
+    }
+    #[test]
+    fn resume_recovers_a_global_start_error_after_successful_gps() {
+        let (mut queue, _store, engine, power) = setup();
+        let source = Arc::new(GpsSource {
+            blocked: AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+        });
+        let mut gps = crate::geo_sweep::Session::new(source.clone(), Arc::default());
+        let root = Path::new("/library");
+        gps.sync(root, vec![LibraryFile::new("photo.jpg".into()).unwrap()]);
+        queue.sync(root, vec![candidate("a.wav")], true);
+        queue.set_model(Some(choice()));
+        power.fail.store(true, Ordering::SeqCst);
+        pipeline_until(&mut gps, &mut queue, |_, q| !q.error().is_empty());
+        assert!(gps.complete());
+        power.fail.store(false, Ordering::SeqCst);
+        queue.resume();
+        pipeline_until(&mut gps, &mut queue, |_, q| q.counts() == (1, 1, 0));
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
     }
     fn until(queue: &mut QueueSession, condition: impl Fn(&QueueSession) -> bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);

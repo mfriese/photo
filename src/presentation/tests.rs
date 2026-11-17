@@ -2743,15 +2743,30 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
         rect(&output, "Berlin").is_none(),
         "countries start collapsed"
     );
-    let country = rect(&output, "Deutschland").unwrap();
-    let output = click(
-        &mut suite,
-        egui::pos2(country.left() - 14., country.center().y),
-    );
+    let output = click(&mut suite, rect(&output, "Deutschland").unwrap().center());
     assert!(
-        suite.place_filter.selected.is_empty(),
-        "disclosure does not select a location"
+        suite
+            .place_filter
+            .selected
+            .contains(&Selection::Country("DE".into())),
+        "whole country header selects and expands"
     );
+    let output = click(&mut suite, rect(&output, "Deutschland").unwrap().center());
+    assert!(suite.place_filter.selected.is_empty());
+    assert!(
+        rect(&output, "Berlin").is_none(),
+        "second header click collapses"
+    );
+    let output = click(&mut suite, rect(&output, "Deutschland").unwrap().center());
+    let resets: Vec<_> = output
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(t) if t.galley.job.text == "Reset" => Some(t.visual_bounding_rect()),
+            _ => None,
+        })
+        .collect();
+    let output = click(&mut suite, resets.last().unwrap().center());
     let region = rect(&output, "Berlin").expect("country expands to regions");
     assert_eq!(
         output
@@ -2764,7 +2779,10 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
     );
     let output = click(
         &mut suite,
-        egui::pos2(region.left() - 14., region.center().y),
+        egui::pos2(
+            region.left() - 8. - ctx.style().spacing.indent / 2.,
+            region.center().y,
+        ),
     );
     let city = rect(&output, "Berlin").expect("region expands to places");
     assert!(city.top() > region.top());
@@ -2781,7 +2799,7 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
         counts
             .iter()
             .all(|r| (r.right() - counts[0].right()).abs() < 1.),
-        "counts align across depths"
+        "counts align across depths: {counts:?}"
     );
     let output = click(&mut suite, city.center());
     assert!(suite.place_filter.selected.contains(&Selection::Place(1)));

@@ -41,10 +41,9 @@ impl super::Suite {
                     }
                     ui.add_space(8.);theme::sidebar_heading(ui,"Jahre");ui.add_space(8.);
                     for (year, months) in years.into_iter().rev() {
-                        let response = egui::CollapsingHeader::new(egui::RichText::new(&year).size(14.).strong())
-                            .id_salt((&self.root, &year)).default_open(false)
-                            .open((self.scroll_to_photo.is_some() && self.group.as_deref()==Some(year.as_str())).then_some(true))
-                            .show(ui, |ui| {
+                        let response = theme::tree_header(ui,egui::Id::new((&self.root,&year)),&year,self.group.as_deref()==Some(year.as_str()),None,
+                            (self.scroll_to_photo.is_some() && self.group.as_deref()==Some(year.as_str())).then_some(true), |ui| {
+
                                 for g in months {
                                     if g == year || crate::domain::diary::audio_year(&g).is_some() {continue;}
                                     let label=g.strip_prefix(&format!("{year}/")).unwrap_or(&g);

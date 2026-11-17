@@ -2,7 +2,10 @@
 use crate::{
     domain::{Media, comments::CommentCatalog, tags::LibraryFile},
     geo_sweep,
-    transcription::queue::{Candidate, Mode, QueueSession},
+    transcription::{
+        ModelSession,
+        queue::{Candidate, Mode, QueueSession},
+    },
 };
 use std::path::Path;
 pub struct Inventory {
@@ -76,6 +79,69 @@ pub fn advance(gps: &mut geo_sweep::Session, queue: &mut QueueSession, readiness
     gps.poll(readiness.allow_gps(queue.mode_loaded(), queue.mode()));
     queue.set_hold(readiness.hold_transcription(gps.complete()));
     queue.poll();
+}
+/// All activity-panel controls share this application workflow, independent of UI widgets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Control {
+    Pause,
+    Stop,
+    Resume,
+    Retry,
+    Rescan,
+}
+pub fn primary_control(
+    gps: &geo_sweep::Session,
+    queue: &QueueSession,
+    models: &ModelSession,
+) -> Control {
+    if queue.mode() != Mode::Running {
+        return Control::Resume;
+    }
+    if !queue.error().is_empty() || !gps.error().is_empty() || !models.error().is_empty() {
+        return Control::Resume;
+    }
+    if queue.pending() == 0 && queue.counts().2 > 0 {
+        return Control::Retry;
+    }
+    Control::Pause
+}
+pub fn control(
+    action: Control,
+    gps: &mut geo_sweep::Session,
+    queue: &mut QueueSession,
+    models: &mut ModelSession,
+) {
+    match action {
+        Control::Pause => queue.set_mode(Mode::Paused),
+        Control::Stop => queue.set_mode(Mode::Stopped),
+        Control::Resume | Control::Retry => {
+            if action == Control::Retry {
+                queue.retry_failed();
+            } else {
+                queue.resume();
+            }
+            let p = gps.progress();
+            if !gps.error().is_empty()
+                || (action == Control::Retry
+                    && (p.failed > 0 || p.location_failed > 0 || p.data_warning.is_some()))
+            {
+                gps.retry();
+            }
+            if !models.busy()
+                && (!models.error().is_empty()
+                    || models.prepared().is_none_or(|p| p.ready_path.is_none()))
+            {
+                models.reload();
+            }
+        }
+        Control::Rescan => {
+            gps.retry();
+            queue.rescan();
+            if !models.busy() {
+                models.reload();
+            }
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
