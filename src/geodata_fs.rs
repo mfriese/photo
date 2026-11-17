@@ -2,7 +2,10 @@
 use crate::metadata_fs::{atomic_write_if_current, check_file, library_path};
 use photosuite_application::{
     downloads::{AssetTransport, Progress, Stage},
-    geodata::{Locations, MAX_ARCHIVE_BYTES, Prepared, SOURCE, Store},
+    geodata::{
+        Locations, MAX_ARCHIVE_BYTES, PlaceIndex, Prepared, Progress as PreparationProgress,
+        SOURCE, Store,
+    },
 };
 use std::{
     fs,
@@ -14,11 +17,13 @@ use std::{
     },
 };
 const ARCHIVE: &str = "Library/Application Support/PhotoSuite/GeoNames/cities500.zip";
+const DATABASE: &str = "Library/Application Support/PhotoSuite/GeoNames/places.sqlite";
 const PREFERENCES: &str = "Library/Preferences/de.photosuite.PhotoSuite.geodata.plist";
 const MAX_EXPANDED: u64 = 256 * 1024 * 1024;
 pub struct GeoData {
     home: PathBuf,
     transport: Arc<dyn AssetTransport>,
+    index: Arc<dyn PlaceIndex>,
 }
 #[derive(Default)]
 struct Preferences {
@@ -26,8 +31,16 @@ struct Preferences {
     sha256: Option<String>,
 }
 impl GeoData {
-    pub fn new(home: PathBuf, transport: Arc<dyn AssetTransport>) -> Self {
-        Self { home, transport }
+    pub fn new(
+        home: PathBuf,
+        transport: Arc<dyn AssetTransport>,
+        index: Arc<dyn PlaceIndex>,
+    ) -> Self {
+        Self {
+            home,
+            transport,
+            index,
+        }
     }
     fn preferences(&self) -> Result<(Preferences, Option<Vec<u8>>), String> {
         let path = library_path(&self.home, PREFERENCES, false)?;
@@ -73,7 +86,7 @@ impl GeoData {
         &self,
         path: &Path,
         stop: &AtomicBool,
-        notify: &(dyn Fn(Progress) + Sync),
+        notify: &(dyn Fn(PreparationProgress) + Sync),
     ) -> Result<(u64, String), String> {
         cancelled(stop)?;
         if !check_file(path)? {
@@ -83,11 +96,14 @@ impl GeoData {
         if before.0 == 0 || before.0 > MAX_ARCHIVE_BYTES {
             return Err("Geodaten-ZIP hat eine ungültige Größe".into());
         }
-        notify(Progress {
-            stage: Stage::Checking,
-            bytes: 0,
-            total: before.0,
-        });
+        notify(
+            Progress {
+                stage: Stage::Checking,
+                bytes: 0,
+                total: before.0,
+            }
+            .into(),
+        );
         let file = fs::File::open(path).map_err(|e| e.to_string())?;
         let mut zip =
             zip::ZipArchive::new(file).map_err(|e| format!("Ungültige Geodaten-ZIP: {e}"))?;
@@ -126,7 +142,7 @@ impl GeoData {
         if !found {
             return Err("cities500.txt fehlt im ZIP".into());
         }
-        let sha256 = self.transport.sha256(path, stop, notify)?;
+        let sha256 = self.transport.sha256(path, stop, &|p| notify(p.into()))?;
         if fingerprint(path)? != before {
             return Err("Geodaten während der Prüfung verändert".into());
         }
@@ -147,42 +163,17 @@ fn fingerprint(path: &Path) -> Result<(u64, std::time::SystemTime), String> {
     let m = fs::metadata(path).map_err(|e| e.to_string())?;
     Ok((m.len(), m.modified().map_err(|e| e.to_string())?))
 }
-impl Store for GeoData {
-    fn locations(&self) -> Locations {
-        Locations {
-            archive: self.home.join(ARCHIVE),
-            preferences: self.home.join(PREFERENCES),
-        }
-    }
-    fn inspect(
-        &self,
-        stop: &AtomicBool,
-        notify: &(dyn Fn(Progress) + Sync),
-    ) -> Result<Prepared, String> {
-        cancelled(stop)?;
-        let (prefs, _) = self.preferences()?;
-        let path = library_path(&self.home, ARCHIVE, false)?;
-        if !check_file(&path)? {
-            return Ok(Prepared {
-                enabled: prefs.enabled,
-                ..Default::default()
-            });
-        }
-        match self.verify(&path,stop,notify) {
-            Ok((bytes,sha)) if prefs.sha256.as_ref().is_none_or(|expected| expected==&sha) => Ok(Prepared {enabled:prefs.enabled,ready:true,bytes,warning:String::new()}),
-            Ok(_) => Ok(Prepared {enabled:prefs.enabled,warning:"Lokale Prüfsumme stimmt nicht. Erneut bestätigen, um die Datei neu herunterzuladen.".into(),..Default::default()}),
-            Err(error) => {cancelled(stop)?; Ok(Prepared {enabled:prefs.enabled,warning:error,..Default::default()})}
-        }
-    }
-    fn prepare(
+impl GeoData {
+    fn prepare_all(
         &self,
         enabled: bool,
+        force_import: bool,
         stop: &AtomicBool,
-        notify: &(dyn Fn(Progress) + Sync),
+        notify: &(dyn Fn(PreparationProgress) + Sync),
     ) -> Result<Prepared, String> {
         cancelled(stop)?;
         let (prefs, revision) = self.preferences()?;
-        let path = library_path(&self.home, ARCHIVE, false)?;
+        let archive = library_path(&self.home, ARCHIVE, false)?;
         let mut sha = prefs.sha256.clone();
         let mut prepared = if enabled {
             Prepared::default()
@@ -191,17 +182,15 @@ impl Store for GeoData {
         };
         if enabled {
             let valid = self
-                .verify(&path, stop, notify)
+                .verify(&archive, stop, notify)
                 .ok()
                 .filter(|(_, hash)| sha.as_ref().is_none_or(|expected| expected == hash));
-            if let Some((bytes, hash)) = valid {
-                prepared.ready = true;
-                prepared.bytes = bytes;
-                sha = Some(hash);
+            let (bytes, hash) = if let Some(valid) = valid {
+                valid
             } else {
                 cancelled(stop)?;
-                let previous = if check_file(&path)? {
-                    Some(fingerprint(&path)?)
+                let previous = if check_file(&archive)? {
+                    Some(fingerprint(&archive)?)
                 } else {
                     None
                 };
@@ -211,28 +200,28 @@ impl Store for GeoData {
                     .suffix(".tmp")
                     .tempfile_in(target.parent().ok_or("Geodatenverzeichnis fehlt")?)
                     .map_err(|e| e.to_string())?;
-                notify(Progress {
-                    stage: Stage::Downloading,
-                    bytes: 0,
-                    total: 0,
-                });
+                notify(
+                    Progress {
+                        stage: Stage::Downloading,
+                        bytes: 0,
+                        total: 0,
+                    }
+                    .into(),
+                );
                 self.transport.download_bounded(
                     SOURCE,
                     temp.path(),
                     MAX_ARCHIVE_BYTES,
                     stop,
-                    notify,
+                    &|p| notify(p.into()),
                 )?;
-                cancelled(stop)?;
-                let (bytes, hash) = self.verify(temp.path(), stop, notify)?;
-                prepared.ready = true;
-                prepared.bytes = bytes;
+                let verified = self.verify(temp.path(), stop, notify)?;
                 temp.as_file().sync_all().map_err(|e| e.to_string())?;
                 cancelled(stop)?;
                 static COMMIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
                 let _guard = COMMIT
                     .lock()
-                    .map_err(|_| "Geodaten-Schreibschutz beendet")?;
+                    .map_err(|_| "Geodaten-Schreibschutz unterbrochen")?;
                 library_path(&self.home, ARCHIVE, false)?;
                 let current = if check_file(&target)? {
                     Some(fingerprint(&target)?)
@@ -247,15 +236,53 @@ impl Store for GeoData {
                 } else {
                     temp.persist(&target).map_err(|e| e.to_string())?;
                 }
-                sha = Some(hash);
-            }
+                verified
+            };
+            prepared.bytes = bytes;
+            prepared.archive_ready = true;
+            let database = library_path(&self.home, DATABASE, true)?;
+            cancelled(stop)?;
+            let existing = if force_import {
+                None
+            } else {
+                self.index
+                    .inspect(&database, Some(&hash), stop, notify)
+                    .ok()
+            };
+            let info = if let Some(info) = existing {
+                info
+            } else {
+                cancelled(stop)?;
+                let before = fingerprint(&archive)?;
+                self.index
+                    .prepare(&archive, &database, &hash, stop, notify, &|| {
+                        if fingerprint(&archive)? != before
+                            || self
+                                .transport
+                                .sha256(&archive, stop, &|p| notify(p.into()))?
+                                != hash
+                        {
+                            return Err(
+                                "ZIP während des SQLite-Imports verändert; erneut vorbereiten"
+                                    .into(),
+                            );
+                        }
+                        Ok(())
+                    })?
+            };
+            prepared.database = Some(info);
+            prepared.ready = true;
+            sha = Some(hash);
         }
         cancelled(stop)?;
-        notify(Progress {
-            stage: Stage::Saving,
-            bytes: 0,
-            total: 0,
-        });
+        notify(
+            Progress {
+                stage: Stage::Saving,
+                bytes: 0,
+                total: 0,
+            }
+            .into(),
+        );
         let mut d = plist::Dictionary::new();
         d.insert("version".into(), 1u64.into());
         d.insert("enabled".into(), enabled.into());
@@ -270,6 +297,66 @@ impl Store for GeoData {
         atomic_write_if_current(&preferences, &bytes, revision.as_deref())?;
         prepared.enabled = enabled;
         Ok(prepared)
+    }
+}
+impl Store for GeoData {
+    fn locations(&self) -> Locations {
+        Locations {
+            archive: self.home.join(ARCHIVE),
+            database: self.home.join(DATABASE),
+            preferences: self.home.join(PREFERENCES),
+        }
+    }
+    fn inspect(
+        &self,
+        stop: &AtomicBool,
+        notify: &(dyn Fn(PreparationProgress) + Sync),
+    ) -> Result<Prepared, String> {
+        cancelled(stop)?;
+        let (prefs, _) = self.preferences()?;
+        let archive = library_path(&self.home, ARCHIVE, false)?;
+        let mut prepared = Prepared {
+            enabled: prefs.enabled,
+            ..Default::default()
+        };
+        let mut hash = None;
+        if check_file(&archive)? {
+            match self.verify(&archive,stop,notify) {
+                Ok((bytes,sha)) if prefs.sha256.as_ref().is_none_or(|expected|expected==&sha)=>{prepared.bytes=bytes;prepared.archive_ready=true;hash=Some(sha);},
+                Ok(_)=>prepared.warning="Lokale ZIP-Prüfsumme stimmt nicht. Prüfen und vorbereiten lädt die Datei erneut.".into(),
+                Err(error)=>{cancelled(stop)?;prepared.warning=error;},
+            }
+        }
+        let database = library_path(&self.home, DATABASE, false)?;
+        if check_file(&database)? {
+            match self.index.inspect(&database, hash.as_deref(), stop, notify) {
+                Ok(info) => prepared.database = Some(info),
+                Err(error) => {
+                    cancelled(stop)?;
+                    if !prepared.warning.is_empty() {
+                        prepared.warning.push('\n');
+                    }
+                    prepared.warning.push_str(&error);
+                }
+            }
+        }
+        prepared.ready = prepared.archive_ready && prepared.database.is_some();
+        Ok(prepared)
+    }
+    fn prepare(
+        &self,
+        enabled: bool,
+        stop: &AtomicBool,
+        notify: &(dyn Fn(PreparationProgress) + Sync),
+    ) -> Result<Prepared, String> {
+        self.prepare_all(enabled, false, stop, notify)
+    }
+    fn rebuild_index(
+        &self,
+        stop: &AtomicBool,
+        notify: &(dyn Fn(PreparationProgress) + Sync),
+    ) -> Result<Prepared, String> {
+        self.prepare_all(true, true, stop, notify)
     }
 }
 
@@ -359,7 +446,11 @@ mod tests {
     fn global_data_is_opt_in_reused_across_libraries_and_disabling_keeps_archive() {
         let home = tempfile::tempdir().unwrap();
         let transport = Arc::new(Transfer::default());
-        let store = GeoData::new(home.path().into(), transport.clone());
+        let store = GeoData::new(
+            home.path().into(),
+            transport.clone(),
+            Arc::new(crate::geodata_db::SqlitePlaces),
+        );
         let stop = AtomicBool::new(false);
         assert!(!store.inspect(&stop, &|_| {}).unwrap().enabled);
         assert_eq!(fs::read_dir(home.path()).unwrap().count(), 0);
@@ -371,7 +462,11 @@ mod tests {
         assert_eq!(transport.count.load(Ordering::SeqCst), 1);
         assert!(!store.prepare(false, &stop, &|_| {}).unwrap().enabled);
         assert_eq!(fs::read(store.locations().archive).unwrap(), bytes);
-        let other = GeoData::new(home.path().into(), transport.clone());
+        let other = GeoData::new(
+            home.path().into(),
+            transport.clone(),
+            Arc::new(crate::geodata_db::SqlitePlaces),
+        );
         assert!(other.inspect(&stop, &|_| {}).unwrap().ready);
         assert_eq!(transport.count.load(Ordering::SeqCst), 1);
     }
@@ -384,7 +479,11 @@ mod tests {
                 home: home.path().into(),
                 ..Default::default()
             });
-            let store = GeoData::new(home.path().into(), transport);
+            let store = GeoData::new(
+                home.path().into(),
+                transport,
+                Arc::new(crate::geodata_db::SqlitePlaces),
+            );
             let stop = AtomicBool::new(false);
             assert!(store.prepare(true, &stop, &|_| {}).is_err());
             let location = store.locations();
@@ -411,7 +510,11 @@ mod tests {
     #[test]
     fn damaged_zip_and_preferences_are_preserved_and_zip_crc_is_checked() {
         let home = tempfile::tempdir().unwrap();
-        let store = GeoData::new(home.path().into(), Arc::new(Transfer::default()));
+        let store = GeoData::new(
+            home.path().into(),
+            Arc::new(Transfer::default()),
+            Arc::new(crate::geodata_db::SqlitePlaces),
+        );
         let stop = AtomicBool::new(false);
         store.prepare(true, &stop, &|_| {}).unwrap();
         let location = store.locations();
@@ -432,13 +535,17 @@ mod tests {
     #[test]
     fn symlinked_data_and_preference_paths_are_rejected() {
         use std::os::unix::fs::symlink;
-        for relative in [ARCHIVE, PREFERENCES] {
+        for relative in [ARCHIVE, DATABASE, PREFERENCES] {
             let home = tempfile::tempdir().unwrap();
             let target = home.path().join("untouched");
             fs::write(&target, b"original").unwrap();
             let path = library_path(home.path(), relative, true).unwrap();
             symlink(&target, &path).unwrap();
-            let store = GeoData::new(home.path().into(), Arc::new(Transfer::default()));
+            let store = GeoData::new(
+                home.path().into(),
+                Arc::new(Transfer::default()),
+                Arc::new(crate::geodata_db::SqlitePlaces),
+            );
             assert!(
                 store
                     .prepare(true, &AtomicBool::new(false), &|_| {})
@@ -455,11 +562,13 @@ mod tests {
         let store = GeoData::new(
             home.path().into(),
             Arc::new(crate::whisper_models_native::NativeModelTransport),
+            Arc::new(crate::geodata_db::SqlitePlaces),
         );
         let p = store
             .prepare(true, &AtomicBool::new(false), &|_| {})
             .unwrap();
-        assert!(p.ready && p.bytes > 1_000_000);
+        assert!(p.ready && p.archive_ready && p.bytes > 1_000_000);
+        assert!(p.database.as_ref().unwrap().places > 100_000);
         assert!(
             store
                 .inspect(&AtomicBool::new(false), &|_| {})
@@ -467,8 +576,62 @@ mod tests {
                 .ready
         );
         println!(
-            "GeoNames HTTPS and ZIP/CRC/SHA-256 verification OK: {} bytes (temporary files only)",
-            p.bytes
+            "GeoNames HTTPS, ZIP/CRC/SHA-256 and SQLite/RTree verification OK: {} bytes, {} places (temporary files only)",
+            p.bytes,
+            p.database.unwrap().places
         );
+    }
+    #[test]
+    fn missing_corrupt_stale_or_incomplete_sqlite_is_repaired_without_another_download() {
+        let home = tempfile::tempdir().unwrap();
+        let transport = Arc::new(Transfer::default());
+        let store = GeoData::new(
+            home.path().into(),
+            transport.clone(),
+            Arc::new(crate::geodata_db::SqlitePlaces),
+        );
+        let stop = AtomicBool::new(false);
+        let first = store.prepare(true, &stop, &|_| {}).unwrap();
+        assert!(first.archive_ready && first.ready);
+        assert_eq!(first.database.as_ref().unwrap().places, 1);
+        let path = store.locations().database;
+        let imports = AtomicUsize::new(0);
+        let track = |p: PreparationProgress| {
+            if p.phase == photosuite_application::geodata::Phase::Importing {
+                imports.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        store.prepare(true, &stop, &track).unwrap();
+        assert_eq!(imports.load(Ordering::SeqCst), 0);
+        for kind in [0, 1, 2, 3, 4] {
+            match kind {
+                0 => fs::remove_file(&path).unwrap(),
+                1 => fs::write(&path, b"broken database").unwrap(),
+                2 => {
+                    let conn = rusqlite::Connection::open(&path).unwrap();
+                    conn.execute("DELETE FROM place_coordinates", []).unwrap();
+                }
+                3 => {
+                    let conn = rusqlite::Connection::open(&path).unwrap();
+                    conn.execute("UPDATE import_info SET source_sha256=?1", ["b".repeat(64)])
+                        .unwrap();
+                }
+                _ => {
+                    let conn = rusqlite::Connection::open(&path).unwrap();
+                    conn.pragma_update(None, "user_version", 999).unwrap();
+                }
+            }
+            let inspected = store.inspect(&stop, &|_| {}).unwrap();
+            assert!(inspected.archive_ready && !inspected.ready);
+            assert!(store.prepare(true, &stop, &track).unwrap().ready);
+            assert_eq!(transport.count.load(Ordering::SeqCst), 1);
+        }
+        let previous = imports.load(Ordering::SeqCst);
+        store.rebuild_index(&stop, &track).unwrap();
+        assert!(imports.load(Ordering::SeqCst) > previous);
+        assert_eq!(transport.count.load(Ordering::SeqCst), 1);
+        let before = fs::read(&path).unwrap();
+        store.prepare(false, &stop, &|_| {}).unwrap();
+        assert_eq!(fs::read(path).unwrap(), before);
     }
 }

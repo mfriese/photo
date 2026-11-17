@@ -1,5 +1,34 @@
 //! Preparation of shared offline data only; no geocoding and no media access.
-use crate::downloads::Progress;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Inspecting,
+    CheckingArchive,
+    Downloading,
+    Importing,
+    CheckingDatabase,
+    Saving,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct Progress {
+    pub phase: Phase,
+    pub current: u64,
+    pub total: u64,
+}
+impl From<crate::downloads::Progress> for Progress {
+    fn from(p: crate::downloads::Progress) -> Self {
+        use crate::downloads::Stage;
+        Self {
+            phase: match p.stage {
+                Stage::Loading => Phase::Inspecting,
+                Stage::Checking => Phase::CheckingArchive,
+                Stage::Downloading => Phase::Downloading,
+                Stage::Saving => Phase::Saving,
+            },
+            current: p.bytes,
+            total: p.total,
+        }
+    }
+}
 use std::{
     path::PathBuf,
     sync::{
@@ -13,14 +42,97 @@ pub const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct Locations {
     pub archive: PathBuf,
+    pub database: PathBuf,
     pub preferences: PathBuf,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Prepared {
     pub enabled: bool,
     pub ready: bool,
+    pub archive_ready: bool,
+    pub database: Option<DatabaseInfo>,
     pub bytes: u64,
     pub warning: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DatabaseInfo {
+    pub places: u64,
+    pub source_sha256: String,
+    pub imported_at: String,
+}
+#[derive(Clone, Debug)]
+pub struct Place {
+    pub id: i64,
+    pub name: String,
+    pub ascii_name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub country_code: String,
+    pub admin1_code: String,
+}
+/// Framework-independent range query for a future Rust geocoder. Dateline ranges use two boxes.
+#[derive(Clone, Copy, Debug)]
+pub struct Bounds {
+    west: f64,
+    south: f64,
+    east: f64,
+    north: f64,
+}
+impl Bounds {
+    pub fn new(west: f64, south: f64, east: f64, north: f64) -> Result<Self, String> {
+        if ![west, south, east, north].iter().all(|n| n.is_finite())
+            || west < -180.
+            || east > 180.
+            || south < -90.
+            || north > 90.
+            || west > east
+            || south > north
+        {
+            return Err("Ungültiger geografischer Suchbereich".into());
+        }
+        Ok(Self {
+            west,
+            south,
+            east,
+            north,
+        })
+    }
+    pub fn west(self) -> f64 {
+        self.west
+    }
+    pub fn south(self) -> f64 {
+        self.south
+    }
+    pub fn east(self) -> f64 {
+        self.east
+    }
+    pub fn north(self) -> f64 {
+        self.north
+    }
+}
+pub trait PlaceIndex: Send + Sync + 'static {
+    fn inspect(
+        &self,
+        database: &std::path::Path,
+        source_sha256: Option<&str>,
+        stop: &AtomicBool,
+        notify: &(dyn Fn(Progress) + Sync),
+    ) -> Result<DatabaseInfo, String>;
+    fn prepare(
+        &self,
+        archive: &std::path::Path,
+        database: &std::path::Path,
+        source_sha256: &str,
+        stop: &AtomicBool,
+        notify: &(dyn Fn(Progress) + Sync),
+        verify_source: &(dyn Fn() -> Result<(), String> + Sync),
+    ) -> Result<DatabaseInfo, String>;
+    fn candidates(
+        &self,
+        database: &std::path::Path,
+        bounds: Bounds,
+        limit: usize,
+    ) -> Result<Vec<Place>, String>;
 }
 pub trait Store: Send + Sync + 'static {
     /// Pure path calculation only; no I/O.
@@ -37,6 +149,18 @@ pub trait Store: Send + Sync + 'static {
         cancel: &AtomicBool,
         notify: &(dyn Fn(Progress) + Sync),
     ) -> Result<Prepared, String>;
+    fn rebuild_index(
+        &self,
+        cancel: &AtomicBool,
+        notify: &(dyn Fn(Progress) + Sync),
+    ) -> Result<Prepared, String> {
+        self.prepare(true, cancel, notify)
+    }
+}
+enum Request {
+    Inspect,
+    Prepare(bool),
+    Rebuild,
 }
 enum Event {
     Progress(Progress),
@@ -92,12 +216,17 @@ impl Session {
     }
     pub fn reload(&mut self) {
         if !self.busy() {
-            self.launch(None);
+            self.launch(Request::Inspect);
         }
     }
     pub fn apply(&mut self, enabled: bool) {
         if !self.busy() {
-            self.launch(Some(enabled));
+            self.launch(Request::Prepare(enabled));
+        }
+    }
+    pub fn rebuild_index(&mut self) {
+        if !self.busy() {
+            self.launch(Request::Rebuild);
         }
     }
     pub fn cancel(&mut self) {
@@ -106,7 +235,7 @@ impl Session {
             self.cancelling = true;
         }
     }
-    fn launch(&mut self, enabled: Option<bool>) {
+    fn launch(&mut self, request: Request) {
         self.requested = true;
         self.error.clear();
         self.progress = None;
@@ -120,9 +249,10 @@ impl Session {
             let notify = |p| {
                 let _ = tx.try_send(Event::Progress(p));
             };
-            let result = match enabled {
-                Some(enabled) => store.prepare(enabled, &stop, &notify),
-                None => store.inspect(&stop, &notify),
+            let result = match request {
+                Request::Prepare(enabled) => store.prepare(enabled, &stop, &notify),
+                Request::Inspect => store.inspect(&stop, &notify),
+                Request::Rebuild => store.rebuild_index(&stop, &notify),
             };
             let _ = tx.send(Event::Done(result));
         });
@@ -136,7 +266,14 @@ impl Session {
                     Ok(Event::Done(result)) => {
                         match result {
                             Ok(p) => self.prepared = Some(p),
-                            Err(e) => self.error = e,
+                            Err(e) => {
+                                self.error = e;
+                                if let Some(prepared) = &mut self.prepared {
+                                    prepared.ready = false;
+                                    prepared.archive_ready = false;
+                                    prepared.database = None;
+                                }
+                            }
                         }
                         done = true;
                         break;
@@ -178,6 +315,7 @@ mod tests {
         fn locations(&self) -> Locations {
             Locations {
                 archive: "/Global/cities500.zip".into(),
+                database: "/Global/places.sqlite".into(),
                 preferences: "/Global/geodata.plist".into(),
             }
         }

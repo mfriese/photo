@@ -2468,13 +2468,14 @@ impl photosuite_application::geodata::Store for UnusedAdapters {
     fn locations(&self) -> photosuite_application::geodata::Locations {
         photosuite_application::geodata::Locations {
             archive: "/Global/GeoNames/cities500.zip".into(),
+            database: "/Global/GeoNames/places.sqlite".into(),
             preferences: "/Global/Preferences/geodata.plist".into(),
         }
     }
     fn inspect(
         &self,
         _: &std::sync::atomic::AtomicBool,
-        _: &(dyn Fn(photosuite_application::downloads::Progress) + Sync),
+        _: &(dyn Fn(photosuite_application::geodata::Progress) + Sync),
     ) -> Result<photosuite_application::geodata::Prepared, String> {
         Ok(Default::default())
     }
@@ -2482,7 +2483,7 @@ impl photosuite_application::geodata::Store for UnusedAdapters {
         &self,
         enabled: bool,
         _: &std::sync::atomic::AtomicBool,
-        _: &(dyn Fn(photosuite_application::downloads::Progress) + Sync),
+        _: &(dyn Fn(photosuite_application::geodata::Progress) + Sync),
     ) -> Result<photosuite_application::geodata::Prepared, String> {
         Ok(photosuite_application::geodata::Prepared {
             enabled,

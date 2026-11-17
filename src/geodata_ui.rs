@@ -1,9 +1,6 @@
 //! Geodata preparation controls only. The session owns worker and persistence lifecycle.
 use eframe::egui;
-use photosuite_application::{
-    downloads::Stage,
-    geodata::{SOURCE, Session},
-};
+use photosuite_application::geodata::{Phase, SOURCE, Session};
 #[derive(Default)]
 pub struct View {
     enabled: bool,
@@ -26,20 +23,20 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, view: &mut View) {
     ui.label("Geodaten gelten für alle Bibliotheken auf diesem Mac.");
     crate::options_ui::section(ui, "Offline-Geodaten", |ui| {
         ui.add_enabled(
-            !session.busy() && session.prepared().is_some(),
+            !session.busy(),
             egui::Checkbox::new(
                 &mut view.enabled,
-                "GeoNames cities500 herunterladen und bereithalten",
+                "Offline-Geodaten aktivieren und bereithalten",
             ),
         );
         ui.label("Weltweite Ortsdaten · Download etwa 13–15 MB");
-        ui.small("In diesem Schritt wird nur die ZIP-Datei vorbereitet. Fotos werden noch nicht ausgewertet. GPS-Koordinaten werden nicht übertragen.");
-        ui.small("Deaktivieren behält die bereits heruntergeladene Datei.");
+        ui.small("ZIP und SQLite-Ortsdatenbank werden geprüft und vorbereitet. Fotos werden noch nicht ausgewertet. GPS-Koordinaten werden nicht übertragen.");
+        ui.small("Gültige Daten werden wiederverwendet; fehlende oder beschädigte Daten werden erneut vorbereitet. Deaktivieren behält beide Dateien.");
         if ui
             .add_enabled(
-                !session.busy() && session.prepared().is_some(),
+                !session.busy(),
                 egui::Button::new(if view.enabled {
-                    "Bestätigen und Geodaten vorbereiten"
+                    "Prüfen und vorbereiten"
                 } else {
                     "Einstellung speichern"
                 }),
@@ -61,26 +58,32 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, view: &mut View) {
             ui.label(if session.cancelling() {
                 "Abbruch wird abgeschlossen …"
             } else {
-                match session.progress().map(|p| p.stage) {
-                    Some(Stage::Downloading) => "Geodaten werden heruntergeladen …",
-                    Some(Stage::Checking) => "ZIP-Datei wird geprüft …",
-                    Some(Stage::Saving) => "Einstellung wird gespeichert …",
+                match session.progress().map(|p| p.phase) {
+                    Some(Phase::Downloading) => "Geodaten werden heruntergeladen …",
+                    Some(Phase::CheckingArchive) => "ZIP-Datei wird geprüft …",
+                    Some(Phase::Importing) => "Orte werden in SQLite importiert …",
+                    Some(Phase::CheckingDatabase) => {
+                        "Datenbank und räumlicher Index werden geprüft …"
+                    }
+                    Some(Phase::Saving) => "Einstellung wird gespeichert …",
                     _ => "Lokale Geodaten werden geprüft …",
                 }
             });
         });
         if let Some(p) = session.progress() {
-            if p.total > 0 {
+            if matches!(p.phase, Phase::Importing) {
+                ui.label(format!("{} Orte importiert", p.current));
+            } else if p.total > 0 {
                 ui.add(
-                    egui::ProgressBar::new((p.bytes as f64 / p.total as f64).clamp(0., 1.) as f32)
+                    egui::ProgressBar::new((p.current as f64 / p.total as f64).clamp(0., 1.) as f32)
                         .text(format!(
                             "{:.1} / {:.1} MB",
-                            p.bytes as f64 / 1e6,
+                            p.current as f64 / 1e6,
                             p.total as f64 / 1e6
                         )),
                 );
-            } else if p.bytes > 0 {
-                ui.label(format!("{:.1} MB geladen", p.bytes as f64 / 1e6));
+            } else if p.current > 0 {
+                ui.label(format!("{:.1} MB geladen", p.current as f64 / 1e6));
             }
         }
         if ui
@@ -94,7 +97,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, view: &mut View) {
         if !p.warning.is_empty() {
             ui.colored_label(crate::theme::IMPORT_WARNING, &p.warning);
         }
-        if p.ready {
+        if p.archive_ready {
             ui.colored_label(
                 crate::theme::IMPORT_SUCCESS,
                 format!(
@@ -108,6 +111,27 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, view: &mut View) {
         } else if !session.busy() {
             ui.label("Noch keine gültige ZIP-Datei vorhanden.");
         }
+    }
+    if let Some(info) = session.prepared().and_then(|p| p.database.as_ref()) {
+        ui.colored_label(
+            crate::theme::IMPORT_SUCCESS,
+            format!("SQLite geprüft · {} Orte", info.places),
+        );
+        ui.small(format!("Importiert: {}", info.imported_at));
+        if ui.button("Datenbank im Finder anzeigen").clicked() {
+            view.reveal = Some(session.locations().database);
+        }
+    } else if !session.busy() {
+        ui.label("Noch kein gültiger SQLite-Import vorhanden.");
+    }
+    if ui
+        .add_enabled(
+            !session.busy() && view.enabled,
+            egui::Button::new("SQLite aus ZIP neu aufbauen"),
+        )
+        .clicked()
+    {
+        session.rebuild_index();
     }
     if !session.error().is_empty() {
         ui.colored_label(crate::theme::DANGER, session.error());
@@ -126,6 +150,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, view: &mut View) {
     crate::options_ui::section(ui, "Speicherorte auf diesem Mac", |ui| {
         for (title, path) in [
             ("Geodaten-ZIP", locations.archive),
+            ("Ortsdatenbank", locations.database),
             ("Globale Einstellungen", locations.preferences),
         ] {
             ui.label(title);
@@ -139,7 +164,7 @@ pub fn show(ui: &mut egui::Ui, session: &mut Session, view: &mut View) {
 mod tests {
     use super::*;
     use photosuite_application::{
-        downloads::Progress,
+        geodata::Progress,
         geodata::{Locations, Prepared, Store},
     };
     use std::sync::{
@@ -154,6 +179,7 @@ mod tests {
         fn locations(&self) -> Locations {
             Locations {
                 archive: "/Global/GeoNames/cities500.zip".into(),
+                database: "/Global/GeoNames/places.sqlite".into(),
                 preferences: "/Global/Preferences/geodata.plist".into(),
             }
         }
@@ -174,6 +200,12 @@ mod tests {
             Ok(Prepared {
                 enabled,
                 ready: enabled,
+                archive_ready: enabled,
+                database: Some(photosuite_application::geodata::DatabaseInfo {
+                    places: 2,
+                    source_sha256: "a".repeat(64),
+                    imported_at: "2026-11-17T12:00:00Z".into(),
+                }),
                 bytes: 13_000_000,
                 ..Default::default()
             })
@@ -269,14 +301,19 @@ mod tests {
             for _ in 0..3 {
                 labels = draw(&mut session, vec![]);
             }
-            for text in ["Geodaten", "Geodaten-ZIP", "Globale Einstellungen"] {
+            for text in [
+                "Geodaten",
+                "Geodaten-ZIP",
+                "Ortsdatenbank",
+                "Globale Einstellungen",
+            ] {
                 assert!(labels.iter().any(|(t, _)| t == text));
             }
             assert!(labels.iter().any(|(t, _)| t.contains("cities500.zip")));
             assert_eq!(store.writes.load(Ordering::SeqCst), 0);
             let checkbox = labels
                 .iter()
-                .find(|(t, _)| t.contains("herunterladen und bereithalten"))
+                .find(|(t, _)| t.contains("aktivieren und bereithalten"))
                 .unwrap()
                 .1
                 .center();
@@ -285,7 +322,7 @@ mod tests {
             labels = draw(&mut session, vec![]);
             let confirm = labels
                 .iter()
-                .find(|(t, _)| t == "Bestätigen und Geodaten vorbereiten")
+                .find(|(t, _)| t == "Prüfen und vorbereiten")
                 .unwrap()
                 .1
                 .center();
@@ -299,6 +336,16 @@ mod tests {
                     .iter()
                     .any(|(t, _)| t.contains("vorhanden und geprüft"))
             );
+            assert!(labels.iter().any(|(t, _)| t.contains("SQLite geprüft")));
+            let rebuild = labels
+                .iter()
+                .find(|(t, _)| t == "SQLite aus ZIP neu aufbauen")
+                .unwrap()
+                .1
+                .center();
+            draw(&mut session, click(rebuild));
+            wait(&mut session);
+            assert_eq!(store.writes.load(Ordering::SeqCst), 2);
             assert_eq!(
                 prefs, original,
                 "global changes must not enter library settings"

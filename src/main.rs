@@ -15,6 +15,7 @@ mod duplicates_ui;
 mod duration_cache_fs;
 mod exiftool;
 mod file_dates_fs;
+mod geodata_db;
 mod geodata_fs;
 mod geodata_ui;
 mod image_loader;
@@ -120,6 +121,7 @@ fn main() -> eframe::Result {
                 .map(std::path::PathBuf::from)
                 .unwrap_or_default(),
             model_transport,
+            std::sync::Arc::new(geodata_db::SqlitePlaces),
         )),
         duration_cache: Some(std::sync::Arc::new(duration_cache_fs::SqliteDurations {
             database: database.clone(),
