@@ -250,6 +250,32 @@ pub fn content_group<R>(
             body(ui)
         })
 }
+/// Compact counterpart of content_group for information popovers.
+pub fn compact_group<R>(
+    ui: &mut egui::Ui,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    egui::Frame::new()
+        .fill(CANVAS)
+        .stroke(Stroke::new(1_f32, BORDER))
+        .corner_radius(6)
+        .inner_margin(8)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            body(ui)
+        })
+}
+/// Non-interactive, high-contrast status pill; all popup colors come from this theme.
+pub fn status_label(ui: &mut egui::Ui, text: &str, color: Color32) {
+    egui::Frame::new()
+        .fill(RAISED)
+        .stroke(Stroke::new(1_f32, BORDER))
+        .corner_radius(4)
+        .inner_margin(egui::Margin::symmetric(6, 2))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).small().strong().color(color));
+        });
+}
 pub fn section_heading(ui: &mut egui::Ui, text: &str) {
     ui.label(
         RichText::new(text)
@@ -257,6 +283,21 @@ pub fn section_heading(ui: &mut egui::Ui, text: &str) {
             .strong()
             .color(TEXT),
     );
+}
+/// Filter heading with a stable trailing reset action across sidebar sections.
+pub fn filter_heading(ui: &mut egui::Ui, title: &str, can_reset: bool) -> bool {
+    ui.horizontal(|ui| {
+        sidebar_heading(ui, title);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_enabled(
+                can_reset,
+                egui::Button::new("Reset").min_size(egui::vec2(0., BADGE_HEIGHT)),
+            )
+            .clicked()
+        })
+        .inner
+    })
+    .inner
 }
 pub fn sidebar_heading(ui: &mut egui::Ui, text: &str) {
     section_heading(ui, text);

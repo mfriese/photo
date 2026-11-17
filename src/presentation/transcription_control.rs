@@ -1,5 +1,8 @@
 //! Library-wide transcription status beside the overview player; no IO in widget callbacks.
-use super::Suite;
+use super::{
+    Suite,
+    processing_ui::{self, page_selector, paged_text},
+};
 use eframe::egui;
 use photosuite_application::transcription::queue::{
     Candidate, Indicator, Mode, ModelChoice, Phase,
@@ -134,49 +137,82 @@ impl Suite {
         references_busy: bool,
         references_wait: bool,
     ) {
-        ui.strong("Transkription · gesamte Bibliothek");
+        crate::options_ui::spacing(ui);
+        crate::theme::section_heading(ui, "Verarbeitung");
+        ui.label(
+            egui::RichText::new("GPS, Orte & Transkription · gesamte Bibliothek")
+                .small()
+                .color(crate::theme::MUTED),
+        );
         let (done, total, failed) = self.transcription_queue.counts();
-        ui.label(format!("Fertig: {done} / {total} · Fehler: {failed}"));
-        let geo = self.geo_sweep.progress();
-        ui.label(format!(
-            "GPS: {} / {} · mit Koordinaten: {} · ohne: {} · Fehler: {}",
-            geo.checked, geo.total, geo.available, geo.missing, geo.failed
-        ));
-        if geo.total > 0 && !self.geo_sweep.complete() {
-            ui.add(egui::ProgressBar::new(geo.checked as f32 / geo.total as f32).show_percentage());
-        }
-        let status = if self.geo_sweep.busy() {
-            "Fotos werden vor der Transkription auf GPS geprüft"
-        } else if self.root.is_some() && !self.transcription_complete {
+        let status = if self.root.is_none() {
+            "Zum Starten eine Bibliothek öffnen"
+        } else if self.transcription_queue.mode() == Mode::Paused {
+            "Verarbeitung pausiert"
+        } else if self.transcription_queue.mode() == Mode::Stopped {
+            "Verarbeitung gestoppt"
+        } else if self.geo_sweep.busy() {
+            "GPS und Ortszuordnungen werden geprüft"
+        } else if !self.transcription_complete {
             "Bibliotheksinventar wird geladen"
         } else if references_busy {
             "Kommentarzuordnungen werden geladen"
         } else if references_wait {
             "Wartet auf gültige Kommentarzuordnungen"
-        } else if model_busy {
-            "Modell wird vorbereitet"
-        } else if self.transcription_queue.mode() == Mode::Paused {
-            "Pausiert"
-        } else if self.transcription_queue.mode() == Mode::Stopped {
-            "Gestoppt"
         } else if !self.geo_sweep.error().is_empty() {
-            "GPS-Prüfung fehlgeschlagen; erneute Prüfung erforderlich"
-        } else if self.transcription_queue.held() {
-            "Wartet auf GPS-Prüfung, Indexpflege oder Audioaufnahme"
+            "GPS-Prüfung benötigt Aufmerksamkeit"
+        } else if self.index_maintenance.busy() {
+            "Wartet auf die Datenbankpflege"
+        } else if self.services.work_priority.audio_active()
+            || self.comments.has_unsaved()
+            || self.comments.is_saving()
+        {
+            "Wartet auf die Audioaufnahme"
+        } else if model_busy {
+            "Whisper-Modell wird vorbereitet"
         } else if self.transcription_queue.waiting_for_model() {
-            "Wartet auf ein geprüftes Whisper-Modell"
+            "Whisper-Modell noch nicht bereit"
         } else if self.transcription_queue.busy() {
             match self.transcription_queue.progress().phase {
-                Phase::Planning => "Mediendateien und gespeicherte Aufträge werden geprüft",
-                Phase::LoadingModel => "Audio und Whisper-Modell werden vorbereitet",
+                Phase::Planning => "Mediendateien werden geprüft",
+                Phase::LoadingModel => "Audio und Modell werden vorbereitet",
                 Phase::Transcribing => "Tonspur wird transkribiert",
                 Phase::Saving => "Transkript wird gespeichert",
             }
         } else {
             "Keine laufende Verarbeitung"
         };
-        ui.label(status);
-
+        ui.add_space(4.);
+        let busy = self.geo_sweep.busy()
+            || self.transcription_queue.busy()
+            || model_busy
+            || references_busy;
+        let paused = self.transcription_queue.mode() != Mode::Running
+            || (self.transcription_queue.held() && !self.geo_sweep.busy())
+            || references_wait;
+        ui.horizontal_wrapped(|ui| {
+            crate::theme::status_label(
+                ui,
+                if self.transcription_queue.mode() == Mode::Paused {
+                    "Pausiert"
+                } else if self.transcription_queue.mode() == Mode::Stopped {
+                    "Gestoppt"
+                } else if busy && !paused {
+                    "Aktiv"
+                } else if paused {
+                    "Wartet"
+                } else {
+                    "Bereit"
+                },
+                if busy && !paused {
+                    crate::theme::ACCENT
+                } else {
+                    crate::theme::MUTED
+                },
+            );
+            ui.label(status);
+        });
+        ui.add_space(4.);
         let failures = self.transcription_queue.failures();
         let mut errors = self
             .geo_sweep
@@ -195,63 +231,148 @@ impl Suite {
             errors.push(("Verarbeitung", self.transcription_queue.error()));
         }
         errors.extend(failures.iter().map(|(path, error)| (path.as_str(), *error)));
-        if let Some(photo) = &self.geo_sweep.progress().current {
-            ui.add(egui::Label::new(photo.as_str()).truncate())
-                .on_hover_text(photo.as_str());
-        }
         let has_text = !self.transcription_queue.log().is_empty();
         let section_id = ui.id().with("transcription_section");
         let mut section = ui.data_mut(|d| d.get_temp::<u8>(section_id).unwrap_or(0));
-        if (section == 1 && errors.is_empty()) || (section == 2 && !has_text) {
-            section = 0;
-        }
-        if !errors.is_empty() || has_text {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut section, 0, "Übersicht");
-                if !errors.is_empty() {
-                    ui.selectable_value(&mut section, 1, format!("Fehler ({})", errors.len()));
-                }
-                if has_text {
-                    ui.selectable_value(&mut section, 2, "Letzte Texte");
-                }
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut section, 0, "Übersicht");
+            ui.add_enabled_ui(!errors.is_empty(), |ui| {
+                ui.selectable_value(&mut section, 1, format!("Fehler ({})", errors.len()));
             });
-            ui.separator();
-        }
+            ui.add_enabled_ui(has_text, |ui| {
+                ui.selectable_value(&mut section, 2, "Live-Text");
+            });
+            ui.selectable_value(&mut section, 3, "Details");
+        });
+        ui.add_space(4.);
         ui.data_mut(|d| d.insert_temp(section_id, section));
-        if section == 1 {
-            let page = page_selector(ui, "transcription_error", errors.len());
-            let (path, error) = errors[page];
-            ui.add(egui::Label::new(path).truncate())
-                .on_hover_text(path);
-            paged_text(
-                ui,
-                egui::Id::new(("transcription_error_text", path, error)),
-                error,
-                true,
-            );
-            if references_wait && ui.button("Kommentar-Einstellungen …").clicked() {
-                self.settings_view.page = crate::options_ui::SettingsPage::General;
-                self.options_open = true;
+        match section {
+            1 => {
+                crate::theme::compact_group(ui, |ui| {
+                    if errors.is_empty() {
+                        ui.label("Keine Fehler vorhanden.");
+                        return;
+                    }
+                    let page = page_selector(ui, "transcription_error", errors.len());
+                    let (path, error) = errors[page];
+                    processing_ui::file(ui, "Betroffene Datei / Bereich", path);
+                    ui.add_space(4.);
+                    paged_text(
+                        ui,
+                        egui::Id::new(("transcription_error_text", path, error)),
+                        error,
+                        true,
+                    );
+                    if references_wait && ui.button("Kommentar-Einstellungen …").clicked() {
+                        self.settings_view.page = crate::options_ui::SettingsPage::General;
+                        self.options_open = true;
+                    }
+                });
             }
-            return;
+            2 => {
+                crate::theme::compact_group(ui, |ui| {
+                    ui.strong("Zuletzt erkannte Texte");
+                    if has_text {
+                        live_log(ui, self.transcription_queue.log());
+                    } else {
+                        ui.label(
+                            "Während der Transkription erscheinen hier die letzten 16 Textfunde.",
+                        );
+                    }
+                });
+            }
+            3 => {
+                crate::theme::compact_group(ui, |ui| {
+                    ui.strong("Modell & Sprache");
+                    if let Some(model) = self.transcription.prepared() {
+                        processing_ui::value(ui, "Modell", model.settings.model().id);
+                        let code = model.settings.language();
+                        let language = photosuite_application::transcription::catalog::LANGUAGES
+                            .iter()
+                            .find(|(key, _)| *key == code)
+                            .map(|(_, name)| *name)
+                            .unwrap_or(code);
+                        processing_ui::value(ui, "Sprache", language);
+                    } else {
+                        ui.small("Noch kein geprüftes Whisper-Modell.");
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Transkription …").clicked() {
+                            self.settings_view.page =
+                                crate::options_ui::SettingsPage::Transcription;
+                            self.options_open = true;
+                        }
+                        if ui.button("Geodaten …").clicked() {
+                            self.settings_view.page = crate::options_ui::SettingsPage::Geodata;
+                            self.options_open = true;
+                        }
+                    });
+                    if let Some(receipt) = self.transcription_queue.last() {
+                        ui.separator();
+                        processing_ui::file(ui, "Zuletzt abgeschlossen", receipt.source.as_str());
+                        if ui.button("Ergebnis im Finder anzeigen").clicked()
+                            && let Some(root) = &self.root
+                        {
+                            match receipt
+                                .record
+                                .metadata_path()
+                                .and_then(|p| self.services.opener.reveal(&root.join(p)))
+                            {
+                                Ok(()) => {}
+                                Err(error) => self.status = error,
+                            }
+                        }
+                    }
+                    ui.separator();
+                    ui.small("Lokal auf diesem Mac · Ergebnisse bleiben erhalten.").on_hover_text("Während der Transkription bleibt der Mac wach; der Bildschirm darf ausgehen. Fertige Ergebnisse bleiben bei Abbruch erhalten.");
+                });
+            }
+            _ => {
+                crate::theme::compact_group(ui, |ui| {
+                    let geo = self.geo_sweep.progress();
+                    processing_ui::stage(
+                        ui,
+                        "1 · GPS & Orte",
+                        geo.checked,
+                        geo.total,
+                        &format!(
+                            "{} mit GPS · {} ohne · {} Fehler",
+                            geo.available, geo.missing, geo.failed
+                        ),
+                    );
+                    if self.geo_sweep.busy()
+                        && let Some(photo) = &geo.current
+                    {
+                        processing_ui::file(ui, "Aktuell", photo.as_str());
+                    }
+                    ui.separator();
+                    processing_ui::stage(
+                        ui,
+                        "2 · Transkription",
+                        done,
+                        total,
+                        &format!(
+                            "{} offen · {failed} Fehler",
+                            total.saturating_sub(done + failed)
+                        ),
+                    );
+                    if self.transcription_queue.busy()
+                        && let Some(current) = self.transcription_queue.current()
+                    {
+                        processing_ui::file(ui, "Aktuell", current.as_str());
+                        if self.transcription_queue.progress().phase == Phase::Transcribing {
+                            ui.add(
+                                egui::ProgressBar::new(
+                                    self.transcription_queue.progress().fraction.clamp(0., 1.),
+                                )
+                                .desired_height(6.),
+                            );
+                        }
+                    }
+                });
+            }
         }
-        if section == 2 {
-            live_log(ui, self.transcription_queue.log());
-            return;
-        }
-        // UI selection/formatting only; all queue transitions remain in QueueSession.
-        if let Some(current) = self.transcription_queue.current() {
-            ui.add(egui::Label::new(current.as_str()).truncate())
-                .on_hover_text(current.as_str());
-        }
-        if self.transcription_queue.busy()
-            && self.transcription_queue.progress().phase == Phase::Transcribing
-        {
-            ui.add(
-                egui::ProgressBar::new(self.transcription_queue.progress().fraction.clamp(0., 1.))
-                    .show_percentage(),
-            );
-        }
+        ui.add_space(6.);
         ui.horizontal_wrapped(|ui| {
             let running = self.transcription_queue.mode() == Mode::Running;
             let label = if running {
@@ -263,7 +384,7 @@ impl Suite {
             };
             if ui
                 .add_enabled(
-                    total > done || !self.geo_sweep.complete(),
+                    self.root.is_some() && (total > done || !self.geo_sweep.complete()),
                     egui::Button::new(label),
                 )
                 .clicked()
@@ -276,7 +397,10 @@ impl Suite {
             }
             if ui
                 .add_enabled(
-                    total > done || self.transcription_queue.busy() || !self.geo_sweep.complete(),
+                    self.root.is_some()
+                        && (total > done
+                            || self.transcription_queue.busy()
+                            || !self.geo_sweep.complete()),
                     egui::Button::new("Abbrechen"),
                 )
                 .clicked()
@@ -294,43 +418,23 @@ impl Suite {
                 self.transcription_queue.retry_failed();
             }
         });
-        if ui.button("Dateien erneut prüfen").clicked() {
+        if ui
+            .add_enabled(
+                self.root.is_some(),
+                egui::Button::new("Dateien erneut prüfen"),
+            )
+            .clicked()
+        {
             self.geo_sweep.retry();
             self.transcription_queue.rescan();
         }
-        if let Some(model) = self.transcription.prepared() {
-            ui.small(format!(
-                "Modellauswahl: {} · {}",
-                model.settings.model().id,
-                model.settings.language()
-            ));
-        }
-        if self.transcription_queue.waiting_for_model()
+        if section == 0
+            && self.transcription_queue.waiting_for_model()
             && ui.button("Modell einrichten …").clicked()
         {
             self.settings_view.page = crate::options_ui::SettingsPage::Transcription;
             self.options_open = true;
         }
-        if let Some(receipt) = self.transcription_queue.last() {
-            ui.separator();
-            ui.label("Zuletzt fertig:");
-            ui.add(egui::Label::new(receipt.source.as_str()).truncate())
-                .on_hover_text(receipt.source.as_str());
-            if ui.button("Ergebnis im Finder anzeigen").clicked()
-                && let Some(root) = &self.root
-            {
-                match receipt
-                    .record
-                    .metadata_path()
-                    .and_then(|p| self.services.opener.reveal(&root.join(p)))
-                {
-                    Ok(()) => {}
-                    Err(e) => self.status = e,
-                }
-            }
-        }
-        ui.separator();
-        ui.small("Lokal auf diesem Mac. Während der Verarbeitung bleibt der Mac wach; der Bildschirm darf ausgehen. Fertige Texte bleiben bei Abbruch erhalten.");
     }
 }
 
@@ -354,9 +458,9 @@ fn live_log(
         }
     }
     let line_height = ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y;
-    let per_page = ((ui.ctx().content_rect().height() - 180.) / line_height)
+    let per_page = ((ui.ctx().content_rect().height() - 290.) / line_height)
         .floor()
-        .max(1.) as usize;
+        .clamp(1., 8.) as usize;
     let count = rows.len().div_ceil(per_page).max(1);
     // A new finding follows the newest page; within each page FIFO stays top to bottom.
     let tail = log.back().map(|e| (e.source.as_str(), e.text.as_deref()));
@@ -372,59 +476,6 @@ fn live_log(
         ui.add(egui::Label::new(text).truncate())
             .on_hover_text(full);
     }
-}
-
-// Pagination bounds even arbitrarily long error lists/text without a scroll area.
-// State is transient presentation state; no library or application data is changed.
-fn page_selector(ui: &mut egui::Ui, salt: impl std::hash::Hash, count: usize) -> usize {
-    let id = ui.id().with(salt);
-    let mut page = ui
-        .data_mut(|d| d.get_temp::<usize>(id).unwrap_or(0))
-        .min(count.saturating_sub(1));
-    if count > 1 {
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(page > 0, egui::Button::new("Zurück"))
-                .clicked()
-            {
-                page -= 1;
-            }
-            ui.label(format!("{} / {count}", page + 1));
-            if ui
-                .add_enabled(page + 1 < count, egui::Button::new("Weiter"))
-                .clicked()
-            {
-                page += 1;
-            }
-        });
-    }
-    ui.data_mut(|d| d.insert_temp(id, page));
-    page
-}
-
-fn paged_text(ui: &mut egui::Ui, id: egui::Id, text: &str, error: bool) {
-    // Count line breaks as a full line, avoiding tall pages from many short lines.
-    let mut pages = vec![String::new()];
-    let mut used = 0;
-    for character in text.chars() {
-        let cost = if character == '\n' { 40 } else { 1 };
-        if used + cost > 200 && used > 0 {
-            pages.push(String::new());
-            used = 0;
-        }
-        pages.last_mut().unwrap().push(character);
-        used += cost;
-    }
-    let page = page_selector(ui, id, pages.len());
-    let label = egui::RichText::new(&pages[page]);
-    ui.add(
-        egui::Label::new(if error {
-            label.color(crate::theme::DANGER)
-        } else {
-            label
-        })
-        .wrap(),
-    );
 }
 
 fn paint(ui: &egui::Ui, response: &egui::Response, state: Indicator) {
@@ -534,11 +585,11 @@ mod tests {
                 _ => None,
             })
             .unwrap();
-        let title = "Transkription · gesamte Bibliothek";
+        let title = "Verarbeitung";
         assert!(text_position(&output, title).is_none());
         let output = click(&ctx, &mut suite, parent);
         assert!(text_position(&output, title).is_some());
-        let action = text_position(&output, "Dateien erneut prüfen").unwrap();
+        let action = text_position(&output, "Details").unwrap();
         let output = click(&ctx, &mut suite, action);
         assert!(
             text_position(&output, title).is_some(),
@@ -573,6 +624,115 @@ mod tests {
         );
     }
 
+    #[test]
+    fn popup_sections_and_controls_fit_with_long_gps_errors_at_all_supported_sizes() {
+        use crate::domain::tags::LibraryFile;
+        use photosuite_application::media_geo::{
+            Fingerprint, Position, Repository, ResolvedPlace, Snapshot,
+        };
+        use std::{
+            path::Path,
+            sync::{Arc, atomic::AtomicBool},
+        };
+        struct Invalid;
+        impl Repository for Invalid {
+            fn inspect(
+                &self,
+                _: &Path,
+                _: &LibraryFile,
+                _: &AtomicBool,
+            ) -> Result<Snapshot, String> {
+                Ok(Snapshot {
+                    fingerprint: Fingerprint {
+                        bytes: 1,
+                        modified: "now".into(),
+                    },
+                    position: Position::Invalid(
+                        "Datei konnte nicht gelesen werden 日本語\n".repeat(200),
+                    ),
+                    resolved: None,
+                })
+            }
+            fn save_place(
+                &self,
+                _: &Path,
+                _: &LibraryFile,
+                _: &Fingerprint,
+                _: &ResolvedPlace,
+                _: &AtomicBool,
+            ) -> Result<(), String> {
+                unreachable!()
+            }
+        }
+        for (width, height) in [(360., 400.), (600., 400.), (1280., 720.)] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            ctx.style_mut(|s| s.animation_time = 0.);
+            let mut suite = super::super::layout_tests::test_suite();
+            suite.root = Some("/Fotos".into());
+            suite.transcription_complete = true;
+            suite.geo_sweep =
+                photosuite_application::geo_sweep::Session::new(Arc::new(Invalid), Arc::default());
+            suite.geo_sweep.sync(
+                Path::new("/Fotos"),
+                vec![LibraryFile::new(format!("2023/01/{}.jpg", "lang".repeat(100))).unwrap()],
+            );
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while !suite.geo_sweep.complete() {
+                suite.geo_sweep.poll(true);
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            for mode in [Mode::Running, Mode::Paused, Mode::Stopped] {
+                suite.transcription_queue.set_mode(mode);
+                for section in 0..4u8 {
+                    for frame in 0..3 {
+                        let mut bounds = None;
+                        let output = ctx.run(
+                            egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO,
+                                    egui::vec2(width, height),
+                                )),
+                                ..Default::default()
+                            },
+                            |ctx| {
+                                let shown = egui::Popup::new(
+                                    egui::Id::new("section_popup"),
+                                    ctx.clone(),
+                                    egui::pos2(width - 20., 40.),
+                                    egui::LayerId::background(),
+                                )
+                                .width((width - 32.).min(560.))
+                                .show(|ui| {
+                                    ui.set_width((width - 48.).min(544.));
+                                    ui.data_mut(|d| {
+                                        d.insert_temp(
+                                            ui.id().with("transcription_section"),
+                                            section,
+                                        )
+                                    });
+                                    suite.transcription_popup(ui, false, false, false);
+                                    ui.min_rect()
+                                })
+                                .unwrap();
+                                bounds = Some((shown.response.rect, shown.inner));
+                            },
+                        );
+                        let (outer, inner) = bounds.unwrap();
+                        assert!(outer.contains_rect(inner));
+                        assert!(
+                            outer.width() <= width && outer.height() < height - 40.,
+                            "section {section}, {mode:?}: {outer:?}"
+                        );
+                        if frame >= 2 {
+                            assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(t) if t.galley.job.text=="Abbrechen")),"controls must remain reachable: section {section}, {mode:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn progress_popup_grows_to_its_content_and_fits_small_windows() {
         for (width, height) in [(360., 400.), (600., 400.), (1280., 720.)] {

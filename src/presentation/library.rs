@@ -67,10 +67,7 @@ impl super::Suite {
                     }
                     let tags = self.tag_view.options_cache.as_ref().map(|c| c.tags.clone()).unwrap_or_default();
                     ui.add_space(12.);
-                    ui.horizontal(|ui| {
-                        theme::sidebar_heading(ui,"Tags");
-                        if ui.add_enabled(!self.tag_view.filters.is_empty(), egui::Button::new("Reset").min_size(egui::vec2(0.,theme::BADGE_HEIGHT))).clicked() { self.tag_view.filters.clear(); }
-                    });
+                    if theme::filter_heading(ui,"Tags",!self.tag_view.filters.is_empty()) {self.tag_view.filters.clear();}
                     ui.add_space(8.);
                     for tag in tags {
                         let selected = self.tag_view.filters.contains(&tag);
@@ -81,10 +78,7 @@ impl super::Suite {
                     }
                     ui.add_space(12.);
                     ui.push_id("location_facets", |ui| {
-                        ui.horizontal(|ui| {
-                            theme::sidebar_heading(ui,"Orte");
-                            if ui.add_enabled(!self.place_filter.selected.is_empty(),egui::Button::new("Reset").min_size(egui::vec2(0.,theme::BADGE_HEIGHT))).clicked() {self.place_filter.selected.clear();}
-                        });
+                        if theme::filter_heading(ui,"Orte",!self.place_filter.selected.is_empty()) {self.place_filter.selected.clear();}
                         ui.add_space(8.);
                         if self.place_options.as_ref().is_none_or(|cache|cache.revision!=self.place_filter.revision() || cache.count!=self.items.len() || cache.group!=self.group) {
                             let candidates=crate::application::visible(&self.items,"",self.group.as_deref(),false);

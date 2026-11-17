@@ -2032,6 +2032,20 @@ fn sidebar_tags_filter_period_with_and_and_keep_options_visible() {
         let rect = |label: &str| labels.iter().find(|(s, _)| s == label).unwrap().1;
         assert!((rect("Tags").center().y - rect("Reset").center().y).abs() < 3.);
         assert!(rect("Reset").left() > rect("Tags").right());
+        let resets: Vec<_> = labels
+            .iter()
+            .filter(|(label, _)| label == "Reset")
+            .map(|(_, rect)| rect)
+            .collect();
+        assert_eq!(resets.len(), 2);
+        assert!(
+            (resets[0].right() - resets[1].right()).abs() < 1.,
+            "Reset buttons must share the sidebar's right edge"
+        );
+        assert!(
+            resets[0].right() > 120.,
+            "Reset must use the trailing space"
+        );
         assert!(rect("dia").bottom() < rect("scan").top());
         assert!(suite.tag_view.filters.is_empty());
         assert_eq!(suite.visible(), vec![0, 1, 2]);

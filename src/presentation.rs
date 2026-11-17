@@ -10,6 +10,7 @@ mod inline_recording;
 mod library;
 mod menu;
 mod photo_location;
+mod processing_ui;
 mod startup;
 mod tag_filter;
 mod tags;
