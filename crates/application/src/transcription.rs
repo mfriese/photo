@@ -130,6 +130,14 @@ impl ModelSession {
     pub fn busy(&self) -> bool {
         self.job.is_some()
     }
+    /// Queue controls request a new check without starting concurrent model I/O.
+    pub fn defer_reload(&mut self) {
+        if !self.busy() {
+            self.requested = false;
+            self.prepared = None;
+            self.error.clear();
+        }
+    }
     pub fn reload(&mut self) {
         if !self.busy() {
             self.launch(None);

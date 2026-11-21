@@ -219,6 +219,7 @@ pub(super) fn test_suite() -> Suite {
         focus_search: false,
         search_open: false,
         help_open: false,
+        audio_library: photosuite_application::audio_library::Session::new(None),
         audio_header: Default::default(),
         audio_preparation: photosuite_application::diary_preparation::AudioPreparation::new(
             adapters.clone(),
@@ -240,6 +241,7 @@ pub(super) fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            audio_library: None,
             transcription_engine: adapters.clone(),
             transcription_queue: adapters.clone(),
             transcription_power: adapters.clone(),
@@ -1839,7 +1841,7 @@ fn player_record_intent_opens_the_recording_target_without_starting_capture_or_c
 }
 
 #[test]
-fn changing_page_prepares_audio_ratios_without_play_or_date_io() {
+fn changing_page_uses_cached_audio_ratios_without_any_audio_or_date_io() {
     use photosuite_application::diary::{AudioProbe, AudioSource};
     struct Source(std::sync::atomic::AtomicUsize);
     impl AudioSource for Source {
@@ -1877,9 +1879,25 @@ fn changing_page_prepares_audio_ratios_without_play_or_date_io() {
             .unwrap()
         })
         .collect();
+    suite.audio_preparation.display_hints(
+        &suite
+            .items
+            .iter()
+            .map(|m| {
+                (
+                    m.path().into(),
+                    if m.path().to_string_lossy().contains("130000") {
+                        3.
+                    } else {
+                        1.
+                    },
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
-    for (year, expected) in [("2026", 2), ("2027", 3)] {
+    for year in ["2026", "2027"] {
         suite.group = Some(year.into());
         let render = |suite: &mut Suite| {
             let _ = ctx.run(egui::RawInput::default(), |ctx| {
@@ -1894,7 +1912,7 @@ fn changing_page_prepares_audio_ratios_without_play_or_date_io() {
             std::thread::yield_now();
         }
         render(&mut suite);
-        assert_eq!(source.0.load(std::sync::atomic::Ordering::SeqCst), expected);
+        assert_eq!(source.0.load(std::sync::atomic::Ordering::SeqCst), 0);
         let timeline = suite.audio_header.draft.timeline().unwrap();
         assert_eq!(timeline.year(), year);
         assert!(timeline.clips().iter().all(|c| c.is_verified()));

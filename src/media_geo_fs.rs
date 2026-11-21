@@ -56,7 +56,7 @@ impl LocationIndex for SqlitePhotoGeo {
     ) -> Result<Vec<photosuite_application::media_geo::LocatedPhoto>, String> {
         cancelled(stop)?;
         let labels = crate::geo_labels::labels()?;
-        self.database.transaction(root, |tx| {
+        self.database.read(root, |tx| {
             let mut statement = tx.prepare("SELECT media_path,country_code,place_id,place_name,admin1_code FROM media_geo WHERE status='available' AND place_id IS NOT NULL AND length(country_code)=2 ORDER BY media_path")?;
             let mut rows = statement.query([])?;
             let mut locations = Vec::new();

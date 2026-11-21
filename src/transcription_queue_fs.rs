@@ -130,12 +130,28 @@ impl SqliteTranscriptionQueue {
     }
 }
 impl QueueStore for SqliteTranscriptionQueue {
+    fn save_mode(
+        &self,
+        root: &Path,
+        mode: photosuite_application::transcription::queue::Mode,
+    ) -> Result<(), String> {
+        let (mut state, previous) = crate::runtime_state_fs::read(root)?;
+        state.transcription.mode = mode;
+        crate::runtime_state_fs::save(root, &state, previous.as_deref()).map(|_| ())
+    }
+
+    fn load_mode(
+        &self,
+        root: &Path,
+    ) -> Result<photosuite_application::transcription::queue::Mode, String> {
+        crate::runtime_state_fs::read(root).map(|(state, _)| state.transcription.mode)
+    }
     fn load(&self, root: &Path) -> Result<Journal, String> {
         self.load_cancellable(root, &AtomicBool::new(false))
     }
     fn load_cancellable(&self, root: &Path, cancel: &AtomicBool) -> Result<Journal, String> {
         let (state, runtime) = crate::runtime_state_fs::read(root)?;
-        let (mut jobs,index)=self.database.transaction(root,|tx|{
+        let (mut jobs,index)=self.database.read(root,|tx|{
    let revision=library_db::revision(tx,Section::Transcription)?;let mut jobs=BTreeMap::new();
    let mut stmt=tx.prepare("SELECT source_path,record_path,source_bytes,source_modified,status,error FROM transcription_jobs ORDER BY source_path")?;
    for row in stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,u64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?)))? {

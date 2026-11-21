@@ -75,7 +75,7 @@ impl CatalogRepository for SqliteTags {
     }
 
     fn load(&self, root: &Path) -> Result<StoredCatalog, String> {
-        self.database.transaction(root, |tx| {
+        self.database.read(root, |tx| {
             let revision = library_db::revision(tx, Section::Tags)?;
             let mut catalog = TagCatalog::default();
             let mut stmt = tx.prepare(

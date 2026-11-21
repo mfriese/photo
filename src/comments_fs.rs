@@ -41,7 +41,7 @@ fn add_photo(
 }
 impl CommentRepository for SqliteComments {
     fn read_cache(&self, root: &Path) -> Result<CommentCache, String> {
-        self.database.transaction(root, |tx| {
+        self.database.read(root, |tx| {
             let revision = library_db::revision(tx, Section::Comments)?;
             if revision.is_none() {
                 return Ok(CommentCache::Missing);

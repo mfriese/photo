@@ -21,7 +21,7 @@ pub struct Snapshot {
     /// Complete successful inventory of the canonical year's audio directories.
     pub files: BTreeMap<PathBuf, Fingerprint>,
 }
-pub trait DurationCache: Send + Sync + 'static {
+pub trait DurationCache: Send + Sync {
     fn groups(&self, paths: &[PathBuf]) -> Vec<PathBuf>;
     fn load(&self, group: &Path, cancel: &AtomicBool) -> Result<Snapshot, String>;
     fn inventory(
@@ -47,12 +47,27 @@ pub fn reconcile(
 pub fn reconcile_loaded(
     store: &dyn DurationCache,
     group: &Path,
+    snapshot: Snapshot,
+    cancel: &AtomicBool,
+    measure: impl FnMut(&Path) -> Result<f64, String>,
+) -> Result<(), String> {
+    let errors = reconcile_loaded_reporting(store, group, snapshot, cancel, measure)?;
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+/// Per-file measurement errors are recoverable; inventory and persistence errors are fatal.
+pub fn reconcile_loaded_reporting(
+    store: &dyn DurationCache,
+    group: &Path,
     mut snapshot: Snapshot,
     cancel: &AtomicBool,
     mut measure: impl FnMut(&Path) -> Result<f64, String>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     if cancel.load(Ordering::Relaxed) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     snapshot.files = store.inventory(group, cancel)?;
     let full = snapshot.last_full_verified.as_ref() != Some(&snapshot.today);
@@ -66,7 +81,7 @@ pub fn reconcile_loaded(
     });
     for (path, fingerprint) in ordered {
         if cancel.load(Ordering::Relaxed) {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let changed = snapshot
             .entries
@@ -99,7 +114,7 @@ pub fn reconcile_loaded(
         }
     }
     if cancel.load(Ordering::Relaxed) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     if full {
         snapshot
@@ -110,11 +125,7 @@ pub fn reconcile_loaded(
         }
     }
     store.save(group, &snapshot)?;
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
+    Ok(errors)
 }
 
 #[cfg(test)]

@@ -76,6 +76,7 @@ pub struct DiaryTimeline {
     month: Option<String>,
     photo: Option<String>,
     clips: Vec<DiaryClip>,
+    year_blocks: Vec<(String, f64)>,
 }
 impl DiaryTimeline {
     pub fn new(year: String, clips: Vec<DiaryClip>) -> Result<Self, String> {
@@ -104,6 +105,7 @@ impl DiaryTimeline {
             photo: None,
             clips,
             kind: crate::diary::AudioKind::All,
+            year_blocks: Vec::new(),
         };
         timeline.sort();
         Ok(timeline)
@@ -161,6 +163,20 @@ impl DiaryTimeline {
     }
     pub fn is_library(&self) -> bool {
         self.year.is_none()
+    }
+    pub fn year_blocks(&self) -> &[(String, f64)] {
+        &self.year_blocks
+    }
+    pub fn set_year_blocks(&mut self, blocks: &[(String, f64)]) {
+        self.year_blocks = if self.is_library() {
+            blocks
+                .iter()
+                .filter(|(_, s)| s.is_finite() && *s > 0.)
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
     }
     pub fn clips(&self) -> &[DiaryClip] {
         &self.clips

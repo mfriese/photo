@@ -134,12 +134,19 @@ impl OrganizationSession {
             error: String::new(),
         }
     }
+    pub fn open_cached(&mut self, root: PathBuf) -> Result<(), String> {
+        self.open_mode(root, true)
+    }
     pub fn open(&mut self, root: PathBuf) -> Result<(), String> {
+        self.open_mode(root, false)
+    }
+    fn open_mode(&mut self, root: PathBuf, cached_only: bool) -> Result<(), String> {
         if self.dirty() || self.saving() {
             return Err("Tags werden noch gespeichert oder konnten nicht gespeichert werden. Erneut speichern oder ungespeicherte Änderungen verwerfen, bevor die Bibliothek gewechselt wird.".into());
         }
         let generation = self.generation + 1;
         self.worker.submit(Request::Load {
+            cached_only,
             root: root.clone(),
             generation,
         })?;
@@ -378,7 +385,11 @@ impl OrganizationSession {
         }
         let root = self.root.clone().ok_or("Keine Bibliothek geöffnet")?;
         let generation = self.generation + 1;
-        self.worker.submit(Request::Load { root, generation })?;
+        self.worker.submit(Request::Load {
+            root,
+            generation,
+            cached_only: false,
+        })?;
         self.generation = generation;
         self.revision = 0;
         self.acknowledged = 0;
@@ -1171,4 +1182,13 @@ mod rebuild_shutdown_tests {
         worker.join().unwrap();
         assert!(result.is_ok());
     }
+}
+
+/// Restore only missing tag projections; invoked by the serial metadata maintenance stage.
+pub fn restore_projection(
+    repository: &dyn CatalogRepository,
+    root: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    index::load_cancel(repository, root, cancel).map(|_| ())
 }

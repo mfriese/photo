@@ -1,6 +1,41 @@
 use super::preview_uri;
 use crate::theme;
 use eframe::egui;
+fn recent_libraries(
+    ui: &mut egui::Ui,
+    preferences: &photosuite_application::preferences::Preferences,
+) -> Option<std::path::PathBuf> {
+    if preferences.recent_libraries.is_empty() {
+        return None;
+    }
+    ui.add_space(8.);
+    ui.label(
+        egui::RichText::new("Zuletzt geöffnete Bibliotheken")
+            .small()
+            .color(theme::MUTED),
+    );
+    let mut selected = None;
+    let width = ui.available_width().min(460.);
+    for path in &preferences.recent_libraries {
+        let name = path
+            .file_name()
+            .unwrap_or(path.as_os_str())
+            .to_string_lossy();
+        let parent = path.parent().unwrap_or(std::path::Path::new(""));
+        let label = format!("{name}  ·  {}", parent.display());
+        if ui
+            .add_sized(
+                [width, 26.],
+                egui::Button::new(label).wrap_mode(egui::TextWrapMode::Truncate),
+            )
+            .on_hover_text(path.display().to_string())
+            .clicked()
+        {
+            selected = Some(path.clone());
+        }
+    }
+    selected
+}
 impl super::Suite {
     pub(super) fn photo_wall(&mut self, ctx: &egui::Context, visible: &[usize]) {
         if crate::domain::diary::audio_year(self.group.as_deref().unwrap_or("")).is_some() {
@@ -8,12 +43,15 @@ impl super::Suite {
             return;
         }
         let mut open_media = None;
+        let mut recent_selection = None;
         egui::CentralPanel::default()
             .frame(theme::panel(theme::CANVAS, 12))
             .show(ctx, |ui| {
                 if self.root.is_none() {
                     ui.vertical_centered(|ui| {
-                        ui.add_space((ui.available_height() * 0.12).clamp(12., 60.));
+                        let compact = !self.preferences.recent_libraries.is_empty() && ui.available_height() < 520.;
+                        ui.add_space(if compact {4.} else {(ui.available_height() * 0.12).clamp(12., 60.)});
+                        if !compact {
                         ui.add(
                             egui::Image::new(egui::include_image!(
                                 "../../assets/app-icon/photosuite.png"
@@ -21,17 +59,18 @@ impl super::Suite {
                             .fit_to_exact_size(egui::vec2(64., 64.)),
                         );
                         ui.add_space(8.);
+                        }
                         let unavailable=self.startup.as_ref().is_some_and(|s|s.state()==photosuite_application::preferences::StartupState::Unavailable);
                         ui.label(
                             egui::RichText::new(if unavailable{"Bibliothek aktuell nicht erreichbar."}else{"Platz für Erinnerungen."})
-                                .size(22.)
+                                .size(if compact && unavailable {18.} else {22.})
                                 .strong(),
                         );
                         ui.add_space(6.);
-                        ui.label(
+                        if !compact { ui.label(
                             egui::RichText::new("Deine Fotos. Deine Ordner. Deine Sammlung.")
                                 .color(theme::MUTED),
-                        );
+                        ); }
                         ui.add_space(10.);
                         if unavailable {
                             if let Some(path)=self.startup.as_ref().and_then(|s|s.target()){ui.add(egui::Label::new(path.display().to_string()).truncate()).on_hover_text(path.display().to_string());}
@@ -49,12 +88,15 @@ impl super::Suite {
                         {
                             self.load(path);
                         }
+                        recent_selection = recent_libraries(ui, &self.preferences);
+                        if !compact {
                         ui.add_space(6.);
                         ui.label(
                             egui::RichText::new("Lokal auf deinem Mac · Ohne Cloud oder Konto")
                                 .small()
                                 .color(theme::MUTED),
                         );
+                        }
                     });
                     return;
                 }
@@ -287,8 +329,107 @@ impl super::Suite {
                     },
                 );
             });
+        if let Some(path) = recent_selection {
+            self.load(path);
+        }
         if let Some(index) = open_media {
             self.navigate_viewer(index);
         }
+    }
+}
+
+#[cfg(test)]
+mod recent_tests {
+    use super::*;
+    use photosuite_application::preferences::Preferences;
+    fn preferences() -> Preferences {
+        let mut p = Preferences::default();
+        p.remember_library("/Offline/current".into());
+        p.set_recent_libraries((0..5).map(|i| format!("/Offline/Library {i}").into()));
+        p
+    }
+    #[test]
+    fn all_five_shortcuts_fit_the_small_start_page_without_a_scroll_area() {
+        for (width, height) in [(360., 400.), (600., 500.), (1280., 850.)] {
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            let mut suite = super::super::layout_tests::test_suite();
+            suite.root = None;
+            suite.preferences = preferences();
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, height),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| suite.photo_wall(ctx, &[]),
+            );
+            let labels = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().starts_with("Library ") => {
+                        Some(text)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(labels.len(), 5);
+            for label in labels {
+                let rect = label.visual_bounding_rect();
+                assert!(rect.bottom() < height, "shortcut clipped: {rect:?}");
+                assert!(rect.right() <= width, "shortcut too wide: {rect:?}");
+            }
+        }
+    }
+    #[test]
+    fn clicking_a_recent_library_returns_its_complete_offline_path() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        ctx.style_mut(|s| s.animation_time = 0.);
+        let preferences = preferences();
+        let mut selected = None;
+        let mut frame = |events| {
+            ctx.run(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.vertical_centered(|ui| {
+                            if let Some(path) = recent_libraries(ui, &preferences) {
+                                selected = Some(path);
+                            }
+                        });
+                    });
+                },
+            )
+        };
+        let output = frame(vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().starts_with("Library 3") => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .unwrap();
+        for pressed in [true, false] {
+            let _ = frame(vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: Default::default(),
+                },
+            ]);
+        }
+        assert_eq!(selected, Some("/Offline/Library 3".into()));
     }
 }

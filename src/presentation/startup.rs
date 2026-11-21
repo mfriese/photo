@@ -7,6 +7,14 @@ impl super::Suite {
             return;
         };
         let Some(outcome) = startup.poll() else {
+            if let Some(local) = startup.location_preferences() {
+                if self.root.is_none() {
+                    self.preferences.last_library = local.last_library.clone();
+                    self.preferences.recent_libraries = local.recent_libraries.clone();
+                } else {
+                    self.preferences.merge_library_history(local);
+                }
+            }
             if startup.waiting() || startup.busy() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
@@ -17,10 +25,9 @@ impl super::Suite {
         };
         if outcome.state != StartupState::Ready {
             if self.root.is_none() {
-                if let Ok((preferences, _)) = outcome.result
-                    && preferences.last_library.is_some()
-                {
+                if let Ok((preferences, _)) = outcome.result {
                     self.preferences.last_library = preferences.last_library;
+                    self.preferences.recent_libraries = preferences.recent_libraries;
                 }
                 self.preferences.library_scope = None;
                 self.status = if outcome.state == StartupState::Unavailable {
@@ -49,6 +56,8 @@ impl super::Suite {
             self.bindings = bindings;
             self.apply_preferences(preferences);
             self.preferences_error = error;
+        } else if let Ok((preferences, _)) = outcome.result {
+            self.preferences.merge_library_history(&preferences);
         }
         let snapshot = self.snapshot();
         if let Some(persistence) = &mut self.persistence {

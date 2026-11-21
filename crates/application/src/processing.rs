@@ -75,10 +75,37 @@ impl Readiness {
     }
 }
 /// Ordering belongs to the use case; callers supply snapshots and render session state.
+#[cfg(test)]
 pub fn advance(gps: &mut geo_sweep::Session, queue: &mut QueueSession, readiness: Readiness) {
     gps.poll(readiness.allow_gps(queue.mode_loaded(), queue.mode()));
     queue.set_hold(readiness.hold_transcription(gps.complete()));
     queue.poll();
+}
+/// One maintenance worker at a time: audio, GPS/places, then delayed queue planning/inference.
+/// Poll cancelled workers until they have exited before admitting the next stage.
+pub fn advance_with_audio(
+    audio: &mut crate::audio_library::Session,
+    gps: &mut geo_sweep::Session,
+    queue: &mut QueueSession,
+    readiness: Readiness,
+    model_busy: bool,
+) {
+    let running = queue.mode_loaded() && queue.mode() == Mode::Running;
+    let base = readiness.library_open
+        && !readiness.index_maintenance
+        && readiness.comments_ready
+        && !readiness.comments_pending
+        && !readiness.audio_active
+        && running;
+    let preflight = audio.complete() && gps.complete() && readiness.inventory_complete;
+    let admitted = audio.inference_ready(preflight && base);
+    queue.hold_planning(!admitted || model_busy);
+    queue.set_hold(!admitted || model_busy || readiness.hold_transcription(gps.complete()));
+    queue.poll();
+    let allow_gps =
+        base && audio.complete() && !audio.busy() && !queue.busy() && readiness.inventory_complete;
+    gps.poll(allow_gps && !model_busy);
+    audio.poll(base && !model_busy && !gps.busy() && !queue.busy());
 }
 /// All activity-panel controls share this application workflow, independent of UI widgets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,14 +158,14 @@ pub fn control(
                 && (!models.error().is_empty()
                     || models.prepared().is_none_or(|p| p.ready_path.is_none()))
             {
-                models.reload();
+                models.defer_reload();
             }
         }
         Control::Rescan => {
             gps.retry();
             queue.rescan();
             if !models.busy() {
-                models.reload();
+                models.defer_reload();
             }
         }
     }

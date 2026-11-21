@@ -24,6 +24,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc;
 pub struct Suite {
+    audio_library: photosuite_application::audio_library::Session,
     transcription_queue: photosuite_application::transcription::queue::QueueSession,
     transcription_seen: Option<transcription_control::Seen>,
     transcription_complete: bool,
@@ -116,7 +117,7 @@ impl Suite {
             || self.root.as_ref() != Some(&path)
             || self.organization.catalog().is_none()
         {
-            if let Err(error) = self.organization.open(path.clone()) {
+            if let Err(error) = self.organization.open_cached(path.clone()) {
                 self.status = error;
                 self.tag_view.open = true;
                 return;
@@ -135,8 +136,9 @@ impl Suite {
         self.transcription_seen = None;
         self.transcription_complete = false;
         self.audio_preparation.reset();
+        self.audio_library.open(&path);
         self.organization.begin_media_scan(&path);
-        self.comments.load(path.clone());
+        self.comments.load_cached(path.clone());
         self.persist_preferences();
         self.preferences.library_scope = None;
         self.storyboard.clear();
@@ -155,7 +157,7 @@ impl Suite {
             .request(self.services.repository.clone(), path.clone());
         self.root = Some(path.clone());
         if remember {
-            self.preferences.last_library = Some(path.clone());
+            self.preferences.remember_library(path.clone());
             self.persist_preferences();
         }
         self.items.clear();
@@ -292,6 +294,7 @@ impl Suite {
                 Ok(loaded) => {
                     let mut preferences = loaded.unwrap_or_default();
                     preferences.last_library = self.preferences.last_library.clone();
+                    preferences.recent_libraries = self.preferences.recent_libraries.clone();
                     preferences.library_scope = Some(root);
                     let mut bindings = crate::command_bindings::CommandBindings::default();
                     match bindings.restore(&preferences.shortcuts) {
@@ -492,11 +495,13 @@ impl eframe::App for Suite {
                 Ok(collection) => {
                     self.transcription_complete =
                         !self.collection.is_loading() && collection.unreadable == 0;
-                    self.organization.observe_media(
-                        &collection.root,
-                        &collection.items,
-                        !self.collection.is_loading() && collection.unreadable == 0,
-                    );
+                    if self.audio_library.complete() {
+                        self.organization.observe_media(
+                            &collection.root,
+                            &collection.items,
+                            !self.collection.is_loading() && collection.unreadable == 0,
+                        );
+                    }
                     for media in collection.items {
                         let media = self.comments.project(media);
                         if self.known_media.insert(media.path().to_owned()) {
@@ -511,7 +516,7 @@ impl eframe::App for Suite {
                     if self.remember_after_scan
                         && (collection.unreadable == 0 || !self.items.is_empty())
                     {
-                        self.preferences.last_library = Some(collection.root);
+                        self.preferences.remember_library(collection.root);
                         self.persist_location();
                     }
                 }
@@ -657,6 +662,9 @@ pub fn create(
         focus_search: false,
         search_open: false,
         help_open: false,
+        audio_library: photosuite_application::audio_library::Session::new(
+            services.audio_library.clone(),
+        ),
         audio_header: Default::default(),
         audio_preparation: photosuite_application::diary_preparation::AudioPreparation::with_cache(
             services.audio_source.clone(),

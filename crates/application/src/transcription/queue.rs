@@ -67,6 +67,14 @@ pub trait QueueStore: Send + Sync + 'static {
         check(cancel)?;
         self.load(root)
     }
+    fn save_mode(&self, root: &Path, mode: Mode) -> Result<(), String> {
+        let mut journal = self.load(root)?;
+        journal.mode = mode;
+        self.save(root, &journal).map(|_| ())
+    }
+    fn load_mode(&self, root: &Path) -> Result<Mode, String> {
+        self.load(root).map(|j| j.mode)
+    }
     fn save(&self, root: &Path, journal: &Journal) -> Result<Vec<u8>, String>;
     fn version(&self, root: &Path, source: &LibraryFile) -> Result<SourceVersion, String>;
     fn existing(&self, root: &Path, candidate: &Candidate) -> Result<Option<Transcript>, String>;
@@ -164,6 +172,8 @@ fn push_log(log: &mut VecDeque<LogEntry>, value: LogEntry) {
     }
 }
 enum Event {
+    Mode(Result<Mode, String>),
+    ModeSaved(Result<(), String>),
     Progress(WorkProgress),
     Done(Result<(Journal, Option<Receipt>), String>),
 }
@@ -188,6 +198,7 @@ pub struct QueueSession {
     active: Option<Active>,
     model: Option<ModelChoice>,
     hold: bool,
+    planning_hold: bool,
     progress: WorkProgress,
     current: Option<LibraryFile>,
     last: Option<Receipt>,
@@ -391,6 +402,7 @@ impl QueueSession {
             active: None,
             model: None,
             hold: false,
+            planning_hold: false,
             progress: WorkProgress {
                 phase: Phase::Planning,
                 fraction: 0.,
@@ -457,6 +469,13 @@ impl QueueSession {
             && self.current.is_some()
             && let Some(active) = &self.active
         {
+            active.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    /// Gate expensive reconciliation as well as inference. Mode loading is lightweight.
+    pub fn hold_planning(&mut self, hold: bool) {
+        self.planning_hold = hold;
+        if hold && let Some(active) = &self.active {
             active.cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -584,6 +603,8 @@ impl QueueSession {
     }
     pub fn poll(&mut self) {
         let mut result = None;
+        let mut loaded_mode = None;
+        let mut saved_mode = None;
         if let Some(active) = &self.active {
             if active.generation == self.generation
                 && let Some(source) = &self.current
@@ -601,6 +622,14 @@ impl QueueSession {
             }
             for _ in 0..16 {
                 match active.receiver.try_recv() {
+                    Ok(Event::ModeSaved(value)) => {
+                        saved_mode = Some(value);
+                        break;
+                    }
+                    Ok(Event::Mode(value)) => {
+                        loaded_mode = Some(value);
+                        break;
+                    }
                     Ok(Event::Progress(progress)) => {
                         if active.generation == self.generation {
                             self.progress = progress;
@@ -615,6 +644,29 @@ impl QueueSession {
                         break;
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
+                }
+            }
+        }
+        if let Some(value) = saved_mode {
+            let active = self.active.take().unwrap();
+            if active.generation == self.generation {
+                match value {
+                    Ok(()) => self.reconcile = true,
+                    Err(error) => self.error = error,
+                }
+            }
+        }
+        if let Some(value) = loaded_mode {
+            let active = self.active.take().unwrap();
+            if active.generation == self.generation {
+                match value {
+                    Ok(mode) => {
+                        if !self.mode_loaded {
+                            self.mode.store(mode.byte(), Ordering::Relaxed);
+                            self.mode_loaded = true;
+                        }
+                    }
+                    Err(error) => self.error = error,
                 }
             }
         }
@@ -671,6 +723,37 @@ impl QueueSession {
         let stop = cancel.clone();
         let store = self.store.clone();
         let generation = self.generation;
+        if self.controls_dirty && (self.planning_hold || self.journal.is_none()) {
+            self.controls_dirty = false;
+            let mode = self.mode();
+            self.active = Some(Active {
+                receiver,
+                cancel,
+                generation,
+                planning: false,
+                findings: Default::default(),
+            });
+            std::thread::spawn(move || {
+                let _ = tx.send(Event::ModeSaved(store.save_mode(&catalog.root, mode)));
+            });
+            return;
+        }
+        if self.planning_hold && !self.mode_loaded {
+            self.active = Some(Active {
+                receiver,
+                cancel,
+                generation,
+                planning: true,
+                findings: Default::default(),
+            });
+            std::thread::spawn(move || {
+                let _ = tx.send(Event::Mode(store.load_mode(&catalog.root)));
+            });
+            return;
+        }
+        if self.planning_hold && self.reconcile {
+            return;
+        }
         if self.reconcile {
             if self.mode() != Mode::Running && self.journal.is_none() {
                 return;
@@ -1087,6 +1170,111 @@ mod tests {
         until(&mut queue, |q| q.counts() == (2, 2, 0));
         assert_eq!(engine.calls.load(Ordering::SeqCst), 2);
     }
+    #[test]
+    fn paused_mode_is_saved_before_any_expensive_planning_and_survives_a_fresh_session() {
+        let (mut queue, store, engine, power) = setup();
+        let root = Path::new("/library");
+        queue.sync(root, vec![candidate("a.wav")], false);
+        queue.hold_planning(true);
+        queue.set_mode(Mode::Paused);
+        until(&mut queue, |q| q.mode_loaded() && !q.busy());
+        assert_eq!(store.journals.lock().unwrap()[root].mode, Mode::Paused);
+        assert!(store.journals.lock().unwrap()[root].jobs.is_empty());
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 0);
+        let mut restored = QueueSession::new(store, engine, Arc::new(Power(power)));
+        restored.sync(root, vec![candidate("a.wav")], false);
+        restored.hold_planning(true);
+        until(&mut restored, |q| q.mode_loaded() && !q.busy());
+        assert_eq!(restored.mode(), Mode::Paused);
+    }
+    #[test]
+    fn serial_coordinator_finishes_all_audio_stages_before_gps_and_delayed_inference() {
+        use crate::audio_library::{Progress, Repository, Session, Snapshot, Stage};
+        struct Audio {
+            stages: Mutex<Vec<Stage>>,
+            gps: Arc<GpsSource>,
+            engine: Arc<TestEngine>,
+        }
+        impl Repository for Audio {
+            fn read(&self, _: &Path) -> Result<Snapshot, String> {
+                Ok(Snapshot::default())
+            }
+            fn run(
+                &self,
+                _: &Path,
+                stage: Stage,
+                _: &AtomicBool,
+                _: &dyn Fn(Progress),
+            ) -> Result<(), String> {
+                assert_eq!(
+                    self.gps.calls.load(Ordering::SeqCst),
+                    0,
+                    "GPS started before audio maintenance completed"
+                );
+                assert_eq!(
+                    self.engine.calls.load(Ordering::SeqCst),
+                    0,
+                    "inference overlapped audio"
+                );
+                self.stages.lock().unwrap().push(stage);
+                Ok(())
+            }
+        }
+        let (mut queue, _, engine, _) = setup();
+        let source = Arc::new(GpsSource {
+            blocked: AtomicBool::new(true),
+            calls: AtomicUsize::new(0),
+        });
+        let repository = Arc::new(Audio {
+            stages: Mutex::new(Vec::new()),
+            gps: source.clone(),
+            engine: engine.clone(),
+        });
+        let root = Path::new("/library");
+        let mut audio = Session::new(Some(repository.clone()));
+        audio.open(root);
+        let mut gps = crate::geo_sweep::Session::new(source.clone(), Arc::default());
+        gps.sync(root, vec![LibraryFile::new("photo.jpg".into()).unwrap()]);
+        queue.sync(root, vec![candidate("a.wav")], true);
+        queue.set_model(Some(choice()));
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while source.calls.load(Ordering::SeqCst) == 0 {
+            crate::processing::advance_with_audio(&mut audio, &mut gps, &mut queue, ready(), false);
+            assert!(
+                std::time::Instant::now() < limit,
+                "preflight stalled {} {}",
+                audio.error(),
+                queue.error()
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            *repository.stages.lock().unwrap(),
+            [
+                Stage::Inventory,
+                Stage::Durations,
+                Stage::Metadata,
+                Stage::Years
+            ]
+        );
+        assert!(!queue.busy());
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 0);
+        source.blocked.store(false, Ordering::SeqCst);
+        let released = std::time::Instant::now();
+        while queue.counts() != (1, 1, 0) {
+            crate::processing::advance_with_audio(&mut audio, &mut gps, &mut queue, ready(), false);
+            assert!(
+                std::time::Instant::now() < limit,
+                "inference stalled {}",
+                queue.error()
+            );
+            std::thread::yield_now();
+        }
+        assert!(released.elapsed() >= std::time::Duration::from_secs(2));
+        assert!(gps.complete());
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn gps_completion_automatically_starts_transcription_without_another_ui_action() {
         let (mut queue, _store, engine, _power) = setup();

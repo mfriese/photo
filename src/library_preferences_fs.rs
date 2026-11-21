@@ -1,4 +1,4 @@
-//! Library-local YAML settings; only the last-library locator is stored on this Mac.
+//! Library-local YAML settings; only the current/recent library locator is stored on this Mac.
 use crate::metadata_fs::{atomic_write, check_file};
 use photosuite_application::preferences::{Preferences, PreferencesStore};
 use std::{
@@ -40,9 +40,9 @@ impl LibraryPreferences {
                     .get("version")
                     .and_then(plist::Value::as_unsigned_integer)
                     != Some(1)
-                    || dictionary
-                        .keys()
-                        .any(|k| !["version", "last_library"].contains(&k.as_str()))
+                    || dictionary.keys().any(|k| {
+                        !["version", "last_library", "recent_libraries"].contains(&k.as_str())
+                    })
                 {
                     return Err(
                         "Unbekanntes Format des Bibliotheks-Verweises; Datei bleibt unverändert"
@@ -59,10 +59,30 @@ impl LibraryPreferences {
                         Ok::<_, String>(PathBuf::from(path))
                     })
                     .transpose()?;
-                Ok(Preferences {
+                let recent = dictionary
+                    .get("recent_libraries")
+                    .map(|value| {
+                        value
+                            .as_array()
+                            .ok_or("Ungültige Liste zuletzt geöffneter Bibliotheken")?
+                            .iter()
+                            .map(|value| {
+                                value
+                                    .as_string()
+                                    .filter(|path| !path.is_empty())
+                                    .map(PathBuf::from)
+                                    .ok_or("Ungültiger Bibliothekspfad in Verlauf".to_owned())
+                            })
+                            .collect::<Result<Vec<_>, String>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let mut preferences = Preferences {
                     last_library,
                     ..Default::default()
-                })
+                };
+                preferences.set_recent_libraries(recent);
+                Ok(preferences)
             }
             Ok(_) => Err("Bibliotheks-Verweis ist keine reguläre Datei".into()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Preferences::default()),
@@ -80,6 +100,7 @@ impl LibraryPreferences {
         match self.load_library(&root) {
             Ok(Some(mut settings)) => {
                 settings.last_library = local.last_library.clone();
+                settings.recent_libraries = local.recent_libraries.clone();
                 settings.library_scope = Some(root);
                 Ok((settings, None))
             }
@@ -240,6 +261,7 @@ impl PreferencesStore for LibraryPreferences {
             Ok(settings) => {
                 let mut settings = settings.unwrap_or_default();
                 settings.last_library = local.last_library;
+                settings.recent_libraries = local.recent_libraries;
                 let open = explicit.is_some() || settings.reopen_library;
                 settings.library_scope = Some(root.clone());
                 Ok(StartupRead {
@@ -275,7 +297,9 @@ impl PreferencesStore for LibraryPreferences {
             atomic_write(&path, text.as_bytes())
                 .map_err(|e| format!("{}: {e}", root.join(SETTINGS).display()))
         } else {
-            self.local()?;
+            let previous = self.local()?;
+            let mut location = preferences.clone();
+            location.merge_library_history(&previous);
             let parent = self
                 .locator
                 .parent()
@@ -290,6 +314,18 @@ impl PreferencesStore for LibraryPreferences {
                 dictionary.insert(
                     "last_library".into(),
                     plist::Value::String(path.to_string_lossy().into_owned()),
+                );
+            }
+            if !location.recent_libraries.is_empty() {
+                dictionary.insert(
+                    "recent_libraries".into(),
+                    plist::Value::Array(
+                        location
+                            .recent_libraries
+                            .iter()
+                            .map(|path| plist::Value::String(path.to_string_lossy().into_owned()))
+                            .collect(),
+                    ),
                 );
             }
             let mut bytes = Vec::new();
@@ -311,6 +347,88 @@ mod tests {
         LibraryPreferences::new(path.with_extension("location.plist"))
     }
     use photosuite_application::preferences::Shortcut;
+    #[test]
+    fn version_one_locator_accepts_optional_history_and_keeps_it_out_of_library_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let locator = directory.path().join("library.plist");
+        let root = directory.path().join("photos");
+        fs::create_dir(&root).unwrap();
+        let store = LibraryPreferences::new(locator.clone());
+        let mut old = plist::Dictionary::new();
+        old.insert("version".into(), plist::Value::Integer(1.into()));
+        old.insert(
+            "last_library".into(),
+            plist::Value::String(root.to_str().unwrap().into()),
+        );
+        plist::Value::Dictionary(old).to_file_xml(&locator).unwrap();
+        let mut preferences = store.load().unwrap();
+        assert!(preferences.recent_libraries.is_empty());
+        preferences.library_scope = Some(root.clone());
+        store.save(&preferences).unwrap();
+        let settings = fs::read(root.join(SETTINGS)).unwrap();
+        preferences.library_scope = None;
+        for index in 0..7 {
+            preferences.remember_library(directory.path().join(format!("offline{index}")));
+        }
+        store.save(&preferences).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(loaded.last_library, preferences.last_library);
+        assert_eq!(loaded.recent_libraries, preferences.recent_libraries);
+        assert_eq!(loaded.recent_libraries.len(), 5);
+        let value = plist::Value::from_file(&locator).unwrap();
+        let dictionary = value.as_dictionary().unwrap();
+        assert_eq!(dictionary.len(), 3);
+        assert_eq!(dictionary["version"].as_unsigned_integer(), Some(1));
+        assert_eq!(dictionary["recent_libraries"].as_array().unwrap().len(), 5);
+        assert_eq!(
+            fs::read(root.join(SETTINGS)).unwrap(),
+            settings,
+            "local history must not alter library YAML"
+        );
+        preferences.library_scope = Some(root.clone());
+        store.save(&preferences).unwrap();
+        assert_eq!(
+            fs::read(root.join(SETTINGS)).unwrap(),
+            settings,
+            "history must not be serialized in library settings"
+        );
+        assert_eq!(
+            fs::read_dir(directory.path()).unwrap().count(),
+            2,
+            "history must not create an extra settings file"
+        );
+        // A late navigation snapshot must retain older alternatives already stored locally.
+        let late = Preferences {
+            last_library: Some(directory.path().join("new")),
+            ..Default::default()
+        };
+        store.save(&late).unwrap();
+        let loaded = store.load().unwrap();
+        assert_eq!(
+            loaded.recent_libraries.first(),
+            preferences.last_library.as_ref()
+        );
+        assert_eq!(loaded.recent_libraries.len(), 5);
+    }
+    #[test]
+    fn malformed_recent_library_values_preserve_the_existing_locator() {
+        let directory = tempfile::tempdir().unwrap();
+        let locator = directory.path().join("library.plist");
+        let store = LibraryPreferences::new(locator.clone());
+        for value in [
+            "<string>wrong type</string>",
+            "<array><integer>3</integer></array>",
+            "<array><string></string></array>",
+        ] {
+            let text = format!(
+                "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict><key>version</key><integer>1</integer><key>recent_libraries</key>{value}</dict></plist>"
+            );
+            fs::write(&locator, &text).unwrap();
+            assert!(store.load().is_err());
+            assert!(store.save(&Preferences::default()).is_err());
+            assert_eq!(fs::read_to_string(&locator).unwrap(), text);
+        }
+    }
     #[test]
     fn catalogs_use_sqlite_settings_remain_yaml_and_old_locations_are_ignored() {
         use photosuite_application::{

@@ -174,6 +174,7 @@ pub struct CommentSession {
     catalog: CommentCatalog,
     revision: Option<Vec<u8>>,
     request: Option<PathBuf>,
+    cached_load: bool,
     generation: u64,
     load_cancel: Arc<std::sync::atomic::AtomicBool>,
     worker: Option<mpsc::Receiver<Outcome>>,
@@ -215,6 +216,7 @@ impl CommentSession {
             catalog: CommentCatalog::default(),
             revision: None,
             request: None,
+            cached_load: false,
             generation: 0,
             load_cancel: Default::default(),
             worker: None,
@@ -304,7 +306,12 @@ impl CommentSession {
         self.device = device;
         Ok(())
     }
+    pub fn load_cached(&mut self, root: PathBuf) {
+        self.load(root);
+        self.cached_load = true;
+    }
     pub fn load(&mut self, root: PathBuf) {
+        self.cached_load = false;
         if self.has_unsaved() || self.saving {
             return;
         }
@@ -949,8 +956,19 @@ impl CommentSession {
             self.worker = Some(rx);
             let generation = self.generation;
             let cancel = self.load_cancel.clone();
+            let cached_only = self.cached_load;
             std::thread::spawn(move || {
-                let result = index::load(repository.as_ref(), &root, &cancel);
+                let result = if cached_only {
+                    repository.read_cache(&root).map(|cache| match cache {
+                        CommentCache::Current(stored) => stored,
+                        CommentCache::Missing => StoredComments {
+                            catalog: CommentCatalog::default(),
+                            revision: None,
+                        },
+                    })
+                } else {
+                    index::load(repository.as_ref(), &root, &cancel)
+                };
                 let _ = tx.send(Outcome::Loaded {
                     root,
                     generation,

@@ -506,7 +506,7 @@ Die GPS-Vorprüfung ergänzt bei vorbereiteten/aktivierten Offline-Geodaten auch
 
 
 ## Kompakte Verarbeitungs- und Ortsanzeige
-Das angeheftete Fortschrittspopup trägt die Überschrift Verarbeitung und trennt Übersicht, Fehler, Live-Text und Details. Übersicht zeigt die beiden Schritte GPS/Orte und Transkription mit eigenen Zählerzeilen und dünnen Fortschrittsleisten in einer gemeinsamen, dezent gerahmten Fläche. Statuschip und verständlicher Phasentext stehen darüber. Pause/Fortsetzen, Abbrechen und erneute Prüfung bleiben auf allen Reitern erreichbar; ohne Bibliothek sind Bibliotheksaktionen deaktiviert. Modell-/Spracheinstellungen, letzte Ergebnisdatei und Hintergrundinformationen liegen unter Details. Interne Aktionen, Außenklick und Escape schließen dieses Popup weiterhin nicht.
+Das angeheftete Fortschrittspopup trägt die Überschrift Verarbeitung und trennt Übersicht, Fehler, Live-Text und Details. Übersicht zeigt den aktuellen Audio- beziehungsweise GPS/Orte-Schritt und die nachfolgende Transkription mit eigenen Zählerzeilen und dünnen Fortschrittsleisten in einer gemeinsamen, dezent gerahmten Fläche. Statuschip und verständlicher Phasentext stehen darüber. Pause/Fortsetzen, Abbrechen und erneute Prüfung bleiben auf allen Reitern erreichbar; ohne Bibliothek sind Bibliotheksaktionen deaktiviert. Modell-/Spracheinstellungen, letzte Ergebnisdatei und Hintergrundinformationen liegen unter Details. Interne Aktionen, Außenklick und Escape schließen dieses Popup weiterhin nicht.
 
 Ortsdialog: Dateikontext, nächster Ort mit Länder-/Regionscode und Luftlinie, getrennte GPS-Fläche mit Kopieraktion. Fehlende GPS-Daten und nicht vorbereitete Offline-Daten als erklärende Hinweise, tatsächliche Fehler kontrastreich und vollständig seitenweise darstellen. Herkunft/Orientierungscharakter des GeoNames-Ergebnisses sichtbar lassen. X/Escape und bestehende Abbruchlogik erhalten.
 
@@ -519,3 +519,9 @@ Bibliotheksindizes lassen sich unter **Settings → Datenbank** verwalten. Das A
 
 
 Ein Fehler „Medien-YAML gehört zu einer anderen Datei“ nennt die YAML, den erwarteten Medienpfad und den darin enthaltenen Pfad. Das kann bei gleichen Namen in verschiedenen Medienordnern oder nach manuellen Verschiebungen vorkommen. Der Auftrag bleibt als Konflikt sichtbar; andere Medien werden weiter transkribiert. Bestehende Tags, Kommentare und Transkripte der bereits zugeordneten Datei bleiben erhalten. Ein erneuter Versuch allein löst eine widersprüchliche Dateizuordnung nicht auf.
+
+
+### Schneller Audiostart und Hintergrundverarbeitung
+Die Hörleiste zeigt beim Öffnen zunächst den gespeicherten SQLite-Stand. Dafür werden keine Audiodateien gelesen; neue oder entfernte Aufnahmen werden später sichtbar. Unter Alles erhält jedes Bezugsjahr einen Block, dessen Breite seiner gesamten Audiodauer entspricht. Kommentare zählen zum Datum des Fotos.
+
+Das Aktivitätspopup zeigt nacheinander Audiobestand, Dauern, gegebenenfalls fehlende Medienzuordnungen, Jahresübersicht, GPS/Orte und zuletzt Transkription. Der letzte Schritt beginnt erst nach zwei Sekunden stabiler Bereitschaft. Pause und Abbrechen betreffen alle Wartungsschritte; Vorschaubilder und ausdrücklich gestartete Wiedergabe bleiben nutzbar. Bereits vorhandene Dauern werden wiederverwendet; bei einer fälligen Tagesprüfung werden Aufnahmen im Hintergrund erneut geprüft. Nach Verlust der Datenbank werden Zuordnungen aus Einzel-YAMLs, Dauern aus Originalaufnahmen und Jahreswerte daraus neu aufgebaut.

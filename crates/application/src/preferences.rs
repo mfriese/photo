@@ -23,6 +23,8 @@ pub struct Preferences {
     pub write_exif: bool,
     pub reopen_library: bool,
     pub last_library: Option<PathBuf>,
+    /// Local locator only: most recently used alternatives, excluding last_library.
+    pub recent_libraries: Vec<PathBuf>,
     /// Runtime routing only; never serialized inside a library settings file.
     pub library_scope: Option<PathBuf>,
     pub shortcuts: BTreeMap<String, Option<Shortcut>>,
@@ -37,12 +39,46 @@ impl Default for Preferences {
             write_exif: false,
             reopen_library: true,
             last_library: None,
+            recent_libraries: Vec::new(),
             library_scope: None,
             shortcuts: BTreeMap::new(),
         }
     }
 }
 impl Preferences {
+    pub const RECENT_LIBRARY_LIMIT: usize = 5;
+    /// Keep offline paths: availability must never be probed while rendering/history loading.
+    pub fn set_recent_libraries(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        let mut recent = Vec::new();
+        for path in paths {
+            if !path.as_os_str().is_empty()
+                && self.last_library.as_ref() != Some(&path)
+                && !recent.contains(&path)
+            {
+                recent.push(path);
+                if recent.len() == Self::RECENT_LIBRARY_LIMIT {
+                    break;
+                }
+            }
+        }
+        self.recent_libraries = recent;
+    }
+    pub fn merge_library_history(&mut self, other: &Self) {
+        self.set_recent_libraries(
+            self.recent_libraries
+                .clone()
+                .into_iter()
+                .chain(other.last_library.clone())
+                .chain(other.recent_libraries.clone()),
+        );
+    }
+    pub fn remember_library(&mut self, path: PathBuf) {
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let previous = self.last_library.replace(path);
+        self.set_recent_libraries(previous.into_iter().chain(self.recent_libraries.clone()));
+    }
     /// Explicit library paths take priority; Finder's legacy launch token is not a path.
     pub fn startup_library(
         &self,
@@ -269,6 +305,39 @@ mod tests {
             self.0.lock().unwrap().push(p.clone());
             Ok(())
         }
+    }
+    #[test]
+    fn recent_libraries_are_unique_most_recent_first_and_exclude_the_current_path() {
+        let mut preferences = Preferences::default();
+        for index in 0..8 {
+            preferences.remember_library(format!("/Offline/library{index}").into());
+        }
+        assert_eq!(preferences.last_library, Some("/Offline/library7".into()));
+        assert_eq!(
+            preferences.recent_libraries,
+            (2..7)
+                .rev()
+                .map(|i| PathBuf::from(format!("/Offline/library{i}")))
+                .collect::<Vec<_>>()
+        );
+        preferences.remember_library("/Offline/library4".into());
+        assert_eq!(
+            preferences.recent_libraries,
+            [7, 6, 5, 3, 2].map(|i| PathBuf::from(format!("/Offline/library{i}")))
+        );
+        let saved = preferences.clone();
+        preferences.remember_library("/Offline/library4".into());
+        assert_eq!(preferences, saved);
+        preferences.set_recent_libraries([
+            PathBuf::new(),
+            "/Offline/library4".into(),
+            "/Offline/library7".into(),
+            "/Offline/library7".into(),
+        ]);
+        assert_eq!(
+            preferences.recent_libraries,
+            vec![PathBuf::from("/Offline/library7")]
+        );
     }
     #[test]
     fn shutdown_flushes_latest_settings_and_library() {

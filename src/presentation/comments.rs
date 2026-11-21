@@ -56,7 +56,10 @@ impl Suite {
             self.transcription_seen = None;
             self.tag_view.options_cache = None;
             if let Some((root, catalog)) = self.comments.authoritative_catalog() {
-                self.organization.reconcile_comments(root, catalog);
+                self.audio_library.observe_comments(catalog);
+                if self.audio_library.complete() {
+                    self.organization.reconcile_comments(root, catalog);
+                }
             }
             for media in &mut self.items {
                 *media = self.comments.project(media.clone());

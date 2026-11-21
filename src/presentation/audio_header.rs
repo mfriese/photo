@@ -5,6 +5,7 @@ use eframe::egui;
 use photosuite_application::diary::{AudioControl, AudioTransportSnapshot, VerificationProgress};
 #[derive(Default)]
 pub(super) struct AudioHeader {
+    pub cache_revision: u64,
     pub draft: photosuite_application::diary::GalleryAudio,
     drag: Option<f64>,
     photo: Option<std::path::PathBuf>,
@@ -108,56 +109,97 @@ fn controls_sized(
             );
             let mut hover = None;
             if let Some(timeline) = timeline.filter(|_| state.active || can_start) {
-                let total: f64 = timeline.clips().iter().map(|c| c.weight()).sum();
-                let mut offset = 0.;
-                for (index, clip) in timeline.clips().iter().enumerate() {
-                    let left = track.left() + track.width() * (offset / total) as f32;
-                    offset += clip.weight();
-                    let right = track.left() + track.width() * (offset / total) as f32;
-                    let color = if progress.errors.contains_key(clip.path()) {
-                        theme::AUDIO_ERROR
-                    } else if !clip.is_verified() {
-                        theme::AUDIO_PENDING
-                    } else if index % 2 == 1 {
-                        theme::AUDIO_ODD
-                    } else {
-                        theme::AUDIO_EVEN
-                    };
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_max(
-                            egui::pos2(left, track.top()),
-                            egui::pos2(right, track.bottom()),
-                        ),
-                        0.,
-                        color,
-                    );
-                    if right - left > 3. {
-                        ui.painter().line_segment(
-                            [
+                if timeline.is_library() && !timeline.year_blocks().is_empty() {
+                    let total: f64 = timeline
+                        .year_blocks()
+                        .iter()
+                        .map(|(_, seconds)| seconds)
+                        .sum();
+                    let mut offset = 0.;
+                    for (index, (year, seconds)) in timeline.year_blocks().iter().enumerate() {
+                        let left = track.left() + track.width() * (offset / total) as f32;
+                        offset += seconds;
+                        let right = track.left() + track.width() * (offset / total) as f32;
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_max(
                                 egui::pos2(left, track.top()),
-                                egui::pos2(left, track.bottom()),
-                            ],
-                            egui::Stroke::new(1_f32, theme::TEXT),
-                        );
-                    }
-                    if response
-                        .hover_pos()
-                        .is_some_and(|p| p.x >= left && p.x <= right)
-                    {
-                        hover = Some(format!(
-                            "{} · {}\n{}",
-                            clip.captured()
-                                .map(|d| format!("{} {}", d.date_label(), d.time_label()))
-                                .unwrap_or_else(|| "Datum wird geprüft".into()),
-                            if clip.is_verified() {
-                                "geprüft"
-                            } else if progress.errors.contains_key(clip.path()) {
-                                "Prüfung fehlgeschlagen"
+                                egui::pos2(right, track.bottom()),
+                            ),
+                            0.,
+                            if index % 2 == 0 {
+                                theme::AUDIO_EVEN
                             } else {
-                                "vorläufig"
+                                theme::AUDIO_ODD
                             },
-                            clip.path().display()
-                        ));
+                        );
+                        if right - left > 24. {
+                            ui.painter().text(
+                                egui::pos2((left + right) / 2., track.center().y),
+                                egui::Align2::CENTER_CENTER,
+                                year,
+                                egui::FontId::proportional(11.),
+                                theme::TEXT,
+                            );
+                        }
+                        if response
+                            .hover_pos()
+                            .is_some_and(|p| p.x >= left && p.x <= right)
+                        {
+                            hover = Some(format!("{year} · {:.0} Minuten", seconds / 60.));
+                        }
+                    }
+                } else {
+                    let total: f64 = timeline.clips().iter().map(|c| c.weight()).sum();
+                    let mut offset = 0.;
+                    for (index, clip) in timeline.clips().iter().enumerate() {
+                        let left = track.left() + track.width() * (offset / total) as f32;
+                        offset += clip.weight();
+                        let right = track.left() + track.width() * (offset / total) as f32;
+                        let color = if progress.errors.contains_key(clip.path()) {
+                            theme::AUDIO_ERROR
+                        } else if !clip.is_verified() {
+                            theme::AUDIO_PENDING
+                        } else if index % 2 == 1 {
+                            theme::AUDIO_ODD
+                        } else {
+                            theme::AUDIO_EVEN
+                        };
+                        ui.painter().rect_filled(
+                            egui::Rect::from_min_max(
+                                egui::pos2(left, track.top()),
+                                egui::pos2(right, track.bottom()),
+                            ),
+                            0.,
+                            color,
+                        );
+                        if right - left > 3. {
+                            ui.painter().line_segment(
+                                [
+                                    egui::pos2(left, track.top()),
+                                    egui::pos2(left, track.bottom()),
+                                ],
+                                egui::Stroke::new(1_f32, theme::TEXT),
+                            );
+                        }
+                        if response
+                            .hover_pos()
+                            .is_some_and(|p| p.x >= left && p.x <= right)
+                        {
+                            hover = Some(format!(
+                                "{} · {}\n{}",
+                                clip.captured()
+                                    .map(|d| format!("{} {}", d.date_label(), d.time_label()))
+                                    .unwrap_or_else(|| "Datum wird geprüft".into()),
+                                if clip.is_verified() {
+                                    "geprüft"
+                                } else if progress.errors.contains_key(clip.path()) {
+                                    "Prüfung fehlgeschlagen"
+                                } else {
+                                    "vorläufig"
+                                },
+                                clip.path().display()
+                            ));
+                        }
                     }
                 }
             }
@@ -259,13 +301,22 @@ impl super::Suite {
         let year_group =
             photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
         let group = year_group.as_str();
-        let changed = self.audio_header.draft.ensure(&self.items, root, group);
+        let audio_items = if self.services.audio_library.is_some() {
+            &self.audio_library.snapshot().media
+        } else {
+            &self.items
+        };
+        let changed = self.audio_header.draft.ensure(audio_items, root, group);
         if self.selected.is_none()
             && (changed || self.audio_header.followed_scope.as_deref() != Some(group))
         {
             self.audio_header.followed_scope = Some(group.to_owned());
             if let Err(error) = self.diary.follow_view(
-                &self.items,
+                &if self.services.audio_library.is_some() {
+                    self.audio_library.snapshot().with_photos(&self.items)
+                } else {
+                    self.items.clone()
+                },
                 root,
                 self.audio_preparation.source(),
                 group,
@@ -275,10 +326,6 @@ impl super::Suite {
             }
         }
 
-        if self.selected.is_none() {
-            self.audio_preparation
-                .ensure(group, self.audio_header.draft.timeline(), changed);
-        }
         if let Err(error) = self
             .audio_header
             .draft
@@ -286,6 +333,9 @@ impl super::Suite {
         {
             self.status = error;
         }
+        self.audio_header
+            .draft
+            .set_year_blocks(&self.audio_library.snapshot().years);
         let live = self.services.audio_player.transport();
         let active_timeline = self
             .diary
@@ -298,7 +348,7 @@ impl super::Suite {
             AudioTransportSnapshot::default()
         };
         let preparing = self.diary.preparing_for_view(group);
-        let timeline = if matches {
+        let timeline = if matches && group != "all" {
             active_timeline
         } else {
             self.audio_header.draft.timeline()
@@ -362,15 +412,10 @@ impl super::Suite {
             // Preserve the year cache when browsing photos in the same year.
         }
         if let Some(root) = &self.root {
-            let changed = self
+            let _changed = self
                 .viewer_audio
                 .draft
                 .ensure(&audio.items, root, &audio.group);
-            self.audio_preparation.ensure(
-                &audio.group,
-                self.viewer_audio.draft.timeline(),
-                changed,
-            );
             if let Err(error) = self
                 .viewer_audio
                 .draft
@@ -499,10 +544,15 @@ impl super::Suite {
         let Some(root) = &self.root else {
             return;
         };
+        let audio_items = if self.services.audio_library.is_some() {
+            &self.audio_library.snapshot().media
+        } else {
+            &self.items
+        };
         let year_group =
             photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
         let group = year_group.as_str();
-        self.audio_header.draft.ensure(&self.items, root, group);
+        self.audio_header.draft.ensure(audio_items, root, group);
         let state = self.services.audio_player.transport();
         let same_year = state.active
             && self
@@ -516,9 +566,13 @@ impl super::Suite {
             return;
         }
         if let Some(path) = self.audio_header.draft.selected()
-            && let Some(selected) = self.items.iter().find(|media| media.path() == path)
+            && let Some(selected) = audio_items.iter().find(|media| media.path() == path)
             && let Err(error) = self.diary.request_embedded(
-                &self.items,
+                &if self.services.audio_library.is_some() {
+                    self.audio_library.snapshot().with_photos(&self.items)
+                } else {
+                    self.items.clone()
+                },
                 selected,
                 self.audio_preparation.source(),
                 group,
@@ -531,10 +585,15 @@ impl super::Suite {
         let Some(root) = &self.root else {
             return;
         };
+        let audio_items = if self.services.audio_library.is_some() {
+            &self.audio_library.snapshot().media
+        } else {
+            &self.items
+        };
         let year_group =
             photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
         let group = year_group.as_str();
-        self.audio_header.draft.ensure(&self.items, root, group);
+        self.audio_header.draft.ensure(audio_items, root, group);
         if self.services.audio_player.transport().active
             && self
                 .diary
@@ -547,9 +606,13 @@ impl super::Suite {
             return;
         }
         if let Some(path) = self.audio_header.draft.selected()
-            && let Some(selected) = self.items.iter().find(|media| media.path() == path)
+            && let Some(selected) = audio_items.iter().find(|media| media.path() == path)
             && let Err(error) = self.diary.request_window(
-                &self.items,
+                &if self.services.audio_library.is_some() {
+                    self.audio_library.snapshot().with_photos(&self.items)
+                } else {
+                    self.items.clone()
+                },
                 selected,
                 self.audio_preparation.source(),
                 group,

@@ -84,6 +84,72 @@ PRAGMA user_version=2;
 PRAGMA application_id=1347634516;
 ";
 impl Database {
+    /// Reused read-only connection; a deferred snapshot never reserves a writer.
+    pub fn read<T>(
+        &self,
+        root: &Path,
+        f: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> Result<T, String> {
+        use std::cell::RefCell;
+        thread_local! { static READER: RefCell<Option<(std::path::PathBuf, u64, Connection)>> = const { RefCell::new(None) }; }
+        let path = crate::metadata_fs::library_path(root, FILE, false)?;
+        if !crate::metadata_fs::check_file(&path)? {
+            self.transaction(root, |_| Ok(()))?;
+        }
+        let path = path
+            .parent()
+            .ok_or("Datenbankordner fehlt")?
+            .canonicalize()
+            .map_err(|e| e.to_string())?
+            .join("library.sqlite");
+        let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let identity = {
+            use std::os::unix::fs::MetadataExt;
+            metadata.ino() ^ metadata.dev().rotate_left(32)
+        };
+        #[cfg(not(unix))]
+        let identity = metadata
+            .created()
+            .ok()
+            .and_then(|v| v.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |v| v.as_nanos() as u64);
+        READER.with(|reader| {
+            let mut reader = reader.borrow_mut();
+            if reader
+                .as_ref()
+                .is_none_or(|(p, id, _)| p != &path || *id != identity)
+            {
+                let conn = Connection::open_with_flags(
+                    &path,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+                        | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+                )
+                .map_err(|e| e.to_string())?;
+                conn.busy_timeout(Duration::from_secs(5))
+                    .map_err(|e| e.to_string())?;
+                let version: i64 = conn
+                    .pragma_query_value(None, "user_version", |r| r.get(0))
+                    .map_err(|e| e.to_string())?;
+                let app: i64 = conn
+                    .pragma_query_value(None, "application_id", |r| r.get(0))
+                    .map_err(|e| e.to_string())?;
+                if version != SCHEMA || app != 1347634516 {
+                    return Err(
+                        "Veraltetes oder fremdes Indexschema; Datenbank neu aufbauen".into(),
+                    );
+                }
+                *reader = Some((path, identity, conn));
+            }
+            let conn = &reader.as_ref().unwrap().2;
+            conn.execute_batch("BEGIN DEFERRED")
+                .map_err(|e| e.to_string())?;
+            let result = f(conn).map_err(|e| e.to_string());
+            let end = conn.execute_batch("ROLLBACK").map_err(|e| e.to_string());
+            end.and(result)
+        })
+    }
     pub fn transaction<T>(
         &self,
         root: &Path,
@@ -151,7 +217,7 @@ impl Database {
         Ok(result)
     }
 }
-pub fn revision(tx: &Transaction<'_>, section: Section) -> rusqlite::Result<Option<Vec<u8>>> {
+pub fn revision(tx: &Connection, section: Section) -> rusqlite::Result<Option<Vec<u8>>> {
     let (instance, value): (String, i64) = tx.query_row(
         &format!(
             "SELECT instance,{} FROM index_state WHERE id=1",
@@ -289,6 +355,40 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn read_snapshot_allows_a_writer_reservation_and_reopens_after_database_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let db = Database;
+        db.transaction(root.path(), |tx| {
+            tx.execute(
+                "INSERT INTO media VALUES('a.jpg','photo','yaml/2000/01/a.jpg.yaml',NULL,NULL)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        db.read(root.path(), |reader| {
+            let count: i64 = reader.query_row("SELECT count(*) FROM media", [], |r| r.get(0))?;
+            assert_eq!(count, 1);
+            let writer = Connection::open(root.path().join(FILE))?;
+            writer.busy_timeout(Duration::from_millis(50))?;
+            writer.execute_batch("BEGIN IMMEDIATE; ROLLBACK;")?;
+            assert!(
+                reader.execute("DELETE FROM media", []).is_err(),
+                "reader must be read-only"
+            );
+            Ok(())
+        })
+        .unwrap();
+        std::fs::rename(root.path().join(FILE), root.path().join("old.sqlite")).unwrap();
+        db.transaction(root.path(), |_| Ok(())).unwrap();
+        let count: i64 = db
+            .read(root.path(), |reader| {
+                reader.query_row("SELECT count(*) FROM media", [], |r| r.get(0))
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+    }
     #[test]
     fn transaction_rollback_and_constraints_preserve_published_revision() {
         let root = tempfile::tempdir().unwrap();

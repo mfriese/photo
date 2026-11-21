@@ -3,6 +3,7 @@ use photosuite_domain as domain;
 use photosuite_domain::commands;
 mod audio;
 mod audio_labels;
+mod audio_library_fs;
 mod audio_player;
 mod command_bindings;
 mod command_labels;
@@ -104,7 +105,27 @@ fn main() -> eframe::Result {
         database: database.clone(),
         coordinates: coordinates.clone(),
     });
+    let tag_repository = std::sync::Arc::new(tag_store::SqliteTags {
+        database: database.clone(),
+        priority: priority.clone(),
+    });
+    let comment_repository = std::sync::Arc::new(comments_fs::SqliteComments {
+        database: database.clone(),
+        priority: priority.clone(),
+    });
     let services = application::Services {
+        audio_library: Some(std::sync::Arc::new(audio_library_fs::AudioLibrary {
+            tags: Some(tag_repository.clone()),
+            comments: Some(comment_repository.clone()),
+            database: database.clone(),
+            durations: std::sync::Arc::new(duration_cache_fs::SqliteDurations {
+                database: database.clone(),
+            }),
+            audio: audio_source.clone(),
+            priority: priority.clone(),
+            pending: std::sync::Mutex::new(None),
+            issues: std::sync::Mutex::new(None),
+        })),
         location_index: media_geo.clone(),
         media_geo,
         places: places.clone(),
@@ -142,16 +163,10 @@ fn main() -> eframe::Result {
             audio: audio_source.clone(),
             copier: importer.clone(),
         }),
-        comments: std::sync::Arc::new(comments_fs::SqliteComments {
-            database: database.clone(),
-            priority: priority.clone(),
-        }),
+        comments: comment_repository,
         recorder: std::sync::Arc::new(comment_recorder::NativeCommentRecorder::new()),
         media_dates: importer.clone(),
-        organization: std::sync::Arc::new(tag_store::SqliteTags {
-            database: database.clone(),
-            priority: priority.clone(),
-        }),
+        organization: tag_repository,
         work_priority: priority.clone(),
         audio_source: audio_source.clone(),
         audio_player: std::sync::Arc::new(audio_player::NativeAudioPlayer::new(

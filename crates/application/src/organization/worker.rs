@@ -11,6 +11,7 @@ pub(super) enum Request {
         generation: u64,
     },
     Load {
+        cached_only: bool,
         root: PathBuf,
         generation: u64,
     },
@@ -74,11 +75,23 @@ impl Worker {
                     }
                 };
                 let reading = !matches!(&request, Request::Save { .. });
+                let cached_only = matches!(
+                    &request,
+                    Request::Load {
+                        cached_only: true,
+                        ..
+                    }
+                );
                 let rebuild = matches!(&request, Request::Rebuild { .. });
                 match request {
-                    Request::Load { root, generation } | Request::Rebuild { root, generation } => {
+                    Request::Load {
+                        root, generation, ..
+                    }
+                    | Request::Rebuild { root, generation } => {
                         let result = if rebuild {
                             super::index::rebuild_cancel(repository.as_ref(), &root, &cancel)
+                        } else if cached_only {
+                            repository.load(&root)
                         } else {
                             super::index::load_cancel(repository.as_ref(), &root, &cancel)
                         }

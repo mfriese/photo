@@ -100,7 +100,7 @@ impl DurationCache for SqliteDurations {
             return Err("Abgebrochen".into());
         }
         let (root, year) = parts(group)?;
-        self.database.transaction(root,|tx|{
+        self.database.read(root,|tx|{
             let last_full_verified=crate::library_db::optional(tx.query_row("SELECT last_full_verified FROM audio_verifications WHERE year=?1",[year],|r|r.get::<_,Option<String>>(0)))?.flatten();
             let mut entries=BTreeMap::new();
             let mut stmt=tx.prepare("SELECT media_path,seconds,source_bytes,source_modified FROM audio_durations WHERE year=?1 ORDER BY media_path")?;

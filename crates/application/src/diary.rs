@@ -29,6 +29,10 @@ pub trait AudioSource: Send + Sync + 'static {
     }
     fn probe(&self, path: &Path) -> Result<AudioProbe, String>;
     fn capture_time(&self, path: &Path) -> Result<CaptureTime, String>;
+    /// Database-backed playback leaves maintenance to the serial queue.
+    fn maintenance_is_external(&self) -> bool {
+        false
+    }
     /// Resolve remaining date metadata while reusing a measured audio probe.
     fn capture_time_from_probe(&self, path: &Path, _: &AudioProbe) -> Result<CaptureTime, String> {
         self.capture_time(path)
@@ -486,6 +490,10 @@ impl DiarySession {
                         return;
                     }
                 }
+            }
+            if source.maintenance_is_external() {
+                let _ = sender.send(Event::Done);
+                return;
             }
             for path in order {
                 if stop.load(Ordering::Relaxed) {
@@ -1744,6 +1752,11 @@ impl GalleryAudio {
                     !locked || date.as_deref() == clip.captured().map(CaptureTime::stamp)
                 })
             })
+    }
+    pub fn set_year_blocks(&mut self, blocks: &[(String, f64)]) {
+        if let Some(timeline) = &mut self.timeline {
+            timeline.set_year_blocks(blocks);
+        }
     }
     pub fn selected(&self) -> Option<&Path> {
         self.selected.as_deref()

@@ -149,6 +149,10 @@ impl StartupPreferences {
         self.in_flight
             && Instant::now().saturating_duration_since(self.attempt_started) >= Self::RETRY
     }
+    /// Local locator becomes available before potentially slow library I/O completes.
+    pub fn location_preferences(&self) -> Option<&Preferences> {
+        self.location.as_ref().map(|location| &location.preferences)
+    }
     pub fn error(&self) -> &str {
         &self.error
     }

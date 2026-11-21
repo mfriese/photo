@@ -25,6 +25,7 @@ struct Cache {
 struct PreparedSource {
     inner: Arc<dyn AudioSource>,
     cache: Mutex<Cache>,
+    external_maintenance: std::sync::atomic::AtomicBool,
 }
 impl PreparedSource {
     fn clear(&self) {
@@ -37,6 +38,9 @@ impl PreparedSource {
     }
 }
 impl AudioSource for PreparedSource {
+    fn maintenance_is_external(&self) -> bool {
+        self.external_maintenance.load(Ordering::Relaxed)
+    }
     fn cached_duration(&self, path: &Path) -> Option<f64> {
         let cache = self.cache.lock().unwrap();
         cache
@@ -123,6 +127,7 @@ impl AudioPreparation {
             source: Arc::new(PreparedSource {
                 inner: source,
                 cache: Default::default(),
+                external_maintenance: AtomicBool::new(false),
             }),
             priority,
             active: None,
@@ -163,6 +168,15 @@ impl AudioPreparation {
     }
     pub fn is_loading(&self) -> bool {
         self.active.is_some() || self.queued.is_some()
+    }
+    /// Display-only hints are published by the central maintenance queue, never validated here.
+    pub fn display_hints(&mut self, hints: &[(PathBuf, f64)]) {
+        self.source
+            .external_maintenance
+            .store(true, Ordering::Relaxed);
+        let mut cache = self.source.cache.lock().unwrap();
+        cache.hints = hints.iter().cloned().collect();
+        cache.revision += 1;
     }
     pub fn ensure(&mut self, key: &str, timeline: Option<&DiaryTimeline>, changed: bool) {
         if self.key.as_deref() == Some(key) && !changed {

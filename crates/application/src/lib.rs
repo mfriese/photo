@@ -48,3 +48,5 @@ pub mod geo_sweep;
 pub mod place_filter;
 
 pub mod processing;
+
+pub mod audio_library;

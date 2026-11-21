@@ -24,6 +24,14 @@ impl Suite {
                 complete: self.transcription_complete,
             };
             if self.transcription_seen.as_ref() != Some(&observed) {
+                if self.transcription_complete
+                    && self.transcription_seen.as_ref().is_some_and(|old| {
+                        old.complete
+                            && (old.items != observed.items || old.comments != observed.comments)
+                    })
+                {
+                    self.audio_library.retry();
+                }
                 let inventory = match photosuite_application::processing::inventory(
                     root,
                     &self.items,
@@ -32,13 +40,15 @@ impl Suite {
                     Ok(inventory) => inventory,
                     Err(error) => {
                         self.status = format!("Medienverarbeitung: {error}");
-                        photosuite_application::processing::advance(
+                        photosuite_application::processing::advance_with_audio(
+                            &mut self.audio_library,
                             &mut self.geo_sweep,
                             &mut self.transcription_queue,
                             photosuite_application::processing::Readiness {
                                 library_open: true,
                                 ..Default::default()
                             },
+                            self.transcription.busy(),
                         );
                         if self.geo_sweep.busy() || self.transcription_queue.busy() {
                             ctx.request_repaint_after(std::time::Duration::from_millis(80));
@@ -46,9 +56,7 @@ impl Suite {
                         return;
                     }
                 };
-                if !inventory.transcriptions.is_empty() {
-                    self.transcription.ensure_loaded();
-                }
+
                 self.transcription_queue.sync(
                     root,
                     inventory.transcriptions,
@@ -59,6 +67,16 @@ impl Suite {
                 }
                 self.transcription_seen = Some(observed);
             }
+        }
+        if self.audio_library.complete()
+            && self.geo_sweep.complete()
+            && self.transcription_complete
+            && self.transcription_queue.mode() == Mode::Running
+            && !self.transcription_queue.busy()
+            && !self.geo_sweep.busy()
+            && !self.audio_library.busy()
+        {
+            self.transcription.ensure_loaded();
         }
         let model = self
             .transcription
@@ -71,7 +89,8 @@ impl Suite {
                 })
             });
         self.transcription_queue.set_model(model);
-        photosuite_application::processing::advance(
+        photosuite_application::processing::advance_with_audio(
+            &mut self.audio_library,
             &mut self.geo_sweep,
             &mut self.transcription_queue,
             photosuite_application::processing::Readiness {
@@ -82,8 +101,34 @@ impl Suite {
                 comments_pending: self.comments.has_unsaved() || self.comments.is_saving(),
                 audio_active: self.services.work_priority.audio_active(),
             },
+            self.transcription.busy(),
         );
-        if self.transcription_queue.busy() || self.geo_sweep.busy() {
+        if self.audio_library.revision() != self.audio_header.cache_revision {
+            self.audio_header.cache_revision = self.audio_library.revision();
+            self.audio_header.draft = Default::default();
+            if self.audio_library.complete()
+                && let Some(root) = &self.root
+            {
+                self.comments.load_cached(root.clone());
+                if let Err(error) = self.organization.open_cached(root.clone()) {
+                    self.status = error;
+                }
+                self.organization
+                    .observe_media(root, &self.items, self.transcription_complete);
+                self.transcription_seen = None;
+            }
+            self.audio_preparation
+                .display_hints(&self.audio_library.snapshot().durations);
+        }
+        if self.transcription_queue.busy()
+            || self.geo_sweep.busy()
+            || self.audio_library.busy()
+            || (self.root.is_some()
+                && self.transcription_queue.mode() == Mode::Running
+                && self.transcription_queue.held()
+                && self.audio_library.complete()
+                && self.geo_sweep.complete())
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
     }
@@ -91,11 +136,16 @@ impl Suite {
         let model_busy = self.transcription.busy() && self.transcription_queue.waiting_for_model();
         let references_busy = self.comments.is_loading();
         let references_wait = self.root.is_some() && !self.comments.is_loaded();
-        let state = if model_busy || references_busy || self.geo_sweep.busy() {
+        let state = if model_busy
+            || references_busy
+            || self.geo_sweep.busy()
+            || self.audio_library.busy()
+        {
             Indicator::Busy
         } else if references_wait
             || !self.transcription.error().is_empty()
-            || (self.root.is_some() && !self.geo_sweep.complete())
+            || (self.root.is_some()
+                && (!self.geo_sweep.complete() || !self.audio_library.complete()))
         {
             Indicator::Paused
         } else {
@@ -146,9 +196,15 @@ impl Suite {
         crate::options_ui::spacing(ui);
         crate::theme::section_heading(ui, "Verarbeitung");
         ui.label(
-            egui::RichText::new("GPS, Orte & Transkription · gesamte Bibliothek")
-                .small()
-                .color(crate::theme::MUTED),
+            egui::RichText::new(if !self.audio_library.complete() {
+                self.audio_library
+                    .stage()
+                    .map_or("Audioübersicht laden", |s| s.label())
+            } else {
+                "Audio → GPS/Orte → Transkription"
+            })
+            .small()
+            .color(crate::theme::MUTED),
         );
         let (done, total, failed) = self.transcription_queue.counts();
         let status = if self.root.is_none() {
@@ -161,6 +217,14 @@ impl Suite {
             "Transkriptionswarteschlange benötigt einen Neustart"
         } else if !self.transcription.error().is_empty() {
             "Whisper-Modell konnte nicht geprüft werden"
+        } else if !self.audio_library.error().is_empty() {
+            "Audioprüfung benötigt Aufmerksamkeit"
+        } else if !self.audio_library.loaded() {
+            "Gespeicherte Audioübersicht wird geladen"
+        } else if !self.audio_library.complete() {
+            self.audio_library
+                .stage()
+                .map_or("Audioübersicht wird vorbereitet", |s| s.label())
         } else if self.geo_sweep.busy() {
             "GPS und Ortszuordnungen werden geprüft"
         } else if !self.transcription_complete && !self.collection.is_loading() {
@@ -201,14 +265,18 @@ impl Suite {
             "Alle Transkriptionsaufträge sind abgeschlossen"
         };
         ui.add_space(4.);
-        let busy = self.geo_sweep.busy()
+        let busy = self.audio_library.busy()
+            || self.geo_sweep.busy()
             || self.transcription_queue.busy()
             || model_busy
             || references_busy;
         let paused = self.transcription_queue.mode() != Mode::Running
-            || (self.transcription_queue.held() && !self.geo_sweep.busy())
+            || (self.transcription_queue.held()
+                && !self.geo_sweep.busy()
+                && !self.audio_library.busy())
             || references_wait;
-        let attention = !self.transcription_queue.error().is_empty()
+        let attention = !self.audio_library.error().is_empty()
+            || !self.transcription_queue.error().is_empty()
             || !self.transcription.error().is_empty()
             || !self.geo_sweep.error().is_empty()
             || (failed > 0 && self.transcription_queue.pending() == 0);
@@ -240,6 +308,8 @@ impl Suite {
         });
         ui.add_space(4.);
         let failures = self.transcription_queue.failures();
+        let audio_error = self.audio_library.error().to_owned();
+        let audio_warnings = self.audio_library.snapshot().warnings.join("; ");
         let mut errors = self
             .geo_sweep
             .progress()
@@ -247,6 +317,12 @@ impl Suite {
             .iter()
             .map(|(p, e)| (p.as_str(), e.as_str()))
             .collect::<Vec<_>>();
+        if !audio_error.is_empty() {
+            errors.push(("Audioverarbeitung", audio_error.as_str()));
+        }
+        if !audio_warnings.is_empty() {
+            errors.push(("Audiodateien", audio_warnings.as_str()));
+        }
         if let Some(warning) = &self.geo_sweep.progress().data_warning {
             errors.push(("Offline-Geodaten", warning.as_str()));
         }
@@ -321,7 +397,7 @@ impl Suite {
             }
             3 => {
                 crate::theme::compact_group(ui, |ui| {
-                    ui.strong("Modell & Sprache");
+                    ui.strong("Modell & Sprache").on_hover_text("Reihenfolge: Audiobestand → Dauern → Zuordnungen → Jahresblöcke → GPS/Orte → Transkription");
                     if let Some(model) = self.transcription.prepared() {
                         processing_ui::value(ui, "Modell", model.settings.model().id);
                         let code = model.settings.language();
@@ -367,32 +443,52 @@ impl Suite {
             }
             _ => {
                 crate::theme::compact_group(ui, |ui| {
-                    let geo = self.geo_sweep.progress();
-                    processing_ui::stage(
-                        ui,
-                        "1 · GPS & Orte",
-                        geo.checked,
-                        geo.total,
-                        &format!(
-                            "{} mit GPS · {} ohne · {} Fehler",
-                            geo.available, geo.missing, geo.failed
-                        ),
-                    );
-                    if geo.location_failed > 0 {
-                        ui.colored_label(
-                            crate::theme::DANGER,
-                            format!("Ortssuche: {} Fehler", geo.location_failed),
+                    if !self.audio_library.complete() {
+                        let progress = self.audio_library.progress();
+                        let label = self
+                            .audio_library
+                            .stage()
+                            .map_or("Audioübersicht laden", |s| s.label());
+                        processing_ui::stage(
+                            ui,
+                            label,
+                            progress.checked,
+                            progress.total,
+                            "Danach: Jahresblöcke → GPS/Orte → Transkription",
                         );
-                    }
-                    if self.geo_sweep.busy()
-                        && let Some(photo) = &geo.current
-                    {
-                        processing_ui::file(ui, "Aktuell", photo.as_str());
+                        if self.audio_library.busy()
+                            && let Some(path) = &progress.current
+                        {
+                            processing_ui::file(ui, "Aktuell", &path.to_string_lossy());
+                        }
+                    } else {
+                        let geo = self.geo_sweep.progress();
+                        processing_ui::stage(
+                            ui,
+                            "5 · GPS & Orte",
+                            geo.checked,
+                            geo.total,
+                            &format!(
+                                "{} mit GPS · {} ohne · {} Fehler",
+                                geo.available, geo.missing, geo.failed
+                            ),
+                        );
+                        if geo.location_failed > 0 {
+                            ui.colored_label(
+                                crate::theme::DANGER,
+                                format!("Ortssuche: {} Fehler", geo.location_failed),
+                            );
+                        }
+                        if self.geo_sweep.busy()
+                            && let Some(photo) = &geo.current
+                        {
+                            processing_ui::file(ui, "Aktuell", photo.as_str());
+                        }
                     }
                     ui.separator();
                     processing_ui::stage(
                         ui,
-                        "2 · Transkription",
+                        "6 · Transkription",
                         done,
                         total,
                         &format!(
@@ -446,6 +542,11 @@ impl Suite {
                 )
                 .clicked()
             {
+                if matches!(primary, Control::Resume | Control::Retry)
+                    && !self.audio_library.error().is_empty()
+                {
+                    self.audio_library.retry();
+                }
                 processing::control(
                     primary,
                     &mut self.geo_sweep,
@@ -472,7 +573,9 @@ impl Suite {
             }
             if ui
                 .add_enabled(
-                    !self.transcription_queue.error().is_empty()
+                    !self.audio_library.error().is_empty()
+                        || !self.audio_library.snapshot().warnings.is_empty()
+                        || !self.transcription_queue.error().is_empty()
                         || !self.transcription.error().is_empty()
                         || failed > 0
                         || self.geo_sweep.progress().failed > 0
@@ -482,6 +585,11 @@ impl Suite {
                 )
                 .clicked()
             {
+                if !self.audio_library.error().is_empty()
+                    || !self.audio_library.snapshot().warnings.is_empty()
+                {
+                    self.audio_library.retry();
+                }
                 processing::control(
                     Control::Retry,
                     &mut self.geo_sweep,
@@ -504,6 +612,7 @@ impl Suite {
                 self.load_library(root, true, true);
                 self.transcription.reload();
             } else {
+                self.audio_library.retry();
                 photosuite_application::processing::control(
                     photosuite_application::processing::Control::Rescan,
                     &mut self.geo_sweep,
@@ -665,7 +774,8 @@ mod tests {
         }
         assert!(suite.transcription.error().is_empty());
         assert!(suite.geo_sweep.complete());
-        while suite.transcription.busy() {
+        while suite.transcription.busy() || suite.transcription.prepared().is_none() {
+            suite.poll_transcription_queue(&ctx);
             suite.transcription.poll();
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
