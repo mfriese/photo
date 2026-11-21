@@ -271,6 +271,26 @@ pub fn media(
         .execute((file.as_str(),kind,file.metadata_path().map_err(invalid)?,captured))?;
     Ok(())
 }
+/// Update a source record's actual address only when metadata is published/reconstructed.
+/// Inventory and GPS insertions remain pure SQL, without reading any media YAML.
+pub(crate) fn record_address(
+    tx: &Transaction<'_>,
+    file: &crate::domain::tags::LibraryFile,
+    root: &Path,
+) -> rusqlite::Result<()> {
+    media(tx, file)?;
+    let metadata = crate::media_records_fs::path(root, file, false).map_err(invalid)?;
+    let relative = metadata
+        .strip_prefix(root)
+        .map_err(|error| invalid(error.to_string()))?
+        .to_str()
+        .ok_or_else(|| invalid("Nicht darstellbarer Medien-YAML-Pfad"))?;
+    tx.execute(
+        "UPDATE media SET metadata_path=?2 WHERE path=?1",
+        (file.as_str(), relative),
+    )?;
+    Ok(())
+}
 pub fn optional<T>(value: rusqlite::Result<T>) -> rusqlite::Result<Option<T>> {
     value.optional()
 }

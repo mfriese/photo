@@ -3,6 +3,7 @@ mod badges;
 mod captions;
 mod chrome;
 mod comments;
+mod date_correction;
 mod diary;
 mod gallery;
 mod icons;
@@ -24,6 +25,9 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc;
 pub struct Suite {
+    date_corrections: photosuite_application::date_correction::Session,
+    date_editor: Option<date_correction::Editor>,
+    date_projection_revision: u64,
     processing_repeats: photosuite_application::processing::Repeats,
     audio_library: photosuite_application::audio_library::Session,
     transcription_queue: photosuite_application::transcription::queue::QueueSession,
@@ -138,6 +142,9 @@ impl Suite {
         self.transcription_seen = None;
         self.transcription_complete = false;
         self.audio_preparation.reset();
+        self.date_corrections.open(&path);
+        self.date_editor = None;
+        self.date_projection_revision = 0;
         self.audio_library.open(&path);
         self.organization.begin_media_scan(&path);
         self.comments.load_cached(path.clone());
@@ -178,11 +185,26 @@ impl Suite {
         let Some(index) = self.selected else {
             return;
         };
+        self.execute_for(command, index, ctx);
+    }
+    fn execute_for(
+        &mut self,
+        command: crate::commands::Command,
+        index: usize,
+        ctx: &egui::Context,
+    ) {
         let Some(media) = self.items.get(index) else {
             self.selected = None;
             self.storyboard.clear();
             return;
         };
+        if command == crate::commands::Command::CorrectDate {
+            let media = media.clone();
+            if !media.is_audio() && !self.date_corrections.busy() && !self.comments.is_open() {
+                self.open_date_correction(&media);
+            }
+            return;
+        }
         if command == crate::commands::Command::PlayVideo {
             if let Err(error) =
                 photosuite_application::playback::play(media, self.services.video_player.as_ref())
@@ -386,6 +408,7 @@ impl eframe::App for Suite {
     }
 
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.poll_date_corrections(ctx);
         self.index_maintenance.poll();
         if self.index_maintenance.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -491,6 +514,7 @@ impl eframe::App for Suite {
                 ctx,
                 self.selected.is_some()
                     && !self.editor.is_saving()
+                    && self.date_editor.is_none()
                     && !self.options_open
                     && !self.duplicate_dialog.visible
                     && !self.duplicate_dialog.running()
@@ -518,6 +542,11 @@ impl eframe::App for Suite {
                     }
                     for media in collection.items {
                         let media = self.comments.project(media);
+                        let media = photosuite_application::date_correction::project(
+                            &collection.root,
+                            &self.date_corrections.catalog,
+                            media,
+                        );
                         if self.known_media.insert(media.path().to_owned()) {
                             self.items.push(media);
                         }
@@ -562,6 +591,7 @@ impl eframe::App for Suite {
         self.prepare_tag_filter();
         let visible = self.visible();
         self.photo_wall(ctx, &visible);
+        self.date_correction_dialog(ctx);
         let viewer_visible = self.viewer_items(&visible);
         self.media_viewer(ctx, &viewer_visible, &mut pending);
         if self.selected.is_none() {
@@ -669,6 +699,11 @@ pub fn create(
         comment_view: Default::default(),
         record_photo: None,
         known_media: Default::default(),
+        date_corrections: photosuite_application::date_correction::Session::new(
+            services.date_corrections.clone(),
+        ),
+        date_editor: None,
+        date_projection_revision: 0,
         media_dates: photosuite_application::media_dates::MediaDates::new(
             services.media_dates.clone(),
             services.work_priority.clone(),

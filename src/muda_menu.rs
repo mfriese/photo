@@ -120,6 +120,7 @@ impl MudaMenu {
                     crate::commands::Command::RotateRight => "Rotate Right",
                     crate::commands::Command::ResetRotation => "Reset to EXIF Orientation",
                     crate::commands::Command::PlayVideo => "Play Video",
+                    crate::commands::Command::CorrectDate => "Correct Date…",
                 },
                 false,
             )?;

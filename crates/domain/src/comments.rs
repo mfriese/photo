@@ -55,6 +55,7 @@ pub struct Comment {
     audio: LibraryFile,
     photo: LibraryFile,
     recorded_at: RecordedAt,
+    capture_correction: Option<CaptureTime>,
 }
 impl Comment {
     pub fn new(id: String, audio: LibraryFile, photo: LibraryFile) -> Result<Self, String> {
@@ -98,6 +99,7 @@ impl Comment {
             audio,
             photo,
             recorded_at,
+            capture_correction: None,
         })
     }
     /// Place image metadata in yaml/year/month, retaining the entire filename and extension.
@@ -116,7 +118,17 @@ impl Comment {
         LibraryFile::new(photo.metadata_path()?)
     }
     /// Logical playback time, distinct from the real recording timestamp and storage year.
+    pub fn capture_correction(&self) -> Option<&CaptureTime> {
+        self.capture_correction.as_ref()
+    }
+    pub fn with_capture_correction(mut self, date: Option<CaptureTime>) -> Self {
+        self.capture_correction = date;
+        self
+    }
     pub fn reference_time(&self) -> Option<CaptureTime> {
+        if let Some(date) = &self.capture_correction {
+            return Some(date.clone());
+        }
         Path::new(self.photo.as_str())
             .file_stem()
             .and_then(|s| s.to_str())
@@ -124,6 +136,13 @@ impl Comment {
     }
     pub fn sidecar(&self) -> LibraryFile {
         Self::metadata_path(&self.photo).expect("validated photo reference")
+    }
+    /// Stable source identity excludes the disposable playback-date projection.
+    pub fn same_recording(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.audio == other.audio
+            && self.photo == other.photo
+            && self.recorded_at == other.recorded_at
     }
     pub fn id(&self) -> &str {
         &self.id
@@ -138,6 +157,9 @@ impl Comment {
         &self.recorded_at
     }
     pub fn photo_year(&self) -> &str {
+        if let Some(date) = &self.capture_correction {
+            return date.year();
+        }
         self.photo
             .as_str()
             .split(std::path::MAIN_SEPARATOR)
@@ -179,7 +201,7 @@ impl CommentCatalog {
     }
     pub fn insert(&mut self, comment: Comment) -> Result<(), String> {
         if let Some(existing) = self.entries.get(comment.id()) {
-            return if existing == &comment {
+            return if existing.same_recording(&comment) {
                 Ok(())
             } else {
                 Err("Kommentar-ID bereits anders belegt".into())

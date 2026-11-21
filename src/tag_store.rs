@@ -55,7 +55,9 @@ impl CatalogRepository for SqliteTags {
             crate::media_records_fs::Record::new(file)
         };
         record.tags = Some(tags.clone());
-        crate::media_records_fs::write(root, file, &record, expected)
+        crate::media_records_fs::write(root, file, &record, expected)?;
+        self.database
+            .transaction(root, |tx| crate::library_db::record_address(tx, file, root))
     }
     fn scan_file_tags(
         &self,
@@ -109,7 +111,7 @@ impl CatalogRepository for SqliteTags {
             let revision=library_db::publish(tx,Section::Tags,expected)?;
             tx.execute_batch("CREATE TEMP TABLE desired_tags(media_path TEXT NOT NULL,tag_name TEXT NOT NULL,PRIMARY KEY(media_path,tag_name)) WITHOUT ROWID;")?;
             {let mut stmt=tx.prepare("INSERT INTO desired_tags VALUES(?1,?2)")?;
-            for (name,files) in catalog.tags() {for file in files {library_db::media(tx,file)?;stmt.execute((file.as_str(),name))?;}}}
+            for (name,files) in catalog.tags() {for file in files {library_db::media(tx, file)?;stmt.execute((file.as_str(),name))?;}}}
             tx.execute("DELETE FROM media_tags WHERE NOT EXISTS(SELECT 1 FROM desired_tags d WHERE d.media_path=media_tags.media_path AND d.tag_name=media_tags.tag_name)",[])?;
             tx.execute("INSERT OR IGNORE INTO media_tags SELECT media_path,tag_name FROM desired_tags",[])?;
             Ok(revision)

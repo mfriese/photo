@@ -3,7 +3,7 @@ use crate::ports::MediaRepository;
 pub fn visible(items: &[Media], query: &str, group: Option<&str>, videos_only: bool) -> Vec<usize> {
     let query = query.to_lowercase();
     let diary = crate::domain::diary::audio_year(group.unwrap_or("")).is_some();
-    items
+    let mut result: Vec<_> = items
         .iter()
         .enumerate()
         .filter(|(_, m)| {
@@ -18,7 +18,32 @@ pub fn visible(items: &[Media], query: &str, group: Option<&str>, videos_only: b
                 && m.path().to_string_lossy().to_lowercase().contains(&query)
         })
         .map(|(i, _)| i)
-        .collect()
+        .collect();
+    if items
+        .iter()
+        .any(|media| !media.is_audio() && media.reference_time().is_some())
+    {
+        fn key(media: &Media) -> &str {
+            media
+                .reference_time()
+                .map(|date| date.stamp())
+                .or_else(|| {
+                    media
+                        .path()
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .and_then(|s| s.strip_prefix("img_"))
+                        .and_then(|s| s.get(..15))
+                })
+                .unwrap_or("")
+        }
+        result.sort_by(|&a, &b| {
+            key(&items[a])
+                .cmp(key(&items[b]))
+                .then_with(|| items[a].path().cmp(items[b].path()))
+        });
+    }
+    result
 }
 
 /// Gallery destination for a contextual photo; never performs I/O or changes playback.
@@ -71,6 +96,7 @@ mod tests {
 /// Ports are supplied exclusively by the composition root.
 #[derive(Clone)]
 pub struct Services {
+    pub date_corrections: Option<std::sync::Arc<dyn crate::date_correction::Repository>>,
     pub audio_library: Option<std::sync::Arc<dyn crate::audio_library::Repository>>,
     pub location_index: std::sync::Arc<dyn crate::media_geo::LocationIndex>,
     pub media_geo: std::sync::Arc<dyn crate::media_geo::Repository>,

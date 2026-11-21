@@ -77,6 +77,14 @@ pub trait ImageDecoder: Send + Sync + 'static {
 }
 pub trait MediaOpener: Send + Sync + 'static {
     fn open(&self, path: &std::path::Path) -> Result<(), String>;
+    /// Reveal the authoritative media record. Production adapters resolve basename collisions.
+    fn reveal_record(
+        &self,
+        root: &std::path::Path,
+        file: &crate::domain::tags::LibraryFile,
+    ) -> Result<(), String> {
+        self.reveal(&root.join(file.metadata_path()?))
+    }
     /// Select the media in the system file manager without opening its contents.
     fn reveal(&self, path: &std::path::Path) -> Result<(), String>;
 }

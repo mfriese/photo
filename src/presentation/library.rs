@@ -23,8 +23,9 @@ impl super::Suite {
                 ui.spacing_mut().button_padding.y = 1.;
                 ui.visuals_mut().collapsing_header_frame = true;
                 let mut years = self.collection.groups().clone();
+                for (year,months) in photosuite_application::date_correction::groups(&self.date_corrections.catalog) {years.entry(year).or_default().extend(months);}
                 // Tests and a manually supplied collection may have no loading session.
-                if years.is_empty() {
+                {
                     for media in &self.items {
                         let group = media.group();
                         let year = group.split(std::path::MAIN_SEPARATOR).next().unwrap_or(group);
@@ -54,6 +55,7 @@ impl super::Suite {
                             });
                         if response.header_response.clicked() {
                             self.collection.prioritize(&year);
+                            for source_year in photosuite_application::date_correction::source_partitions(&self.date_corrections.catalog,&year) {self.collection.prioritize(&source_year);}
                             self.group = Some(year.clone());self.tag_view.filters.clear();self.place_filter.selected.clear();
                         }
                         ui.add_space(2.);

@@ -456,9 +456,7 @@ impl Suite {
                                     && let Some(result) = self.transcription_queue.last()
                                     && let Some(root) = &self.root
                                 {
-                                    match result.record.metadata_path().and_then(|path| {
-                                        self.services.opener.reveal(&root.join(path))
-                                    }) {
+                                    match self.services.opener.reveal_record(root, &result.record) {
                                         Ok(()) => {}
                                         Err(error) => self.status = error,
                                     }

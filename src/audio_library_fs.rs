@@ -110,9 +110,10 @@ impl Repository for AudioLibrary {
                 ..Default::default()
             };
             let mut statement = db.prepare_cached(
-                "SELECT d.media_path, d.seconds, c.id, c.photo_path
+                "SELECT d.media_path, d.seconds, c.id, c.photo_path, p.reference_at
                  FROM audio_durations d JOIN media m ON m.path = d.media_path
                  LEFT JOIN audio_comments c ON c.audio_path = d.media_path
+                 LEFT JOIN media p ON p.path = c.photo_path
                  ORDER BY d.media_path",
             )?;
             let rows = statement.query_map([], |row| {
@@ -121,10 +122,11 @@ impl Repository for AudioLibrary {
                     row.get::<_, f64>(1)?,
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             })?;
             for row in rows {
-                let (path, seconds, id, photo) = row?;
+                let (path, seconds, id, photo, reference) = row?;
                 let file = LibraryFile::new(path.clone()).map_err(library_db::invalid)?;
                 if !seconds.is_finite() || seconds <= 0. {
                     return Err(library_db::invalid("Ungültige Audiodauer"));
@@ -145,7 +147,14 @@ impl Repository for AudioLibrary {
                         file,
                         LibraryFile::new(photo).map_err(library_db::invalid)?,
                     )
-                    .map_err(library_db::invalid)?;
+                    .map_err(library_db::invalid)?
+                    .with_capture_correction(
+                        reference
+                            .as_deref()
+                            .map(crate::date_correction_fs::parse_index)
+                            .transpose()
+                            .map_err(library_db::invalid)?,
+                    );
                     media = media.with_comment_recording(Some(&comment));
                 }
                 result.durations.push((media.path().into(), seconds));
@@ -198,6 +207,7 @@ impl Repository for AudioLibrary {
                     &|_| {},
                 )?;
             }
+            crate::date_correction_fs::reconcile(root, &self.database, &self.priority, stop)?;
             return Ok(());
         }
         self.run(root, stage, stop, progress)
@@ -321,6 +331,12 @@ impl Repository for AudioLibrary {
                         &|_| {},
                     )?;
                 }
+                crate::date_correction_fs::ensure_projection(
+                    root,
+                    &self.database,
+                    &self.priority,
+                    stop,
+                )?;
             }
             Stage::Years => {
                 let years = photosuite_application::audio_library::year_totals(&self.read(root)?);

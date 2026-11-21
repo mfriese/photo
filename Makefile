@@ -23,4 +23,8 @@ test-menu:
 	python3 scripts/check_native_menu.py
 test-recorder:
 	python3 scripts/check_native_recorder.py
-test-native: test-audio test-video test-menu test-recorder
+test-native: test-audio test-video test-menu test-recorder test-icon
+
+.PHONY: test-icon
+test-icon:
+	python3 scripts/check_native_icon.py

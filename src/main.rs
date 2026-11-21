@@ -1,3 +1,5 @@
+mod application_icon;
+mod date_correction_fs;
 use photosuite_application::{application, import, ports};
 use photosuite_domain as domain;
 use photosuite_domain::commands;
@@ -165,6 +167,10 @@ fn main() -> eframe::Result {
         }),
         comments: comment_repository,
         recorder: std::sync::Arc::new(comment_recorder::NativeCommentRecorder::new()),
+        date_corrections: Some(std::sync::Arc::new(date_correction_fs::CaptureDates {
+            database: database.clone(),
+            priority: priority.clone(),
+        })),
         media_dates: importer.clone(),
         organization: tag_repository,
         work_priority: priority.clone(),
@@ -200,6 +206,10 @@ fn main() -> eframe::Result {
         "PhotoSuite",
         eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
+                .with_icon(
+                    application_icon::window_icon()
+                        .expect("Eingebettetes PhotoSuite-Symbol ist beschädigt"),
+                )
                 .with_inner_size([1280., 850.])
                 .with_min_inner_size([360., 400.]),
             event_loop_builder: Some(Box::new(|builder| {
@@ -218,6 +228,8 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         Box::new(move |cc| {
+            #[cfg(target_os = "macos")]
+            application_icon::install_dock_icon().map_err(std::io::Error::other)?;
             #[cfg(not(any(target_os="macos",target_os="windows")))]
             return Err(std::io::Error::other("PhotoSuite's native muda menu requires a GTK host on Linux/BSD; this port is not implemented. No fallback menu is installed.").into());
             #[cfg(any(target_os = "macos", target_os = "windows"))]

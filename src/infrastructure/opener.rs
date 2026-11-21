@@ -2,6 +2,13 @@
 use std::path::Path;
 pub struct SystemMediaOpener;
 impl crate::ports::MediaOpener for SystemMediaOpener {
+    fn reveal_record(
+        &self,
+        root: &Path,
+        file: &crate::domain::tags::LibraryFile,
+    ) -> Result<(), String> {
+        self.reveal(&crate::media_records_fs::path(root, file, false)?)
+    }
     fn reveal(&self, path: &Path) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         {

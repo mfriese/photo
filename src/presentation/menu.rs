@@ -15,7 +15,9 @@ fn shortcut(key: &str, shift: bool) -> Option<Shortcut> {
 }
 impl Suite {
     pub(super) fn menu_entries(&self, ctx: &egui::Context) -> Vec<Entry> {
-        let blocked = self.comments.is_open()
+        let blocked = self.date_editor.is_some()
+            || self.date_corrections.busy()
+            || self.comments.is_open()
             || self.options_open
             || self.duplicate_dialog.visible
             || self.duplicate_dialog.running()
@@ -167,6 +169,8 @@ impl Suite {
                     .is_some_and(|m| {
                         if command == crate::commands::Command::PlayVideo {
                             m.is_video()
+                        } else if command == crate::commands::Command::CorrectDate {
+                            !m.is_audio()
                         } else {
                             m.is_photo()
                         }

@@ -35,9 +35,11 @@ impl Rebuilder for SqliteRebuilder {
             let mut comments = CommentCatalog::default();
             let mut jobs = BTreeMap::<LibraryFile, Job>::new();
             let mut files = Vec::new();
+            let mut corrections = BTreeMap::new();
             let mut revisions = Vec::new();
             let mut checked = 0;
             media_records_fs::visit(root, cancel, &self.priority, |file, record, _| {
+                if let Some(date)=record.corrected_date()? {corrections.insert(file.clone(),date);}
                 files.push(file.clone());
                 let path=media_records_fs::path(root,&file,false)?;
                 let metadata=std::fs::symlink_metadata(&path).map_err(|e|e.to_string())?;
@@ -98,9 +100,11 @@ impl Rebuilder for SqliteRebuilder {
                 if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len()!=*size || metadata.modified().map_err(|e|e.to_string())?!=*modified {return Err("Einzel-YAML während des Neuaufbaus geändert; erneut versuchen".into());}
             }
             self.database.transaction(staging, |tx| {
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS capture_date_overrides(media_path TEXT PRIMARY KEY REFERENCES media(path) ON DELETE CASCADE) STRICT;")?;
                 for file in &files {
-                    library_db::media(tx, file)?;
+                    library_db::record_address(tx, file, root)?;
                 }
+                for (file,date) in &corrections {crate::date_correction_fs::project(tx,file,date,root)?;}
                 for (name, files) in tags.tags() {
                     for file in files {
                         tx.execute(

@@ -13,6 +13,8 @@ pub(crate) struct Record {
     pub version: u32,
     pub file: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<BTreeSet<String>>,
     #[serde(default)]
     pub comments: BTreeMap<String, String>,
@@ -29,10 +31,18 @@ pub(crate) struct Failure {
     pub error: String,
 }
 impl Record {
+    pub fn corrected_date(&self) -> Result<Option<crate::domain::CaptureTime>, String> {
+        self.capture_date
+            .as_deref()
+            .map(|date| crate::domain::CaptureTime::parse(date, "Korrigiertes Mediendatum"))
+            .transpose()
+    }
+
     pub fn new(file: &LibraryFile) -> Self {
         Self {
             version: 3,
             file: file.as_str().into(),
+            capture_date: None,
             tags: None,
             comments: Default::default(),
             transcripts: Default::default(),
@@ -48,6 +58,20 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Record, String> {
     }
     let file = LibraryFile::new(record.file.clone())?;
     file.metadata_path()?;
+    if record.capture_date.is_some()
+        && !crate::domain::Media::from_library_path(
+            file.as_str().into(),
+            Path::new(file.as_str())
+                .parent()
+                .unwrap_or(Path::new(""))
+                .to_string_lossy()
+                .into_owned(),
+        )
+        .is_some_and(|m| !m.is_audio())
+    {
+        return Err("Datumskorrektur benötigt ein Foto oder Video".into());
+    }
+    record.corrected_date()?;
     if let Some(tags) = record.tags.take() {
         record.tags = Some(
             tags.iter()
@@ -119,7 +143,31 @@ pub(crate) fn path(
     file: &LibraryFile,
     create: bool,
 ) -> Result<std::path::PathBuf, String> {
-    crate::metadata_fs::library_path(root, &file.metadata_path()?, create)
+    let primary = crate::metadata_fs::library_path(root, &file.metadata_path()?, false)?;
+    let owner = read(&primary)?.map(|bytes| parse(&bytes)).transpose()?;
+    if owner
+        .as_ref()
+        .is_some_and(|record| record.file == file.as_str())
+    {
+        return crate::metadata_fs::library_path(root, &file.metadata_path()?, create);
+    }
+    let alternative = file.metadata_collision_path()?;
+    let candidate = crate::metadata_fs::library_path(root, &alternative, false)?;
+    if let Some(bytes) = read(&candidate)? {
+        if parse(&bytes)?.file != file.as_str() {
+            return Err(
+                "Auch der eindeutige Medien-YAML-Pfad ist fremd belegt; keine Datei geändert"
+                    .into(),
+            );
+        }
+        return crate::metadata_fs::library_path(root, &alternative, create);
+    }
+    let relative = if owner.is_some() {
+        alternative
+    } else {
+        file.metadata_path()?
+    };
+    crate::metadata_fs::library_path(root, &relative, create)
 }
 pub(crate) fn write(
     root: &Path,
@@ -185,7 +233,13 @@ pub(crate) fn visit(
         let Some(name) = entry.path().file_stem().and_then(|n| n.to_str()) else {
             continue;
         };
-        if crate::domain::Media::from_path(name.into(), String::new()).is_none() {
+        let media_name = name
+            .rsplit_once(".path-")
+            .filter(|(_, suffix)| {
+                suffix.len() == 16 && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            .map_or(name, |(name, _)| name);
+        if crate::domain::Media::from_path(media_name.into(), String::new()).is_none() {
             continue;
         }
         let bytes = read(entry.path())?.ok_or("Medien-YAML während Neuaufbau entfernt")?;
@@ -236,7 +290,13 @@ mod tests {
         let destination = path(root.path(), &a, false).unwrap();
         let before = fs::read(&destination).unwrap();
         let repository = crate::tag_store::SqliteTags::default();
-        assert!(repository.read_file_tags(root.path(), &b).is_err());
+        assert!(
+            repository
+                .read_file_tags(root.path(), &b)
+                .unwrap()
+                .tags
+                .is_none()
+        );
         assert!(
             repository
                 .write_file_tags(root.path(), &b, &["other".into()].into(), Some(&before))

@@ -16,6 +16,7 @@ pub enum MediaKind {
 pub struct Media {
     path: PathBuf,
     group: String,
+    physical_group: String,
     kind: MediaKind,
     recorded_time: Option<CaptureTime>,
     reference_time: Option<CaptureTime>,
@@ -42,6 +43,7 @@ impl Media {
         };
         Some(Self {
             path,
+            physical_group: group.clone(),
             group,
             kind,
             recorded_time: None,
@@ -69,6 +71,7 @@ impl Media {
         }
         Some(Self {
             path,
+            physical_group: group.clone(),
             group,
             kind: MediaKind::Audio,
             recorded_time: None,
@@ -88,8 +91,23 @@ impl Media {
     pub fn group(&self) -> &str {
         &self.group
     }
+    /// User-authored date changes logical placement, never the original path or bytes.
+    pub fn with_capture_correction(mut self, date: Option<CaptureTime>) -> Self {
+        if !self.is_audio() {
+            if let Some(date) = &date {
+                self.group = format!("{}/{}", date.year(), date.month());
+            } else {
+                self.group = self.physical_group.clone();
+            }
+            self.reference_time = date;
+        }
+        self
+    }
     /// Explicit recording time never changes the file's physical tree location.
     pub fn with_comment_recording(mut self, comment: Option<&comments::Comment>) -> Self {
+        if !self.is_audio() {
+            return self;
+        }
         self.recorded_time = if self.is_audio() {
             comment
                 .filter(|c| self.path.ends_with(c.audio().as_str()))
@@ -110,7 +128,7 @@ impl Media {
         if self.reference_year.is_some() {
             self.reference_time.as_ref()
         } else {
-            self.recorded_time.as_ref()
+            self.reference_time.as_ref().or(self.recorded_time.as_ref())
         }
     }
     pub fn reference_year(&self) -> Option<&str> {
@@ -202,6 +220,9 @@ pub mod tags;
 
 /// Filename fast path for gallery captions. Never performs I/O or invents a date.
 pub fn capture_from_filename(media: &Media) -> Option<CaptureTime> {
+    if let Some(date) = media.reference_time() {
+        return Some(date.clone());
+    }
     if media.has_recording_time() {
         return media.reference_time().cloned();
     }

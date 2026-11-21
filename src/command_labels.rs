@@ -9,6 +9,7 @@ impl CommandLabel for Command {
             Self::RotateRight => "Rechts drehen",
             Self::ResetRotation => "Zur EXIF-Ausrichtung",
             Self::PlayVideo => "Video abspielen",
+            Self::CorrectDate => "Datum korrigieren …",
         }
     }
 }

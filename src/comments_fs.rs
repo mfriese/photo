@@ -48,16 +48,17 @@ impl CommentRepository for SqliteComments {
             }
             let mut catalog = CommentCatalog::default();
             let mut stmt = tx.prepare(
-                "SELECT id,photo_path,audio_path FROM audio_comments ORDER BY photo_path,id",
+                "SELECT c.id,c.photo_path,c.audio_path,m.reference_at FROM audio_comments c JOIN media m ON m.path=c.photo_path ORDER BY c.photo_path,c.id",
             )?;
             for row in stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
                 ))
             })? {
-                let (id, photo, audio) = row?;
+                let (id, photo, audio, date) = row?;
                 catalog
                     .insert(
                         Comment::new(
@@ -65,7 +66,8 @@ impl CommentRepository for SqliteComments {
                             LibraryFile::new(audio).map_err(library_db::invalid)?,
                             LibraryFile::new(photo).map_err(library_db::invalid)?,
                         )
-                        .map_err(library_db::invalid)?,
+                        .map_err(library_db::invalid)?
+                        .with_capture_correction(date.as_deref().map(crate::date_correction_fs::parse_index).transpose().map_err(library_db::invalid)?),
                     )
                     .map_err(library_db::invalid)?;
             }
@@ -113,6 +115,7 @@ impl CommentRepository for SqliteComments {
                 .prepare("INSERT INTO audio_comments(id,photo_path,audio_path) VALUES(?1,?2,?3)")?;
             for comment in catalog.entries().values() {
                 library_db::media(tx, comment.photo())?;
+                if let Some(date)=comment.capture_correction() {crate::date_correction_fs::project(tx,comment.photo(),date,root)?;}
                 library_db::media(tx, comment.audio())?;
                     tx.execute("UPDATE media SET reference_at=(SELECT reference_at FROM media WHERE path=?1) WHERE path=?2",(comment.photo().as_str(),comment.audio().as_str()))?;
                 stmt.execute((

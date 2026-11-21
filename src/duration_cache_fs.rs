@@ -128,7 +128,7 @@ impl DurationCache for SqliteDurations {
             for (path,entry) in &snapshot.entries {
                 let file=crate::domain::tags::LibraryFile::new(path.strip_prefix(root).map_err(|e|crate::library_db::invalid(e.to_string()))?.to_str().ok_or_else(||crate::library_db::invalid("Nicht-UTF8-Audiopfad"))?.into()).map_err(crate::library_db::invalid)?;
                 if self.groups(std::slice::from_ref(path))!=[group.to_owned()] || !entry.seconds.is_finite() || entry.seconds<=0. {return Err(crate::library_db::invalid("Ungültiger Audiocache"));}
-                crate::library_db::media(tx,&file)?;
+                crate::library_db::media(tx, &file)?;
                 tx.execute("INSERT INTO audio_durations(media_path,year,seconds,source_bytes,source_modified) VALUES(?1,?2,?3,?4,?5)",rusqlite::params![file.as_str(),year,entry.seconds,entry.fingerprint.size,entry.fingerprint.modified])?;
             }
             tx.execute("INSERT INTO audio_verifications(year,last_full_verified) VALUES(?1,?2) ON CONFLICT(year) DO UPDATE SET last_full_verified=excluded.last_full_verified",(year,&snapshot.last_full_verified))?;

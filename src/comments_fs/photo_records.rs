@@ -48,11 +48,9 @@ impl SqliteComments {
         comment: &Comment,
     ) -> Result<CommentCatalog, String> {
         directory(root)?;
-        let relative = comment.sidecar();
-        safe_reference(root, &relative)?;
+        let path = crate::media_records_fs::path(root, comment.photo(), false)?;
         safe_reference(root, comment.photo())?;
         safe_reference(root, comment.audio())?;
-        let path = root.join(relative.as_str());
         let previous = if crate::metadata_fs::check_file(&path)? {
             Some(checked_bytes(&path)?)
         } else {
@@ -66,9 +64,19 @@ impl SqliteComments {
         if entry.file != comment.photo().as_str() {
             return Err("Foto-YAML gehört zu einem anderen Bild".into());
         }
+        let date = entry.corrected_date()?;
         let mut catalog = CommentCatalog::default();
         add_photo(&mut catalog, &entry.file, entry.comments.clone())?;
-        catalog.insert(comment.clone())?;
+        let existing = catalog
+            .entries()
+            .values()
+            .map(|c| c.clone().with_capture_correction(date.clone()))
+            .collect::<Vec<_>>();
+        catalog = CommentCatalog::default();
+        for c in existing {
+            catalog.insert(c)?;
+        }
+        catalog.insert(comment.clone().with_capture_correction(date.clone()))?;
         let normalized = catalog
             .entries()
             .values()
@@ -79,6 +87,9 @@ impl SqliteComments {
         }
         entry.comments = normalized;
         crate::media_records_fs::write(root, comment.photo(), &entry, previous.as_deref())?;
+        self.database.transaction(root, |tx| {
+            crate::library_db::record_address(tx, comment.photo(), root)
+        })?;
         Ok(catalog)
     }
     pub(super) fn read_photo_records(
@@ -101,27 +112,21 @@ impl SqliteComments {
             if record.comments.is_empty() {
                 return Ok(());
             }
-            let path = root.join(photo.metadata_path()?);
-
-            if root.join(Comment::metadata_path(&photo)?.as_str()) != path {
-                return Err(format!(
-                    "Foto-YAML liegt am falschen Ort: {}",
-                    path.display()
-                ));
-            }
+            let path = crate::media_records_fs::path(root, &photo, false)?;
             safe_reference(root, &photo)?;
             let mut parsed = CommentCatalog::default();
+            let date = record.corrected_date()?;
             add_photo(&mut parsed, &record.file, record.comments)?;
             // Empty image records are valid and carry no comment mapping.
             for comment in parsed.entries().values() {
-                if root.join(comment.sidecar().as_str()) != path {
+                if crate::media_records_fs::path(root, comment.photo(), false)? != path {
                     return Err(format!(
                         "Foto-YAML liegt am falschen Ort: {}",
                         path.display()
                     ));
                 }
                 safe_reference(root, comment.audio())?;
-                catalog.insert(comment.clone())?;
+                catalog.insert(comment.clone().with_capture_correction(date.clone()))?;
             }
             checked += 1;
             progress(RebuildProgress {

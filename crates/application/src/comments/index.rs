@@ -70,7 +70,10 @@ pub fn commit<R: CommentRepository + ?Sized>(
     expected: Option<&[u8]>,
 ) -> Result<StoredComments, String> {
     let record = repository.write_photo_record(root, comment)?;
-    if record.by_audio(comment.audio()) != Some(comment) {
+    if record
+        .by_audio(comment.audio())
+        .is_none_or(|saved| !saved.same_recording(comment))
+    {
         return Err("Foto-Datensatz bestätigt die neue Aufnahme nicht".into());
     }
     let mut next = catalog.clone();

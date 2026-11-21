@@ -108,7 +108,7 @@ impl Repository for SqlitePhotoGeo {
             return Err("Foto während der GPS-Prüfung geändert; erneut versuchen".into());
         }
         self.database.transaction(root,|tx|{
-   library_db::media(tx,photo)?;
+   library_db::media(tx, photo)?;
    let (status,latitude,longitude,error)=match &position{Position::Missing=>("missing",None,None,String::new()),Position::Invalid(error)=>("invalid",None,None,error.chars().take(2048).collect()),Position::Present(point)=>("available",Some(point.latitude()),Some(point.longitude()),String::new())};
    tx.execute("INSERT INTO media_geo(media_path,source_bytes,source_modified,status,latitude,longitude,error) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(media_path) DO UPDATE SET source_bytes=excluded.source_bytes,source_modified=excluded.source_modified,status=excluded.status,latitude=excluded.latitude,longitude=excluded.longitude,error=excluded.error,place_id=NULL,place_name=NULL,place_ascii_name=NULL,place_latitude=NULL,place_longitude=NULL,country_code=NULL,admin1_code=NULL,distance_meters=NULL,dataset_sha256=NULL WHERE media_geo.source_bytes!=excluded.source_bytes OR media_geo.source_modified!=excluded.source_modified OR media_geo.status!=excluded.status OR media_geo.error!=excluded.error OR media_geo.latitude IS NOT excluded.latitude OR media_geo.longitude IS NOT excluded.longitude",rusqlite::params![photo.as_str(),fingerprint.bytes,fingerprint.modified,status,latitude,longitude,error])?;
    tx.execute("UPDATE index_state SET change_sequence=change_sequence+1 WHERE id=1",[])?;Ok(())

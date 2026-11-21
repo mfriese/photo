@@ -15,6 +15,7 @@ fn main() {
     }
     std::fs::write(out.join("theme_palette.h"), header).unwrap();
     for source in [
+        "native/app_icon.m",
         "native/transcription_audio.m",
         "native/transcription.h",
         "native/whisper_models.m",
@@ -53,6 +54,7 @@ fn main() {
     );
     let mut objects = Vec::new();
     for source in [
+        "app_icon",
         "transcription_audio",
         "whisper_models",
         "video",

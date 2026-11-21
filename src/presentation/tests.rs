@@ -211,6 +211,9 @@ pub(super) fn test_suite() -> Suite {
         comment_view: Default::default(),
         record_photo: None,
         known_media: Default::default(),
+        date_corrections: photosuite_application::date_correction::Session::new(None),
+        date_editor: None,
+        date_projection_revision: 0,
         media_dates: photosuite_application::media_dates::MediaDates::new(
             adapters.clone(),
             Default::default(),
@@ -242,6 +245,7 @@ pub(super) fn test_suite() -> Suite {
         preferences_error: String::new(),
         options_open: false,
         services: crate::application::Services {
+            date_corrections: None,
             audio_library: None,
             transcription_engine: adapters.clone(),
             transcription_queue: adapters.clone(),

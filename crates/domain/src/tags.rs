@@ -62,6 +62,24 @@ impl LibraryFile {
             .unwrap_or("unbekannt");
         Ok(format!("yaml/{year}/{month}/{name}.yaml"))
     }
+    /// Stable namespace for colliding full filenames. This is a path discriminator,
+    /// not a media-content fingerprint; ownership is always checked separately.
+    pub fn metadata_collision_path(&self) -> Result<String, String> {
+        let primary = self.metadata_path()?;
+        let hash = self
+            .0
+            .as_bytes()
+            .iter()
+            .fold(0xcbf29ce484222325_u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            });
+        Ok(format!(
+            "{}.path-{hash:016x}.yaml",
+            primary
+                .strip_suffix(".yaml")
+                .ok_or("Ungültiger YAML-Pfad")?
+        ))
+    }
     pub fn as_str(&self) -> &str {
         &self.0
     }

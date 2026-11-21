@@ -273,6 +273,14 @@ impl super::Suite {
                                         response.context_menu(|ui| {
                                             self.gallery.selection.context(m.path());
                                             let count=self.gallery.selection.paths.len();
+                                            if ui.button("Im Finder zeigen …").clicked() {
+                                                if let Err(error)=self.services.opener.reveal(m.path()) {self.status=error;}
+                                                ui.close();
+                                            }
+                                            if count==1 && !m.is_audio() && ui.add_enabled(!self.date_corrections.busy() && !self.comments.is_open(),egui::Button::new("Datum korrigieren …")).clicked() {
+                                                self.execute_for(crate::commands::Command::CorrectDate,index,ctx);
+                                                ui.close();
+                                            }
                                             if count==1 && m.is_photo()
                                                 && ui.button("Audiokommentar …").clicked()
                                             {

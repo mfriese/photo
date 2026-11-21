@@ -5,12 +5,14 @@ pub enum Command {
     RotateRight,
     ResetRotation,
     PlayVideo,
+    CorrectDate,
 }
-pub const ALL: [Command; 4] = [
+pub const ALL: [Command; 5] = [
     Command::RotateLeft,
     Command::RotateRight,
     Command::ResetRotation,
     Command::PlayVideo,
+    Command::CorrectDate,
 ];
 impl Command {
     /// Stable persistence identity, independent of translated labels and GUI frameworks.
@@ -20,6 +22,7 @@ impl Command {
             Self::RotateRight => "rotate_right",
             Self::ResetRotation => "reset_rotation",
             Self::PlayVideo => "play_video",
+            Self::CorrectDate => "correct_date",
         }
     }
     pub fn apply(self, turns: u8) -> Option<u8> {
@@ -27,7 +30,7 @@ impl Command {
             Self::RotateLeft => Some((turns % 4 + 3) % 4),
             Self::RotateRight => Some((turns % 4 + 1) % 4),
             Self::ResetRotation => Some(0),
-            Self::PlayVideo => None,
+            Self::PlayVideo | Self::CorrectDate => None,
         }
     }
 }

@@ -42,6 +42,7 @@ impl Default for CommandBindings {
                         Command::RotateRight => (egui::Modifiers::ALT, egui::Key::R),
                         Command::ResetRotation => (egui::Modifiers::ALT, egui::Key::Backspace),
                         Command::PlayVideo => (egui::Modifiers::NONE, egui::Key::Space),
+                        Command::CorrectDate => (egui::Modifiers::ALT, egui::Key::D),
                     };
                     (command, Some(egui::KeyboardShortcut::new(modifiers, key)))
                 })

@@ -113,6 +113,14 @@ impl PhotoContext {
         candidates: Vec<PathBuf>,
         priority: Arc<crate::work_priority::WorkPriority>,
     ) -> Self {
+        Self::with_dates(source, candidates, HashMap::new(), priority)
+    }
+    pub fn with_dates(
+        source: Arc<dyn ContextPhotoSource>,
+        candidates: Vec<PathBuf>,
+        corrections: HashMap<PathBuf, CaptureTime>,
+        priority: Arc<crate::work_priority::WorkPriority>,
+    ) -> Self {
         let sender = Arc::new(Requests::default());
         let requests = sender.clone();
         let (events, receiver) = mpsc::sync_channel(16);
@@ -133,7 +141,10 @@ impl PhotoContext {
                     return;
                 }
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                let date = CaptureTime::from_photo_filename(stem)
+                let date = corrections
+                    .get(&path)
+                    .cloned()
+                    .or_else(|| CaptureTime::from_photo_filename(stem))
                     .or_else(|| crate::domain::audio_date::date_from_filename(stem));
                 if let Some(date) = date {
                     dated.push(TimedPhoto::new(path, date));

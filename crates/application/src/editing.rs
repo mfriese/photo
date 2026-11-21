@@ -30,7 +30,7 @@ impl EditingSession {
         writer: Arc<dyn OrientationWriter>,
         wake: impl FnOnce() + Send + 'static,
     ) -> Result<(), String> {
-        if command == Command::PlayVideo {
+        if matches!(command, Command::PlayVideo | Command::CorrectDate) {
             return Err("Wiedergabe ist kein Bildbearbeitungsbefehl".into());
         }
         if self.is_saving() {

@@ -328,7 +328,11 @@ impl QueueStore for SqliteTranscriptionQueue {
                 crate::transcript_codec::TranscriptDto::from_value(transcript),
             );
             match media_records_fs::write(root, &candidate.record, &record, previous.as_deref()) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    return self.database.transaction(root, |tx| {
+                        library_db::record_address(tx, &candidate.record, root)
+                    });
+                }
                 Err(e) => last_error = e,
             }
         }
@@ -367,7 +371,7 @@ mod tests {
         .unwrap()
     }
     #[test]
-    fn one_conflicting_sidecar_does_not_block_other_transcripts_or_modify_foreign_metadata() {
+    fn colliding_sidecars_transcribe_independently_without_modifying_foreign_metadata() {
         use photosuite_application::transcription::{
             Settings,
             queue::{
@@ -447,7 +451,7 @@ mod tests {
                     "one media failure stopped the queue: {}",
                     queue.error()
                 );
-                if !queue.busy() && queue.counts() == (1, 2, 1) {
+                if !queue.busy() && queue.counts() == (2, 2, 0) {
                     break;
                 }
                 assert!(
@@ -459,19 +463,16 @@ mod tests {
             }
             assert_eq!(
                 engine.calls.lock().unwrap().as_slice(),
-                &[root.path().join(good.as_str())]
+                &[
+                    root.path().join(good.as_str()),
+                    root.path().join(bad.as_str())
+                ]
             );
             assert_eq!(fs::read(&metadata).unwrap(), original);
-            let errors = queue.failures();
-            let error = errors.iter().find(|(source, _)| **source == bad).unwrap().1;
-            assert!(
-                error.contains(owner.as_str())
-                    && error.contains(bad.as_str())
-                    && error.contains("YAML:")
-            );
+            assert!(queue.failures().is_empty());
             assert!(matches!(
                 store.load(root.path()).unwrap().jobs[&bad].state,
-                JobState::Failed(_)
+                JobState::Complete
             ));
         }
         drop(queue);
@@ -503,7 +504,7 @@ mod tests {
                 "reconstructed queue stalled: {}",
                 rebuilt.error()
             );
-            if !rebuilt.busy() && rebuilt.counts() == (1, 2, 1) {
+            if !rebuilt.busy() && rebuilt.counts() == (2, 2, 0) {
                 break;
             }
             assert!(std::time::Instant::now() < deadline);
@@ -511,7 +512,10 @@ mod tests {
         }
         assert_eq!(
             engine.calls.lock().unwrap().as_slice(),
-            &[root.path().join(good.as_str())]
+            &[
+                root.path().join(good.as_str()),
+                root.path().join(bad.as_str())
+            ]
         );
         assert_eq!(fs::read(&metadata).unwrap(), original);
         assert!(

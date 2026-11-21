@@ -464,9 +464,17 @@ impl NativeAudioPlayer {
                 .map(|p| p.path().to_owned())
                 .collect();
             *self.context.lock().unwrap() = Some(
-                photosuite_application::photo_context::PhotoContext::with_priority(
+                photosuite_application::photo_context::PhotoContext::with_dates(
                     self.source.clone(),
                     candidates,
+                    photos
+                        .iter()
+                        .filter_map(|media| {
+                            media
+                                .reference_time()
+                                .map(|date| (media.path().to_owned(), date.clone()))
+                        })
+                        .collect(),
                     self.priority.clone(),
                 ),
             );
