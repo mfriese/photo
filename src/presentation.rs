@@ -24,6 +24,7 @@ use std::path::PathBuf;
 #[cfg(test)]
 use std::sync::mpsc;
 pub struct Suite {
+    processing_repeats: photosuite_application::processing::Repeats,
     audio_library: photosuite_application::audio_library::Session,
     transcription_queue: photosuite_application::transcription::queue::QueueSession,
     transcription_seen: Option<transcription_control::Seen>,
@@ -127,6 +128,7 @@ impl Suite {
         if let Some(startup) = self.startup.as_mut() {
             startup.cancel_for_navigation();
         }
+        self.processing_repeats.clear();
         self.transcription_queue.reset();
         self.geo_sweep.reset();
         self.place_filter.reset();
@@ -371,6 +373,18 @@ impl Suite {
     }
 }
 impl eframe::App for Suite {
+    fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.processing_repeats.clear();
+        self.diary.cancel();
+        let _ = self
+            .services
+            .audio_player
+            .control(photosuite_application::diary::AudioControl::Stop);
+        if let Err(error) = self.transcription_queue.shutdown() {
+            eprintln!("PhotoSuite beim Beenden: {error}");
+        }
+    }
+
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.index_maintenance.poll();
         if self.index_maintenance.busy() {
@@ -606,11 +620,13 @@ pub fn create(
         std::env::args_os().skip(1).collect(),
     );
     Suite {
+        processing_repeats: Default::default(),
         transcription_queue: photosuite_application::transcription::queue::QueueSession::new(
             services.transcription_queue.clone(),
             services.transcription_engine.clone(),
             services.transcription_power.clone(),
-        ),
+        )
+        .with_automatic_start(),
         transcription_seen: None,
         transcription_complete: false,
         geodata: photosuite_application::geodata::Session::new(services.geodata.clone()),

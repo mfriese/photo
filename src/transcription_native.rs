@@ -466,9 +466,11 @@ mod platform {
             })
         }
         fn release_model(&self) {
-            if let Ok(mut cache) = self.cache.lock() {
-                *cache = None;
-            }
+            // A Rust callback panic must not leave Metal allocations alive until static teardown.
+            self.cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
         }
     }
 }
@@ -498,6 +500,135 @@ impl PowerManager for NativePower {
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Requires WHISPER_TEST_MODEL; runs native inference in isolated subprocesses"]
+    fn native_queue_shutdown_exits_cleanly_with_active_and_cached_resources() {
+        use std::{
+            io::{Read, Seek, SeekFrom},
+            process::{Command, Stdio},
+            time::{Duration, Instant},
+        };
+        for mode in ["active", "cached"] {
+            let mut log = tempfile::tempfile().unwrap();
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "transcription_native::tests::native_shutdown_child",
+                    "--ignored",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("PHOTOSUITE_SHUTDOWN_CHILD", mode)
+                .env_remove("GGML_BACKTRACE_LLDB")
+                .stdout(Stdio::from(log.try_clone().unwrap()))
+                .stderr(Stdio::from(log.try_clone().unwrap()))
+                .spawn()
+                .unwrap();
+            let limit = Instant::now() + Duration::from_secs(180);
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= limit {
+                    child.kill().unwrap();
+                    let _ = child.wait();
+                    panic!("native shutdown subprocess timed out: {mode}");
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            };
+            log.seek(SeekFrom::Start(0)).unwrap();
+            let mut output = String::new();
+            log.take(2 * 1024 * 1024)
+                .read_to_string(&mut output)
+                .unwrap();
+            assert!(
+                status.success(),
+                "native process exit failed ({mode}): {status}\n{output}"
+            );
+            assert!(
+                output.contains("SHUTDOWN_OK"),
+                "child did not complete shutdown: {output}"
+            );
+            assert!(
+                output.contains("Metal"),
+                "native shutdown test did not exercise Metal: {output}"
+            );
+            println!("Whisper subprocess {mode}: clean Metal process exit");
+        }
+    }
+    #[test]
+    #[ignore = "Subprocess helper; never downloads models"]
+    fn native_shutdown_child() {
+        use crate::domain::tags::LibraryFile;
+        use photosuite_application::transcription::{
+            Settings,
+            queue::{Candidate, Mode, QueueSession},
+        };
+        use std::time::{Duration, Instant};
+        let Ok(mode) = std::env::var("PHOTOSUITE_SHUTDOWN_CHILD") else {
+            return;
+        };
+        let model = std::env::var_os("WHISPER_TEST_MODEL").expect("WHISPER_TEST_MODEL");
+        let id = std::env::var("WHISPER_TEST_MODEL_ID").unwrap_or("tiny-q5_1".into());
+        let choice = ModelChoice {
+            path: model.into(),
+            settings: Settings::new(&id, "en").unwrap(),
+        };
+        let engine = Arc::new(NativeEngine::new(Arc::new(
+            crate::whisper_models_native::NativeModelTransport,
+        )));
+        let folder = tempfile::tempdir().unwrap();
+        let source = LibraryFile::new("2026/audio/diary/aud_20261121_120000.wav".into()).unwrap();
+        let path = folder.path().join(source.as_str());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jfk.wav"),
+            &path,
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut queue = QueueSession::new(
+            Arc::new(crate::transcription_queue_fs::SqliteTranscriptionQueue::default()),
+            engine.clone(),
+            Arc::new(NativePower),
+        );
+        if mode == "active" {
+            queue.sync(
+                folder.path(),
+                vec![Candidate {
+                    source: source.clone(),
+                    record: source,
+                }],
+                true,
+            );
+            queue.set_model(Some(choice));
+            let limit = Instant::now() + Duration::from_secs(150);
+            loop {
+                queue.poll();
+                assert!(queue.error().is_empty(), "{}", queue.error());
+                if queue.progress().phase == Phase::Transcribing && queue.progress().fraction > 0. {
+                    break;
+                }
+                assert!(Instant::now() < limit, "inference did not start");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            queue.shutdown().unwrap();
+            assert!(!queue.busy());
+        } else {
+            let output = engine
+                .transcribe(&choice, &path, &AtomicBool::new(false), &|_| {})
+                .unwrap();
+            assert!(!output.no_audio);
+            assert!(engine.cache.lock().unwrap().is_some());
+            queue.shutdown().unwrap();
+        }
+        assert!(engine.cache.lock().unwrap().is_none());
+        queue.set_mode(Mode::Running);
+        queue.poll();
+        assert!(!queue.busy());
+        assert_eq!(std::fs::read(path).unwrap(), before);
+        println!("SHUTDOWN_OK {mode}");
+    }
     #[test]
     #[ignore = "Diagnostic integration: requires WHISPER_TEST_MODEL and WHISPER_TEST_MEDIA; uses only temporary output"]
     fn supplied_media_transcript_survives_yaml_round_trip() {

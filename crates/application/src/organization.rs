@@ -1192,3 +1192,12 @@ pub fn restore_projection(
 ) -> Result<(), String> {
     index::load_cancel(repository, root, cancel).map(|_| ())
 }
+
+/// Explicit reconstruction requested by the serial per-step repeat workflow.
+pub fn rebuild_projection(
+    repository: &dyn CatalogRepository,
+    root: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    index::rebuild_cancel(repository, root, cancel).map(|_| ())
+}

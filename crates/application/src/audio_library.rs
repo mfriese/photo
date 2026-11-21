@@ -49,6 +49,15 @@ pub struct Progress {
 pub trait Repository: Send + Sync + 'static {
     /// Read only SQLite; do not stat/open audio files or enumerate media directories.
     fn read(&self, root: &Path) -> Result<Snapshot, String>;
+    fn rerun(
+        &self,
+        root: &Path,
+        stage: Stage,
+        stop: &AtomicBool,
+        progress: &dyn Fn(Progress),
+    ) -> Result<(), String> {
+        self.run(root, stage, stop, progress)
+    }
     fn run(
         &self,
         root: &Path,
@@ -102,6 +111,8 @@ pub struct Session {
     next: usize,
     revision: u64,
     progress: Progress,
+    completed: [Progress; 4],
+    forced: [bool; 4],
     error: String,
     admitted_at: Option<Instant>,
     comments: Option<
@@ -124,6 +135,8 @@ impl Session {
             next: 0,
             revision: 0,
             progress: Progress::default(),
+            completed: Default::default(),
+            forced: [false; 4],
             error: String::new(),
             admitted_at: None,
             comments: None,
@@ -136,9 +149,12 @@ impl Session {
         self.generation += 1;
         self.root = Some(root.into());
         self.comments = None;
+        self.forced = [false; 4];
         self.snapshot = Snapshot::default();
         self.loaded = self.repository.is_none();
         self.next = 0;
+        self.completed = Default::default();
+        self.progress = Progress::default();
         self.revision += 1;
         self.error.clear();
         self.admitted_at = None;
@@ -156,12 +172,32 @@ impl Session {
         }
         self.comments = Some(links);
     }
+    pub fn repeat_from(&mut self, stage: Stage) {
+        let index = STAGES
+            .iter()
+            .position(|candidate| *candidate == stage)
+            .unwrap();
+        if let Some(worker) = &self.worker {
+            worker.stop.store(true, Ordering::Relaxed);
+        }
+        self.generation += 1;
+        self.next = self.next.min(index);
+        for progress in &mut self.completed[self.next..] {
+            *progress = Progress::default();
+        }
+        self.forced[index] = true;
+        self.progress = Progress::default();
+        self.error.clear();
+        self.admitted_at = None;
+    }
     pub fn retry(&mut self) {
         if let Some(w) = &self.worker {
             w.stop.store(true, Ordering::Relaxed);
         }
         self.generation += 1;
         self.next = 0;
+        self.completed = Default::default();
+        self.progress = Progress::default();
         self.error.clear();
         self.admitted_at = None;
     }
@@ -193,6 +229,9 @@ impl Session {
                         self.loaded = true;
                         self.revision += 1;
                         if w.stage.is_some() {
+                            self.forced[self.next] = false;
+                            self.completed[self.next] = self.progress.clone();
+                            self.completed[self.next].checked = self.completed[self.next].total;
                             self.next += 1;
                         }
                     }
@@ -220,12 +259,23 @@ impl Session {
         let (tx, rx) = mpsc::sync_channel(1);
         let (ptx, progress) = mpsc::sync_channel(1);
         self.progress = Progress::default();
+        let force = stage.is_some_and(|stage| {
+            self.forced[STAGES
+                .iter()
+                .position(|candidate| *candidate == stage)
+                .unwrap()]
+        });
         let handle = thread::spawn(move || {
             let result = (|| {
                 if let Some(stage) = stage {
-                    repo.run(&root, stage, &cancel, &|p| {
+                    let notify = |p| {
                         let _ = ptx.try_send(p);
-                    })?;
+                    };
+                    if force {
+                        repo.rerun(&root, stage, &cancel, &notify)?;
+                    } else {
+                        repo.run(&root, stage, &cancel, &notify)?;
+                    }
                 }
                 if cancel.load(Ordering::Relaxed) {
                     return Err("Abgebrochen".into());
@@ -261,6 +311,21 @@ impl Session {
     }
     pub fn stage(&self) -> Option<Stage> {
         STAGES.get(self.next).copied()
+    }
+    pub fn stage_progress(&self, stage: Stage) -> (bool, Progress) {
+        let index = STAGES
+            .iter()
+            .position(|candidate| *candidate == stage)
+            .unwrap();
+        let completed = self.repository.is_none() || index < self.next;
+        let progress = if completed {
+            self.completed[index].clone()
+        } else if index == self.next {
+            self.progress.clone()
+        } else {
+            Progress::default()
+        };
+        (completed, progress)
     }
     pub fn progress(&self) -> &Progress {
         &self.progress
@@ -361,11 +426,42 @@ mod tests {
             ]
             .map(|s| (PathBuf::from("/library"), s))
         );
+        for stage in STAGES {
+            let (done, progress) = session.stage_progress(stage);
+            assert!(done);
+            assert_eq!((progress.checked, progress.total), (1, 1));
+        }
         let reads = store.reads.load(Ordering::SeqCst);
         for _ in 0..20 {
             session.poll(true);
         }
         assert_eq!(store.reads.load(Ordering::SeqCst), reads);
+    }
+    #[test]
+    fn selected_repeat_keeps_prior_steps_complete_and_only_runs_necessary_following_stages() {
+        let store = Arc::new(Store::default());
+        let mut session = Session::new(Some(store.clone()));
+        session.open(Path::new("/library"));
+        until(&mut session, true, Session::complete);
+        store.steps.lock().unwrap().clear();
+        session.repeat_from(Stage::Years);
+        assert!(session.stage_progress(Stage::Durations).0);
+        assert!(!session.stage_progress(Stage::Years).0);
+        until(&mut session, true, Session::complete);
+        assert_eq!(
+            *store.steps.lock().unwrap(),
+            vec![(PathBuf::from("/library"), Stage::Years)]
+        );
+        store.steps.lock().unwrap().clear();
+        session.repeat_from(Stage::Metadata);
+        until(&mut session, true, Session::complete);
+        assert_eq!(
+            *store.steps.lock().unwrap(),
+            vec![
+                (PathBuf::from("/library"), Stage::Metadata),
+                (PathBuf::from("/library"), Stage::Years)
+            ]
+        );
     }
     #[test]
     fn switching_library_waits_for_cancelled_worker_and_never_publishes_old_results() {

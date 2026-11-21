@@ -168,6 +168,7 @@ impl photosuite_application::organization::CatalogRepository for UnusedAdapters 
 pub(super) fn test_suite() -> Suite {
     let adapters = Arc::new(UnusedAdapters);
     Suite {
+        processing_repeats: Default::default(),
         transcription_queue: photosuite_application::transcription::queue::QueueSession::new(
             adapters.clone(),
             adapters.clone(),

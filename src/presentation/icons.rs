@@ -10,6 +10,7 @@ pub(super) enum Icon {
     RotateRight,
     Reset,
     Play,
+    Pause,
     Reload,
     Microphone,
     Save,
@@ -28,6 +29,15 @@ pub(super) fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, help: &str) -
     let stroke = egui::Stroke::new(1.5_f32, color);
     let point = |x, y| c + egui::vec2(x, y);
     match icon {
+        Icon::Pause => {
+            for dx in [-3.5, 3.5] {
+                p.rect_filled(
+                    egui::Rect::from_center_size(c + egui::vec2(dx, 0.), egui::vec2(3., 13.)),
+                    0.,
+                    color,
+                );
+            }
+        }
         Icon::Previous | Icon::Next | Icon::Play => {
             let d = if matches!(icon, Icon::Previous) {
                 -1.

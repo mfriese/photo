@@ -63,7 +63,12 @@ pub fn transport_button(
                 widget.fg_stroke = Stroke::new(1_f32, DISABLED_TEXT);
             }
         }
-        ui.add_enabled(enabled, egui::Button::new(text).min_size(size))
+        ui.add_enabled(
+            enabled,
+            egui::Button::new(text)
+                .min_size(size)
+                .wrap_mode(egui::TextWrapMode::Truncate),
+        )
     })
     .inner
 }
@@ -315,15 +320,37 @@ pub fn content_group<R>(
         })
 }
 /// Compact counterpart of content_group for information popovers.
+pub const QUEUE_HEADER_HEIGHT: f32 = 26.;
+pub const QUEUE_COLLAPSED_HEADER_HEIGHT: f32 = 20.;
+
 pub fn compact_group<R>(
     ui: &mut egui::Ui,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    group_with_margin(ui, egui::Margin::same(8), body)
+}
+/// Preserve generous open cards; collapsed queue rows use about two thirds of their old height.
+pub fn queue_step_group<R>(
+    ui: &mut egui::Ui,
+    collapsed: bool,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    group_with_margin(
+        ui,
+        egui::Margin::symmetric(8, if collapsed { 4 } else { 8 }),
+        body,
+    )
+}
+fn group_with_margin<R>(
+    ui: &mut egui::Ui,
+    margin: egui::Margin,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
     egui::Frame::new()
         .fill(CANVAS)
         .stroke(Stroke::new(1_f32, BORDER))
         .corner_radius(6)
-        .inner_margin(8)
+        .inner_margin(margin)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             body(ui)

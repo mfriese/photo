@@ -178,6 +178,7 @@ enum Event {
     Done(Result<(Journal, Option<Receipt>), String>),
 }
 struct Active {
+    worker: Option<std::thread::JoinHandle<()>>,
     receiver: mpsc::Receiver<Event>,
     cancel: Arc<AtomicBool>,
     generation: u64,
@@ -194,6 +195,7 @@ pub struct QueueSession {
     generation: u64,
     mode: Arc<AtomicU8>,
     mode_loaded: bool,
+    automatic_start: bool,
     journal: Option<Journal>,
     active: Option<Active>,
     model: Option<ModelChoice>,
@@ -206,6 +208,7 @@ pub struct QueueSession {
     error: String,
     controls_dirty: bool,
     retry_pending: bool,
+    closed: bool,
 }
 fn check(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
@@ -398,6 +401,7 @@ impl QueueSession {
             generation: 0,
             mode: Arc::new(AtomicU8::new(0)),
             mode_loaded: false,
+            automatic_start: false,
             journal: None,
             active: None,
             model: None,
@@ -414,7 +418,71 @@ impl QueueSession {
             error: String::new(),
             controls_dirty: false,
             retry_pending: false,
+            closed: false,
         }
+    }
+    /// Desktop policy: a new program/library session always starts enabled.
+    /// Subsequent pause/resume within that session remains authoritative.
+    pub fn with_automatic_start(mut self) -> Self {
+        self.automatic_start = true;
+        self.mode_loaded = true;
+        self.controls_dirty = true;
+        self
+    }
+    pub fn planning(&self) -> bool {
+        self.active.as_ref().is_some_and(|active| active.planning)
+    }
+    pub fn planned(&self) -> bool {
+        self.journal.is_some() && !self.reconcile && !self.planning()
+    }
+    /// Cancel, drain bounded channels, join, then release native/GPU resources before process exit.
+    /// Idempotent; a closed session cannot schedule more work.
+    pub fn shutdown(&mut self) -> Result<(), String> {
+        if self.closed {
+            return Ok(());
+        }
+        self.closed = true;
+        self.hold = true;
+        self.planning_hold = true;
+        self.reconcile = false;
+        self.retry_pending = false;
+        let mut failure = None;
+        if let Some(mut active) = self.active.take() {
+            active.cancel.store(true, Ordering::Relaxed);
+            // Done uses a bounded sender; keep draining while joining to avoid a full-channel deadlock.
+            while active
+                .worker
+                .as_ref()
+                .is_some_and(|worker| !worker.is_finished())
+            {
+                if let Ok(event) = active
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_millis(10))
+                {
+                    match event {
+                        Event::ModeSaved(Err(error)) => failure = Some(error),
+                        Event::Done(Err(error)) if !active.planning => failure = Some(error),
+                        _ => {}
+                    }
+                }
+            }
+            for event in active.receiver.try_iter() {
+                match event {
+                    Event::ModeSaved(Err(error)) => failure = Some(error),
+                    Event::Done(Err(error)) if !active.planning => failure = Some(error),
+                    _ => {}
+                }
+            }
+            if let Some(worker) = active.worker.take()
+                && worker.join().is_err()
+            {
+                failure = Some("Transkriptionsworker beim Beenden unerwartet beendet".to_owned());
+            }
+        }
+        self.current = None;
+        self.awake = None;
+        self.engine.release_model();
+        failure.map_or(Ok(()), Err)
     }
     pub fn reset(&mut self) {
         if let Some(active) = &self.active {
@@ -431,7 +499,8 @@ impl QueueSession {
         self.awake = None;
         self.mode = Arc::new(AtomicU8::new(0));
         self.mode_loaded = false;
-        self.controls_dirty = false;
+        self.controls_dirty = self.automatic_start;
+        self.mode_loaded = self.automatic_start;
         self.retry_pending = false;
     }
     pub fn sync(&mut self, root: &Path, sources: Vec<Candidate>, complete: bool) {
@@ -450,8 +519,11 @@ impl QueueSession {
             self.generation += 1;
             self.journal = None;
             self.retry_pending = false;
-            self.mode = Arc::new(AtomicU8::new(0));
-            self.mode_loaded = false;
+            if self.catalog.is_some() || !self.mode_loaded {
+                self.mode = Arc::new(AtomicU8::new(0));
+                self.mode_loaded = self.automatic_start;
+                self.controls_dirty = self.automatic_start;
+            }
             self.last = None;
             self.log.clear();
         }
@@ -648,7 +720,10 @@ impl QueueSession {
             }
         }
         if let Some(value) = saved_mode {
-            let active = self.active.take().unwrap();
+            let mut active = self.active.take().unwrap();
+            if let Some(worker) = active.worker.take() {
+                let _ = worker.join();
+            }
             if active.generation == self.generation {
                 match value {
                     Ok(()) => self.reconcile = true,
@@ -657,7 +732,10 @@ impl QueueSession {
             }
         }
         if let Some(value) = loaded_mode {
-            let active = self.active.take().unwrap();
+            let mut active = self.active.take().unwrap();
+            if let Some(worker) = active.worker.take() {
+                let _ = worker.join();
+            }
             if active.generation == self.generation {
                 match value {
                     Ok(mode) => {
@@ -671,7 +749,10 @@ impl QueueSession {
             }
         }
         if let Some(result) = result {
-            let active = self.active.take().unwrap();
+            let mut active = self.active.take().unwrap();
+            if let Some(worker) = active.worker.take() {
+                let _ = worker.join();
+            }
             if active.generation == self.generation {
                 if let Some(source) = &self.current {
                     let mut findings = active.findings.lock().unwrap_or_else(|e| e.into_inner());
@@ -712,7 +793,7 @@ impl QueueSession {
         }
     }
     fn schedule(&mut self) {
-        if self.active.is_some() || !self.error.is_empty() {
+        if self.closed || self.active.is_some() || !self.error.is_empty() {
             return;
         }
         let Some(catalog) = self.catalog.clone() else {
@@ -727,28 +808,32 @@ impl QueueSession {
             self.controls_dirty = false;
             let mode = self.mode();
             self.active = Some(Active {
+                worker: None,
                 receiver,
                 cancel,
                 generation,
                 planning: false,
                 findings: Default::default(),
             });
-            std::thread::spawn(move || {
+            let worker = std::thread::spawn(move || {
                 let _ = tx.send(Event::ModeSaved(store.save_mode(&catalog.root, mode)));
             });
+            self.active.as_mut().unwrap().worker = Some(worker);
             return;
         }
         if self.planning_hold && !self.mode_loaded {
             self.active = Some(Active {
+                worker: None,
                 receiver,
                 cancel,
                 generation,
                 planning: true,
                 findings: Default::default(),
             });
-            std::thread::spawn(move || {
+            let worker = std::thread::spawn(move || {
                 let _ = tx.send(Event::Mode(store.load_mode(&catalog.root)));
             });
+            self.active.as_mut().unwrap().worker = Some(worker);
             return;
         }
         if self.planning_hold && self.reconcile {
@@ -768,16 +853,18 @@ impl QueueSession {
                 finding: None,
             };
             self.active = Some(Active {
+                worker: None,
                 receiver,
                 cancel,
                 generation,
                 planning: true,
                 findings: Default::default(),
             });
-            std::thread::spawn(move || {
+            let worker = std::thread::spawn(move || {
                 let result = plan(store.as_ref(), &catalog, &stop).map(|j| (j, None));
                 let _ = tx.send(Event::Done(result));
             });
+            self.active.as_mut().unwrap().worker = Some(worker);
             return;
         }
         let Some(mut journal) = self.journal.clone() else {
@@ -787,17 +874,19 @@ impl QueueSession {
             self.controls_dirty = false;
             journal.mode = self.mode();
             self.active = Some(Active {
+                worker: None,
                 receiver,
                 cancel,
                 generation,
                 planning: false,
                 findings: Default::default(),
             });
-            std::thread::spawn(move || {
+            let worker = std::thread::spawn(move || {
                 let result =
                     persist(store.as_ref(), &catalog.root, &mut journal).map(|()| (journal, None));
                 let _ = tx.send(Event::Done(result));
             });
+            self.active.as_mut().unwrap().worker = Some(worker);
             return;
         }
         if self.mode() != Mode::Running || self.hold {
@@ -842,13 +931,14 @@ impl QueueSession {
         );
         let findings = Arc::new(Mutex::new(VecDeque::new()));
         self.active = Some(Active {
+            worker: None,
             receiver,
             cancel,
             generation,
             planning: false,
             findings: findings.clone(),
         });
-        std::thread::spawn(move || {
+        let worker = std::thread::spawn(move || {
             let _lease = lease;
             let notify = |mut p: WorkProgress| {
                 if let Some(text) = p.finding.take()
@@ -883,13 +973,12 @@ impl QueueSession {
             }
             let _ = tx.send(Event::Done(result));
         });
+        self.active.as_mut().unwrap().worker = Some(worker);
     }
 }
 impl Drop for QueueSession {
     fn drop(&mut self) {
-        if let Some(active) = &self.active {
-            active.cancel.store(true, Ordering::Relaxed);
-        }
+        let _ = self.shutdown();
     }
 }
 
@@ -1145,6 +1234,104 @@ mod tests {
         }
     }
     #[test]
+    fn shutdown_and_drop_wait_for_active_inference_release_resources_and_do_not_restart() {
+        struct Slow {
+            entered: AtomicBool,
+            finished: AtomicBool,
+            releases: AtomicUsize,
+        }
+        impl Engine for Slow {
+            fn transcribe(
+                &self,
+                _: &ModelChoice,
+                _: &Path,
+                stop: &AtomicBool,
+                _: &(dyn Fn(WorkProgress) + Sync),
+            ) -> Result<EngineOutput, String> {
+                self.entered.store(true, Ordering::SeqCst);
+                while !stop.load(Ordering::SeqCst) {
+                    std::thread::yield_now();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                self.finished.store(true, Ordering::SeqCst);
+                Err("cancelled".into())
+            }
+            fn release_model(&self) {
+                if self.entered.load(Ordering::SeqCst) {
+                    assert!(
+                        self.finished.load(Ordering::SeqCst),
+                        "native resources released before worker finished"
+                    );
+                }
+                self.releases.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        for explicit in [true, false] {
+            let (_unused, store, _engine, power) = setup();
+            let engine = Arc::new(Slow {
+                entered: AtomicBool::new(false),
+                finished: AtomicBool::new(false),
+                releases: AtomicUsize::new(0),
+            });
+            let mut queue = QueueSession::new(
+                store.clone(),
+                engine.clone(),
+                Arc::new(Power(power.clone())),
+            );
+            let root = Path::new("/shutdown");
+            queue.sync(root, vec![candidate("a.wav")], true);
+            queue.set_model(Some(choice()));
+            until(&mut queue, |_| engine.entered.load(Ordering::SeqCst));
+            if explicit {
+                queue.shutdown().unwrap();
+                let released = engine.releases.load(Ordering::SeqCst);
+                queue.shutdown().unwrap();
+                queue.poll();
+                assert!(!queue.busy());
+                assert_eq!(engine.releases.load(Ordering::SeqCst), released);
+            } else {
+                drop(queue);
+            }
+            assert!(engine.finished.load(Ordering::SeqCst));
+            assert!(engine.releases.load(Ordering::SeqCst) > 0);
+            assert_eq!(power.held.load(Ordering::SeqCst), 0);
+            assert!(store.texts.lock().unwrap().is_empty());
+            assert!(matches!(
+                store.journals.lock().unwrap()[root].jobs[&candidate("a.wav").source].state,
+                JobState::Pending
+            ));
+        }
+    }
+    #[test]
+    fn shutdown_drains_a_full_completion_channel_before_joining() {
+        let (mut queue, _, _, _) = setup();
+        let (tx, receiver) = mpsc::sync_channel(1);
+        let finished = Arc::new(AtomicBool::new(false));
+        let done = finished.clone();
+        tx.send(Event::Progress(WorkProgress {
+            phase: Phase::Planning,
+            fraction: 0.,
+            finding: None,
+        }))
+        .unwrap();
+        let worker = std::thread::spawn(move || {
+            tx.send(Event::Done(Ok((Journal::default(), None))))
+                .unwrap();
+            done.store(true, Ordering::SeqCst);
+        });
+        queue.active = Some(Active {
+            worker: Some(worker),
+            receiver,
+            cancel: Arc::new(AtomicBool::new(false)),
+            generation: 0,
+            planning: true,
+            findings: Default::default(),
+        });
+        queue.shutdown().unwrap();
+        assert!(finished.load(Ordering::SeqCst));
+        assert!(!queue.busy());
+    }
+    #[test]
     fn retry_requested_during_inference_is_preserved_when_the_active_job_returns() {
         let (mut queue, store, engine, _power) = setup();
         let root = Path::new("/library");
@@ -1171,6 +1358,41 @@ mod tests {
         assert_eq!(engine.calls.load(Ordering::SeqCst), 2);
     }
     #[test]
+    fn automatic_start_ignores_a_previous_pause_but_respects_new_user_pause_and_restart() {
+        let (queue, store, engine, _) = setup();
+        let root = Path::new("/library");
+        store.journals.lock().unwrap().insert(
+            root.into(),
+            Journal {
+                mode: Mode::Paused,
+                ..Default::default()
+            },
+        );
+        let mut queue = queue.with_automatic_start();
+        queue.hold_planning(true);
+        queue.sync(root, vec![candidate("a.wav")], false);
+        until(&mut queue, |q| q.mode_loaded() && !q.busy());
+        assert_eq!(queue.mode(), Mode::Running);
+        assert_eq!(store.journals.lock().unwrap()[root].mode, Mode::Running);
+        queue.set_mode(Mode::Paused);
+        until(&mut queue, |q| !q.busy());
+        queue.sync(root, vec![candidate("a.wav")], true);
+        assert_eq!(queue.mode(), Mode::Paused);
+        queue.reset();
+        queue.sync(root, vec![candidate("a.wav")], false);
+        until(&mut queue, |q| !q.busy());
+        assert_eq!(queue.mode(), Mode::Running);
+        queue.reset();
+        queue.set_mode(Mode::Paused);
+        queue.sync(root, vec![candidate("a.wav")], true);
+        assert_eq!(
+            queue.mode(),
+            Mode::Paused,
+            "an immediate user pause must survive first inventory synchronization"
+        );
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 0);
+    }
+    #[test]
     fn paused_mode_is_saved_before_any_expensive_planning_and_survives_a_fresh_session() {
         let (mut queue, store, engine, power) = setup();
         let root = Path::new("/library");
@@ -1186,6 +1408,120 @@ mod tests {
         restored.hold_planning(true);
         until(&mut restored, |q| q.mode_loaded() && !q.busy());
         assert_eq!(restored.mode(), Mode::Paused);
+    }
+    #[test]
+    fn per_step_repeat_waits_for_cancelled_inference_and_preserves_earlier_audio_results() {
+        use crate::{
+            audio_library::{Progress, Repository, Session, Snapshot, Stage},
+            transcription::{Locations, ModelSession, ModelStore, Prepared, Settings},
+        };
+        struct Audio {
+            steps: Mutex<Vec<Stage>>,
+            power: Arc<PowerState>,
+        }
+        impl Repository for Audio {
+            fn read(&self, _: &Path) -> Result<Snapshot, String> {
+                Ok(Snapshot::default())
+            }
+            fn run(
+                &self,
+                _: &Path,
+                stage: Stage,
+                _: &AtomicBool,
+                _: &dyn Fn(Progress),
+            ) -> Result<(), String> {
+                assert_eq!(
+                    self.power.held.load(Ordering::SeqCst),
+                    0,
+                    "repeat overlapped inference"
+                );
+                self.steps.lock().unwrap().push(stage);
+                Ok(())
+            }
+        }
+        struct Models;
+        impl ModelStore for Models {
+            fn locations(&self) -> Locations {
+                Locations {
+                    models: "models".into(),
+                    preferences: "prefs".into(),
+                }
+            }
+            fn inspect(
+                &self,
+                _: &AtomicBool,
+                _: &(dyn Fn(crate::transcription::Progress) + Sync),
+            ) -> Result<Prepared, String> {
+                Ok(Default::default())
+            }
+            fn prepare(
+                &self,
+                _: &Settings,
+                _: &AtomicBool,
+                _: &(dyn Fn(crate::transcription::Progress) + Sync),
+            ) -> Result<Prepared, String> {
+                unreachable!()
+            }
+        }
+        let (mut queue, _, engine, power) = setup();
+        let root = Path::new("/library");
+        let repo = Arc::new(Audio {
+            steps: Mutex::new(Vec::new()),
+            power,
+        });
+        let mut audio = Session::new(Some(repo.clone()));
+        audio.open(root);
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while !audio.complete() {
+            audio.poll(true);
+            assert!(std::time::Instant::now() < limit);
+            std::thread::yield_now();
+        }
+        repo.steps.lock().unwrap().clear();
+        let source = Arc::new(GpsSource {
+            blocked: AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+        });
+        let mut gps = crate::geo_sweep::Session::new(source, Arc::default());
+        gps.sync(root, vec![]);
+        while !gps.complete() {
+            gps.poll(true);
+            assert!(std::time::Instant::now() < limit);
+            std::thread::yield_now();
+        }
+        engine.block.store(true, Ordering::SeqCst);
+        queue.sync(root, vec![candidate("a.wav")], true);
+        queue.set_model(Some(choice()));
+        until(&mut queue, |q| {
+            q.current().is_some() && engine.calls.load(Ordering::SeqCst) == 1
+        });
+        let mut repeats = crate::processing::Repeats::default();
+        repeats.request(crate::processing::Step::Years);
+        repeats.request(crate::processing::Step::Years);
+        let mut models = ModelSession::new(Arc::new(Models));
+        while repeats.pending() || !audio.complete() {
+            repeats.advance(&mut audio, &mut gps, &mut queue, &mut models, ready());
+            assert!(
+                std::time::Instant::now() < limit,
+                "repeat stalled {}",
+                queue.error()
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(*repo.steps.lock().unwrap(), vec![Stage::Years]);
+        assert!(audio.stage_progress(Stage::Durations).0);
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 1);
+        queue.set_mode(Mode::Paused);
+        repeats.request(crate::processing::Step::Transcription);
+        while repeats.pending() {
+            repeats.advance(&mut audio, &mut gps, &mut queue, &mut models, ready());
+            assert!(std::time::Instant::now() < limit);
+        }
+        assert_eq!(
+            queue.mode(),
+            Mode::Paused,
+            "per-step repeat must not implicitly resume a paused queue"
+        );
     }
     #[test]
     fn serial_coordinator_finishes_all_audio_stages_before_gps_and_delayed_inference() {

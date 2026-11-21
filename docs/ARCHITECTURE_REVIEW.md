@@ -70,3 +70,11 @@ Der produktive Startpfad liest Audio, Tags und Kommentare ausschließlich aus SQ
 Reine SQL-Leser reservieren keinen Schreiber und können ihre Verbindung innerhalb eines Workers wiederverwenden. Audioliste und Verweise werden gesammelt abgefragt. Dauer- und Jahrescaches enthalten keine maßgeblichen Nutzdaten und bleiben vollständig rekonstruierbar. Wiederanlauf speichert den typisierten Betriebsmodus unabhängig von einem Transkriptionsjournal. Originale, Quellen-YAMLs und exFAT-Publikationsstrategie bleiben erhalten.
 
 Grenzen: der erste Aufbau ohne Cache benötigt echte Datei-I/O; native Aufrufe sind nicht hart abbrechbar. Der allgemeine Fotobestand und sichtbare Vorschaubilder laden weiterhin parallel zur Wartung. Auf dem externen Benutzerdatenträger wurden keine Laufzeiten gemessen; keine manuelle Sichtprüfung oder neuen Screenshots behaupten.
+
+
+## Queue-Übersicht und automatischer Sitzungsstart
+Die vollständige Schrittprojektion liegt in application/processing::steps; die Präsentation zeigt alle acht Einträge ohne vergangene schnelle Schritte zu verlieren. Audiofortschritte werden pro bestätigtem Schritt sitzungsgebunden gehalten. Der Desktop wählt explizit with_automatic_start; nachfolgende Benutzerpause bleibt bei asynchroner Inventarsynchronisation erhalten. Buttons verwenden die vorhandene Transportkomponente und gezeichnete Icons; Stop entfällt ausschließlich aus dieser Oberfläche. Keine Änderung an Quellenformaten, Wartungsparallelität oder Cacheherkunft.
+
+
+## Shutdown-Review: Whisper und Metal
+Der frühere Queue-Drop signalisierte lediglich Abbruch und konnte einen lebenden Inferenzthread beim Prozessende zurücklassen. Aktive Worker besitzen nun echte JoinHandles; normaler Ergebnistransfer, on_exit und Drop warten auf deren Ende. Während Shutdown wird der begrenzte Ereigniskanal weiter geleert, damit ein blockierter Done-Sender den Join nicht verhindert. Kontextfreigabe erfolgt vor dem globalen Metal-Device-Abbau, auch bei vergiftetem Cache-Mutex. Prozessgrenzen wurden mit vorhandenem large-v3-turbo, Metal und öffentlichem jfk.wav sowohl während Inferenz als auch mit gecachtem Kontext geprüft; keine Originalmedien geändert.

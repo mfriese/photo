@@ -167,6 +167,41 @@ impl Repository for AudioLibrary {
             Ok(result)
         })
     }
+    fn rerun(
+        &self,
+        root: &Path,
+        stage: Stage,
+        stop: &AtomicBool,
+        progress: &dyn Fn(Progress),
+    ) -> Result<(), String> {
+        check(stop)?;
+        if stage == Stage::Durations {
+            self.database.transaction(root, |tx| {
+                tx.execute("DELETE FROM audio_verifications", [])?;
+                Ok(())
+            })?;
+        }
+        if stage == Stage::Metadata {
+            if let Some(tags) = &self.tags {
+                photosuite_application::organization::rebuild_projection(
+                    tags.as_ref(),
+                    root,
+                    stop,
+                )?;
+            }
+            check(stop)?;
+            if let Some(comments) = &self.comments {
+                photosuite_application::comments::rebuild_catalog(
+                    comments.as_ref(),
+                    root,
+                    stop,
+                    &|_| {},
+                )?;
+            }
+            return Ok(());
+        }
+        self.run(root, stage, stop, progress)
+    }
     fn run(
         &self,
         root: &Path,
@@ -205,14 +240,17 @@ impl Repository for AudioLibrary {
                     .map_err(|_| "Audioinventar unterbrochen")? = Some((root.into(), files));
             }
             Stage::Durations => {
-                let files = self
+                let cached = self
                     .pending
                     .lock()
                     .map_err(|_| "Audioinventar unterbrochen")?
                     .as_ref()
-                    .filter(|(r, _)| r == root)
-                    .map(|(_, f)| f.clone())
-                    .ok_or("Audiobestand muss zuerst geprüft werden")?;
+                    .filter(|(library, _)| library == root)
+                    .map(|(_, files)| files.clone());
+                let files = match cached {
+                    Some(files) => files,
+                    None => self.scan(root, stop, progress)?,
+                };
                 let cache = CapturedInventory {
                     inner: self.durations.as_ref(),
                     files: &files,
@@ -423,6 +461,14 @@ mod tests {
             "today's unchanged duration must be reused"
         );
         assert_eq!(std::fs::read(&path).unwrap(), original);
+        adapter
+            .rerun(root, Stage::Durations, &stop, &|_| {})
+            .unwrap();
+        assert_eq!(
+            source.0.load(Ordering::SeqCst),
+            1,
+            "explicit duration repeat must remeasure even a current cache"
+        );
         std::fs::remove_file(root.join(crate::library_db::FILE)).unwrap();
         // Derived length/year caches recover from audio files; authoritative links are rebuilt separately from media YAMLs.
         for stage in [
@@ -433,7 +479,7 @@ mod tests {
         ] {
             adapter.run(root, stage, &stop, &|_| {}).unwrap();
         }
-        assert_eq!(source.0.load(Ordering::SeqCst), 1);
+        assert_eq!(source.0.load(Ordering::SeqCst), 2);
         assert_eq!(adapter.read(root).unwrap().durations.len(), 1);
         let recovered = adapter.read(root).unwrap();
         assert_eq!(recovered.years, vec![("1980".into(), 12.)]);
