@@ -8,12 +8,32 @@ impl super::Suite {
         visible: &[usize],
         pending: &mut Vec<crate::commands::Command>,
     ) {
+        if self.selected.is_none() && self.viewer_fullscreen {
+            self.viewer_fullscreen = false;
+            self.viewer_video = None;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+        }
         if let Some(index) = self.selected {
             let Some(m) = self.items.get(index).cloned() else {
                 self.selected = None;
                 self.storyboard.clear();
                 return;
             };
+            if !ctx.wants_keyboard_input()
+                && !self.comments.is_open()
+                && !self.options_open
+                && !self.tag_view.open
+                && !self.bindings.visible
+                && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::F))
+            {
+                self.viewer_fullscreen = !self.viewer_fullscreen;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.viewer_fullscreen));
+            }
+            if self.viewer_fullscreen && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.viewer_fullscreen = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
+                return;
+            }
             if !self.comments.is_open()
                 && !self.location_open
                 && !self.options_open
@@ -32,68 +52,112 @@ impl super::Suite {
             let mut previous = false;
             let mut open = true;
             let (date, clock, date_detail) = super::captions::text(&mut self.media_dates, &m);
-            egui::Window::new(format!("Großansicht · {date} {clock}"))
-                .id(egui::Id::new("media_viewer"))
-                .open(&mut open)
-                .default_size([950., 700.])
-                .max_width((ctx.content_rect().width() - 32.).max(280.))
-                .max_height((ctx.content_rect().height() - 32.).max(240.))
-                .show(ctx, |ui| {
-                    crate::options_ui::spacing(ui);
-                    let actions = viewer_controls(
-                        ui,
-                        ViewerState {
-                            video: m.is_video(),
-                            position,
-                            total: visible.len(),
-                            saving: self.editor.is_saving(),
-                            write_exif: self.write_exif,
-                        },
-                        |ui| self.compact_photo_audio(ui, m.path(), m.is_photo()),
-                    );
-                    if actions.record {
-                        self.record_photo = Some(index);
-                    }
-                    if actions.tags {
-                        match self.organization.file(m.path()) {
-                            Ok(file) => self.tag_view.edit(file),
-                            Err(error) => self.status = error,
-                        };
-                    }
-                    previous = actions.previous;
-                    next = actions.next;
-                    if actions.reveal
-                        && let Err(error) = self.services.opener.reveal(m.path())
+            if self.viewer_fullscreen {
+                egui::Area::new(egui::Id::new("fullscreen_viewer"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(ctx.content_rect().min)
+                    .show(ctx, |ui| {
+                        ui.set_min_size(ctx.content_rect().size());
+                        ui.painter()
+                            .rect_filled(ctx.content_rect(), 0., egui::Color32::BLACK);
+                        if !m.is_video() {
+                            centered_preview(
+                                ui,
+                                egui::Image::from_uri(image_uri(m.path(), self.editor.rotations())),
+                            );
+                        } else {
+                            ui.label("Videowiedergabe im nativen Player · F beendet Vollbild");
+                        }
+                    });
+                if m.is_video() && self.viewer_video.as_deref() != Some(m.path()) {
+                    let transport = self.services.audio_player.transport();
+                    let result = if transport.playing {
+                        self.services.audio_player.control(
+                            photosuite_application::diary::AudioControl::Configure {
+                                playing: false,
+                                category: transport.category_filter,
+                            },
+                        )
+                    } else {
+                        Ok(())
+                    };
+                    if let Err(error) =
+                        result.and_then(|_| self.services.video_player.play(m.path()))
                     {
                         self.status = error;
                     }
-                    if let Some(command) = actions.command {
-                        pending.push(command);
-                    }
-                    if actions.reload {
-                        self.storyboard.clear();
-                    }
-                    ui.add_space(4.);
-                    if m.is_video() {
-                        self.storyboard
-                            .show(ui, m.path(), self.services.video_preview.clone());
-                    } else {
-                        self.storyboard.clear();
-                        centered_preview(
+                    self.viewer_video = Some(m.path().to_owned());
+                } else if !m.is_video() {
+                    self.viewer_video = None;
+                }
+            } else {
+                self.viewer_video = None;
+                egui::Window::new(format!("Großansicht · {date} {clock}"))
+                    .id(egui::Id::new("media_viewer"))
+                    .open(&mut open)
+                    .default_size([950., 700.])
+                    .max_width((ctx.content_rect().width() - 32.).max(280.))
+                    .max_height((ctx.content_rect().height() - 32.).max(240.))
+                    .show(ctx, |ui| {
+                        crate::options_ui::spacing(ui);
+                        let actions = viewer_controls(
                             ui,
-                            egui::Image::from_uri(image_uri(m.path(), self.editor.rotations()))
-                                .sense(egui::Sense::click()),
-                        )
-                        .on_hover_text(&date_detail)
-                        .context_menu(|ui| {
-                            if ui.button("Ort anzeigen …").clicked() {
-                                self.open_photo_location(&m);
-                                ui.close();
-                            }
-                        });
-                    }
-                });
-            if (!self.comments.is_open() || self.comment_view.inline) && !self.tag_view.open {
+                            ViewerState {
+                                video: m.is_video(),
+                                position,
+                                total: visible.len(),
+                                saving: self.editor.is_saving(),
+                                write_exif: self.write_exif,
+                            },
+                            |ui| self.compact_photo_audio(ui, m.path(), m.is_photo()),
+                        );
+                        if actions.record {
+                            self.record_photo = Some(index);
+                        }
+                        if actions.tags {
+                            match self.organization.file(m.path()) {
+                                Ok(file) => self.tag_view.edit(file),
+                                Err(error) => self.status = error,
+                            };
+                        }
+                        previous = actions.previous;
+                        next = actions.next;
+                        if actions.reveal
+                            && let Err(error) = self.services.opener.reveal(m.path())
+                        {
+                            self.status = error;
+                        }
+                        if let Some(command) = actions.command {
+                            pending.push(command);
+                        }
+                        if actions.reload {
+                            self.storyboard.clear();
+                        }
+                        ui.add_space(4.);
+                        if m.is_video() {
+                            self.storyboard
+                                .show(ui, m.path(), self.services.video_preview.clone());
+                        } else {
+                            self.storyboard.clear();
+                            centered_preview(
+                                ui,
+                                egui::Image::from_uri(image_uri(m.path(), self.editor.rotations()))
+                                    .sense(egui::Sense::click()),
+                            )
+                            .on_hover_text(&date_detail)
+                            .context_menu(|ui| {
+                                if ui.button("Ort anzeigen …").clicked() {
+                                    self.open_photo_location(&m);
+                                    ui.close();
+                                }
+                            });
+                        }
+                    });
+            }
+            if !ctx.wants_keyboard_input()
+                && (!self.comments.is_open() || self.comment_view.inline)
+                && !self.tag_view.open
+            {
                 next |= ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
                 previous |= ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
             }

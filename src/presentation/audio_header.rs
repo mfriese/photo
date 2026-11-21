@@ -5,7 +5,6 @@ use eframe::egui;
 use photosuite_application::diary::{AudioControl, AudioTransportSnapshot, VerificationProgress};
 #[derive(Default)]
 pub(super) struct AudioHeader {
-    pub cache_revision: u64,
     pub draft: photosuite_application::diary::GalleryAudio,
     drag: Option<f64>,
     photo: Option<std::path::PathBuf>,

@@ -20,6 +20,7 @@ Nur bei UI-/Theme-/Navigationsänderungen lesen. Fachabläufe bleiben in Applica
 - Fußzeile einzeilig: Medien gesamt/Fotos/Audios/Videos, danach weniger beständige Zustände. Startseite letzte fünf andere Bibliotheken ohne Dateisystemprobe beim Rendern.
 
 ## Betrachter und Recorder
+- F schaltet die Großansicht bildschirmfüllend; Escape verlässt zuerst Vollbild. Pfeile links/rechts blättern, außer bei Texteingabe. Audiowiedergabe bei Fotos erhalten; Videos im nativen Player automatisch starten und vorher laufendes Audio pausieren.
 - Bild horizontal zentrieren, sämtliche Controls darüber. Datum/Uhrzeit neben Fenstertitel, keine 1/1- oder EXIF-Statuszeile. Drei dezente Gruppen: Navigation/Aktionen, Tags/Finder untereinander, Audio. Schmal: Audiogruppe als nächste volle Zeile.
 - Audio oben Play/Kommentarspur/Jahresfenster; darunter Record unter Play, gleich hohe Kurve, Pegel, rechts Mikrofon und Zugang zum separaten Recorder. Kein Kommentar: Controls/Spur deutlich deaktivieren.
 - Recorder: Titelzeile mit X, Geräte beim Öffnen der rechtsbündigen Combo aktualisieren. Play/Record-Pause/Stop links, Status dazwischen. Keine kurz flackernden Vorbereitungs-/Pausenmeldungen. Foto neben Beschreibung in voller Höhe, X/Häkchen zum Verwerfen/Speichern; Rückfrage mit Abstand und zentrierten Buttons Speichern/Verwerfen.
@@ -34,5 +35,5 @@ Nur bei UI-/Theme-/Navigationsänderungen lesen. Fachabläufe bleiben in Applica
 - Bibliotheksstart wartet sichtbar auf langsame Datenträger, versucht erneut, bietet Abbrechen/andere Bibliothek und endet nach Zeitlimit leer mit „Bibliothek aktuell nicht erreichbar.“ Keine UI-blockierenden Zugriffe.
 
 ## Ressourcen und Prüfung
-- Bilddecoder begrenzen (zwei aktiv, 32 wartend), Galeriekacheln 256/512/1024, Großbild maximal 4096, Galerie-RGBA-Cache 256 MiB/1024 Einträge. Keine egui-Aufrufe unter Cache-Lock; evizierte Texturen freigeben. Scans zuerst Jahre, dann priorisiertes gewähltes Jahr, begrenzte Batches.
+- Bilddecoder begrenzen (zwei aktiv, 32 wartend), Galeriekacheln 256/512/1024, Großbild maximal 4096, Galerie-RGBA-Cache 256 MiB/1024 Einträge; Großansicht mit getrenntem Budget von 128 MiB/1024 Einträgen, damit Navigation keine Rastervorschaubilder verdrängt. Keine egui-Aufrufe unter Cache-Lock; evizierte Texturen freigeben. Scans zuerst Jahre, dann priorisiertes gewähltes Jahr, begrenzte Batches.
 - Relevante Layout-/Interaktionstests mit künstlichen Daten; kleine Fenster, lange Texte und deaktivierte Zustände beachten. Screenshots derzeit ausgesetzt; keine echte Bibliothek zur Sichtprüfung öffnen.

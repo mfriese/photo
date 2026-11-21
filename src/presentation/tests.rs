@@ -224,6 +224,7 @@ pub(super) fn test_suite() -> Suite {
         search_open: false,
         help_open: false,
         audio_library: photosuite_application::audio_library::Session::new(None),
+        audio_library_revision: 0,
         audio_header: Default::default(),
         audio_preparation: photosuite_application::diary_preparation::AudioPreparation::new(
             adapters.clone(),
@@ -237,6 +238,8 @@ pub(super) fn test_suite() -> Suite {
         diary: Default::default(),
         diary_catalog: Default::default(),
         remember_after_scan: false,
+        viewer_fullscreen: false,
+        viewer_video: None,
         storyboard: Default::default(),
         preferences: Default::default(),
         persistence: None,
@@ -2899,5 +2902,64 @@ fn location_sidebar_choices_toggle_filter_and_reset_without_changing_period() {
             suite.place_filter.selected.is_empty(),
             "disclosure leaves filters unchanged"
         );
+    }
+}
+
+#[test]
+fn viewer_navigation_preserves_library_sessions_and_inventory() {
+    let mut suite = test_suite();
+    suite.root = Some("/Fotos".into());
+    suite.items = ["a.jpg", "b.jpg"]
+        .into_iter()
+        .map(|name| {
+            Media::from_path(std::path::Path::new("/Fotos").join(name), "2020/01".into()).unwrap()
+        })
+        .collect();
+    suite.selected = Some(0);
+    suite.audio_library_revision = 42;
+    for destination in [1, 0, 1, 0] {
+        suite.navigate_viewer(destination);
+        assert_eq!(suite.selected, Some(destination));
+        assert_eq!(suite.items.len(), 2);
+        assert!(!suite.collection.is_loading());
+        assert!(!suite.comments.is_loading());
+        assert!(!suite.organization.loading());
+        assert_eq!(suite.audio_library_revision, 42);
+    }
+}
+
+#[test]
+fn fullscreen_viewer_toggles_and_navigates_without_reloading() {
+    let mut suite = test_suite();
+    suite.items = ["a.jpg", "b.jpg"]
+        .into_iter()
+        .map(|name| {
+            Media::from_path(std::path::Path::new("/Fotos").join(name), "2020/01".into()).unwrap()
+        })
+        .collect();
+    suite.selected = Some(0);
+    let ctx = egui::Context::default();
+    for (key, fullscreen, selected) in [
+        (egui::Key::F, true, 0),
+        (egui::Key::ArrowRight, true, 1),
+        (egui::Key::ArrowLeft, true, 0),
+        (egui::Key::Escape, false, 0),
+    ] {
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            suite.media_viewer(ctx, &[0, 1], &mut Vec::new())
+        });
+        assert_eq!(suite.viewer_fullscreen, fullscreen);
+        assert_eq!(suite.selected, Some(selected));
+        assert!(!suite.collection.is_loading());
     }
 }

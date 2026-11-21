@@ -9,6 +9,7 @@
 ## Fokussiert arbeiten
 - Den konkreten Auftrag vollständig lösen. Keine zusätzlichen Features, umfassenden Refactorings, Abhängigkeitsupdates oder projektweiten Aufräumaktionen ohne sachlichen Bezug.
 - Vor dem Editieren den betroffenen Ablauf und seine Schichtengrenzen kurz bestimmen. Nur nach benötigten Symbolen suchen (`rg`); kleine Dateiausschnitte lesen, unabhängige Prüfungen bündeln, Ausgaben begrenzen.
+- Architektur schrittweise verbessern: Bei jeder Aufgabe kleine, sachlich zugehörige Teile glätten, Verantwortlichkeiten und DDD-Schichtengrenzen klären und bestehendes Verhalten durch passende Tests erhalten. Keine unabhängigen Großumbauten daraus ableiten.
 - Bei jeder Änderung die Architektur **im betroffenen Ablauf** über die relevanten Schichten prüfen und lokale Verstöße korrigieren. Keine vollständige Projektprüfung für jede kleine UI-Änderung. Größere unabhängige Befunde mit Auswirkung benennen und separat behandeln.
 - Bestehende Abstraktionen und gemeinsame Regeln wiederverwenden. Neue Ports/Module nur bei konkreter Verantwortung oder echter Test-/Plattformgrenze. Keine Schichten, Wrapper oder Aggregate allein um eines Musters willen.
 - Keine Delegation/Subagenten ohne ausdrücklichen Auftrag. Keine wiederholten Vollprüfungen oder Paketbauten nach unverändertem Code.

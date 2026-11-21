@@ -57,6 +57,7 @@ pub struct Suite {
     focus_search: bool,
     search_open: bool,
     help_open: bool,
+    audio_library_revision: u64,
     audio_header: audio_header::AudioHeader,
     audio_preparation: photosuite_application::diary_preparation::AudioPreparation,
     viewer_audio: audio_header::AudioHeader,
@@ -65,6 +66,8 @@ pub struct Suite {
     diary: photosuite_application::diary::DiarySession,
     diary_catalog: photosuite_application::diary::DiaryCatalog,
     remember_after_scan: bool,
+    viewer_fullscreen: bool,
+    viewer_video: Option<PathBuf>,
     storyboard: crate::storyboard_ui::StoryboardView,
     preferences: photosuite_application::preferences::Preferences,
     persistence: Option<photosuite_application::preferences::Persistence>,
@@ -716,6 +719,7 @@ pub fn create(
         audio_library: photosuite_application::audio_library::Session::new(
             services.audio_library.clone(),
         ),
+        audio_library_revision: 0,
         audio_header: Default::default(),
         audio_preparation: photosuite_application::diary_preparation::AudioPreparation::with_cache(
             services.audio_source.clone(),
@@ -734,6 +738,8 @@ pub fn create(
             services.work_priority.clone(),
         ),
         remember_after_scan: false,
+        viewer_fullscreen: false,
+        viewer_video: None,
         storyboard: Default::default(),
         preferences: preferences.clone(),
         persistence: Some(photosuite_application::preferences::Persistence::new(

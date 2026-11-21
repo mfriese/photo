@@ -19,6 +19,8 @@
             }
             [self.player play];
         }
+    } else if (event.keyCode == 3) {
+        if (!event.isARepeat) [self.window toggleFullScreen:nil];
     } else if (event.keyCode == 53) {
         if (self.window.styleMask & NSWindowStyleMaskFullScreen) { [self.window toggleFullScreen:nil]; }
         else { [self.window performClose:nil]; }

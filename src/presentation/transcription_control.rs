@@ -107,8 +107,8 @@ impl Suite {
                 audio_active: self.services.work_priority.audio_active(),
             },
         );
-        if self.audio_library.revision() != self.audio_header.cache_revision {
-            self.audio_header.cache_revision = self.audio_library.revision();
+        if self.audio_library.revision() != self.audio_library_revision {
+            self.audio_library_revision = self.audio_library.revision();
             self.audio_header.draft = Default::default();
             if self.audio_library.complete()
                 && let Some(root) = &self.root

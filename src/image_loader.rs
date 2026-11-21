@@ -10,6 +10,19 @@ use std::{
 type Entry = Option<Result<Arc<ColorImage>, String>>;
 const CACHE_BYTES: usize = 256 * 1024 * 1024;
 const CACHE_ENTRIES: usize = 1024;
+const VIEWER_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
+// Resolution is part of our URI contract; full previews have their own eviction pool.
+fn viewer_image(uri: &str) -> bool {
+    uri.strip_prefix("oriented://")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(options, _)| {
+            options
+                .split_once(':')
+                .is_none_or(|(_, edge)| edge == "4096")
+        })
+}
+
 struct CacheEntry {
     generation: u64,
     last_used: u64,
@@ -131,12 +144,23 @@ fn publish(
         Some(Err(error)) => error.len(),
         None => 0,
     };
-    let mut bytes: usize = cache.values().map(cost).sum();
+    let viewer = viewer_image(key);
+    let budget = if viewer {
+        budget.min(VIEWER_CACHE_BYTES)
+    } else {
+        budget
+    };
+    let in_pool = |uri: &str| viewer_image(uri) == viewer;
+    let mut bytes: usize = cache
+        .iter()
+        .filter(|(uri, _)| in_pool(uri))
+        .map(|(_, entry)| cost(entry))
+        .sum();
     let mut victims = Vec::new();
-    while bytes > budget || cache.len() > CACHE_ENTRIES {
+    while bytes > budget || cache.keys().filter(|uri| in_pool(uri)).count() > CACHE_ENTRIES {
         let Some(oldest) = cache
             .iter()
-            .filter(|(_, e)| e.state.is_some())
+            .filter(|(uri, e)| in_pool(uri) && e.state.is_some())
             .min_by_key(|(_, e)| e.last_used)
             .map(|(key, _)| key.clone())
         else {
@@ -395,5 +419,42 @@ mod tests {
             );
             std::thread::yield_now();
         }
+    }
+}
+
+#[cfg(test)]
+mod eviction_pool_tests {
+    use super::*;
+    #[test]
+    fn browsing_large_images_preserves_gallery_previews() {
+        let cache: Cache = Default::default();
+        let thumbnail = "oriented://0:512/photo.jpg";
+        let image = || Ok(Arc::new(ColorImage::filled([1, 1], egui::Color32::WHITE)));
+        for (generation, key) in [thumbnail, "oriented://0/a.jpg", "oriented://0/b.jpg"]
+            .into_iter()
+            .enumerate()
+        {
+            cache.lock().unwrap().insert(
+                key.into(),
+                CacheEntry {
+                    generation: generation as u64,
+                    last_used: generation as u64,
+                    state: None,
+                },
+            );
+            let victims = publish(
+                &cache,
+                key,
+                generation as u64,
+                image(),
+                generation as u64,
+                4,
+            );
+            assert!(!victims.iter().any(|key| key == thumbnail));
+        }
+        let entries = cache.lock().unwrap();
+        assert!(entries.contains_key(thumbnail));
+        assert!(!entries.contains_key("oriented://0/a.jpg"));
+        assert!(entries.contains_key("oriented://0/b.jpg"));
     }
 }

@@ -12,7 +12,7 @@ PhotoSuite macht deine nach **Jahr und Monat** geordnete Sammlung durchsuchbar �
 ## Funktionen
 
 - **Fotowand:** virtualisiertes Raster, fünf Vorschaugrößen, optional quadratischer Beschnitt, Jahres-/Monatsnavigation und Suche.
-- **Fotos und Videos:** Großansicht, EXIF-Ausrichtung, native Videowiedergabe und sechs Standbilder pro Video – ohne externes FFmpeg.
+- **Fotos und Videos:** Großansicht mit Vollbildmodus (F), Blättern mit Pfeiltasten, EXIF-Ausrichtung, native Videowiedergabe und sechs Standbilder pro Video – ohne externes FFmpeg.
 - **Bibliothekswechsel:** fünf zuletzt geöffnete andere Sammlungen direkt auf der Startseite öffnen – auch bei nicht verfügbarem Datenträger.
 - **Audio-Diary:** gemeinsame Zeitachse mit Abschnitten proportional zur Aufnahmedauer, sofortiger Anzeige aus SQLite, geordnetem Hintergrundabgleich und fünf zeitlich passenden Fotos.
 - **Gesprochene Kommentare:** direkt in der Großansicht oder im Aufnahmedialog zum Foto aufnehmen, bei Bildwechsel automatisch speichern und weiter aufnehmen, Mikrofon wählen, Pegel beobachten und vor dem Speichern vorhören.
