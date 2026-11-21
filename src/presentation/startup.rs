@@ -103,7 +103,7 @@ impl super::Suite {
         let mut cancel = false;
         let mut other = false;
         let mut open = true;
-        egui::Window::new("Bibliothek öffnen").id(egui::Id::new("startup_readiness")).open(&mut open).collapsible(false).resizable(false)
+        crate::theme::dialog("Bibliothek öffnen").id(egui::Id::new("startup_readiness")).open(&mut open).collapsible(false).resizable(false)
             .default_width(460.).max_width((ctx.content_rect().width()-32.).max(260.)).show(ctx,|ui|{
                 crate::options_ui::spacing(ui);
                 ui.horizontal(|ui|{ui.add(egui::Spinner::new().size(18.));ui.add(egui::Label::new(&message).wrap());});

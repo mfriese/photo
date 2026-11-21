@@ -226,7 +226,7 @@ impl DuplicateDialog {
         if self.review.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
-        egui::Window::new("Duplikate suchen")
+        crate::theme::dialog("Duplikate suchen")
             .open(&mut self.visible)
             .default_size([700., 560.])
             .max_width((ctx.content_rect().width() - 32.).max(260.))

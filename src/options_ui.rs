@@ -75,7 +75,7 @@ pub fn show(
         geodata,
     } = state;
     let mut action = None;
-    egui::Window::new("Einstellungen").open(open).default_width(480.).default_height(720.)
+    crate::theme::dialog("Einstellungen").open(open).default_width(480.).default_height(720.)
         .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
             spacing(ui);
             ui.horizontal_wrapped(|ui|{

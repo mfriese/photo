@@ -41,7 +41,7 @@ impl TagView {
         let mut discard = false;
         let mut rebuild = false;
         let mut cancel_loading = false;
-        egui::Window::new("Tags").open(&mut self.open).default_width(520.)
+        crate::theme::dialog("Tags").open(&mut self.open).default_width(520.)
             .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true).show(ctx,|ui|{
                 crate::options_ui::spacing(ui);
                 ui.label("Tags ordnen Dateien zu. Links filtern Tags die aktuelle Ansicht.");

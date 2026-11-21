@@ -2252,7 +2252,7 @@ impl photosuite_application::media_trash::MediaTrash for UnusedAdapters {
 }
 
 #[test]
-fn trash_refresh_discards_old_viewer_indices_without_panicking_or_dispatching_actions() {
+fn incremental_trash_discards_old_viewer_indices_without_panicking_or_dispatching_actions() {
     struct Empty;
     impl crate::ports::MediaRepository for Empty {
         fn scan(&self, _: &std::path::Path) -> (Vec<Media>, usize) {
@@ -2268,9 +2268,17 @@ fn trash_refresh_discards_old_viewer_indices_without_panicking_or_dispatching_ac
         vec![Media::from_path(directory.path().join("2026/11/a.jpg"), "2026/11".into()).unwrap()];
     suite.selected = Some(0);
     let old_visible = vec![0, 3928];
-    suite.gallery.refresh = Some(directory.path().into());
+    let outcome = photosuite_application::media_trash::Outcome {
+        root: directory.path().into(),
+        requested: 1,
+        files: vec![(
+            crate::domain::tags::LibraryFile::new("2026/11/a.jpg".into()).unwrap(),
+            Ok(()),
+        )],
+    };
     let ctx = egui::Context::default();
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        suite.apply_trash_outcome(&outcome);
         suite.gallery_actions(ctx);
         assert!(suite.items.is_empty());
         assert!(suite.visible().is_empty());

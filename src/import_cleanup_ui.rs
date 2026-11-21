@@ -23,7 +23,7 @@ impl SourceCleanupDialog {
         }
         let was_visible = self.visible;
         let mut close = false;
-        egui::Window::new("Importquellen in den Papierkorb")
+        crate::theme::dialog("Importquellen in den Papierkorb")
             .open(&mut self.visible).default_size([820.,560.]).vscroll(true)
             .max_width((ctx.content_rect().width()-32.).max(280.))
             .max_height((ctx.content_rect().height()-32.).max(280.))

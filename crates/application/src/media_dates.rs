@@ -158,6 +158,30 @@ impl MediaDates {
             }
         }
     }
+    /// Incorporate already resolved fallback dates; never scan/read or enqueue work to sort.
+    pub fn sort_newest(&self, items: &[Media], indices: &mut [usize]) {
+        if indices.iter().any(|&index| items[index].is_audio()) {
+            return;
+        }
+        if !indices.iter().any(|&index| {
+            crate::application::capture_stamp(&items[index]).is_none()
+                && self
+                    .entries
+                    .get(items[index].path())
+                    .is_some_and(|entry| matches!(entry, Some(Ok(_))))
+        }) {
+            return;
+        }
+        crate::application::sort_newest_by(items, indices, |media| {
+            crate::application::capture_stamp(media).or_else(|| {
+                self.entries
+                    .get(media.path())
+                    .and_then(|entry| entry.as_ref())
+                    .and_then(|date| date.as_ref().ok())
+                    .map(CaptureTime::stamp)
+            })
+        });
+    }
     pub fn is_loading(&self) -> bool {
         self.pending > 0 || self.retry
     }
@@ -290,5 +314,60 @@ mod tests {
             dates.get(&photo).unwrap().as_ref().unwrap().stamp(),
             "20120102_123456"
         );
+    }
+}
+
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+    struct NoReads;
+    impl MediaDateSource for NoReads {
+        fn captured_at(&self, _: &Media) -> Result<CaptureTime, String> {
+            panic!("sorting must never read or schedule metadata")
+        }
+    }
+    #[test]
+    fn gallery_sort_never_reverses_an_audio_sequence() {
+        let mut dates = MediaDates::new(Arc::new(NoReads), Arc::default());
+        let items = [
+            "/fixture/2024/audio/diary/aud_20240101_120000.wav",
+            "/fixture/2024/audio/diary/aud_20240102_120000.wav",
+        ]
+        .map(|path| Media::from_library_path(path.into(), "2024/audio/diary".into()).unwrap());
+        for (index, day) in ["01", "02"].into_iter().enumerate() {
+            dates.insert(
+                items[index].path().into(),
+                Some(Ok(CaptureTime::parse(
+                    &format!("2024:01:{day} 12:00:00"),
+                    "test",
+                )
+                .unwrap())),
+            );
+        }
+        let mut indices = vec![0, 1];
+        dates.sort_newest(&items, &mut indices);
+        assert_eq!(indices, vec![0, 1]);
+        assert!(dates.worker.is_none());
+    }
+    #[test]
+    fn previously_resolved_exif_dates_sort_without_starting_any_worker() {
+        let mut dates = MediaDates::new(Arc::new(NoReads), Arc::default());
+        let items = [
+            "/fixture/unnamed.jpg",
+            "/fixture/img_20200101_120000.jpg",
+            "/fixture/unknown.jpg",
+        ]
+        .map(|path| Media::from_path(path.into(), "2020/01".into()).unwrap());
+        dates.insert(
+            items[0].path().into(),
+            Some(Ok(
+                CaptureTime::parse("2025:01:01 12:00:00", "EXIF").unwrap()
+            )),
+        );
+        let mut indices = vec![1, 2, 0];
+        dates.sort_newest(&items, &mut indices);
+        assert_eq!(indices, vec![0, 1, 2]);
+        assert!(dates.worker.is_none());
+        assert_eq!(dates.pending, 0);
     }
 }

@@ -64,6 +64,21 @@ pub fn source_partitions(catalog: &Catalog, year: &str) -> std::collections::BTr
         })
         .collect()
 }
+/// Keep the selected period if it still contains the media; otherwise follow at the same granularity.
+pub fn destination_group(selected: Option<&str>, media: &Media) -> Option<String> {
+    let selected = selected?;
+    if crate::domain::matches_group(media.group(), Some(selected)) {
+        return Some(selected.into());
+    }
+    let date = crate::domain::capture_from_filename(media)?;
+    if crate::domain::diary::AudioScope::for_year(selected, crate::domain::diary::AudioKind::All)
+        .is_some()
+    {
+        Some(date.year().into())
+    } else {
+        Some(format!("{}/{}", date.year(), date.month()))
+    }
+}
 struct Worker {
     handle: JoinHandle<()>,
     receiver: mpsc::Receiver<Result<Catalog, String>>,
@@ -290,5 +305,30 @@ mod session_tests {
             store.writes.lock().unwrap().last().unwrap(),
             Path::new("/second")
         );
+    }
+}
+
+#[cfg(test)]
+mod navigation_tests {
+    use super::*;
+    #[test]
+    fn follow_keeps_all_and_existing_year_or_follows_year_month_and_custom_folder() {
+        let media = Media::from_library_path(
+            "/fixture/broken/img_20111111_124844.mp4".into(),
+            "broken".into(),
+        )
+        .unwrap()
+        .with_capture_correction(Some(
+            CaptureTime::parse("1980:07:08 12:48:44", "test").unwrap(),
+        ));
+        for (from, to) in [
+            (None, None),
+            (Some("1980"), Some("1980")),
+            (Some("2011"), Some("1980")),
+            (Some("2011/11"), Some("1980/07")),
+            (Some("broken"), Some("1980/07")),
+        ] {
+            assert_eq!(destination_group(from, &media).as_deref(), to);
+        }
     }
 }

@@ -291,7 +291,7 @@ impl Suite {
             return;
         }
         let mut clear = false;
-        egui::Window::new("Find in Library")
+        crate::theme::dialog("Find in Library")
             .open(&mut self.search_open)
             .collapsible(false)
             .resizable(false)
@@ -332,7 +332,8 @@ impl Suite {
         }
     }
     pub(super) fn help(&mut self, ctx: &egui::Context) {
-        egui::Window::new("PhotoSuite Help").open(&mut self.help_open).default_width(430.).max_width((ctx.content_rect().width()-32.).max(260.)).vscroll(true).show(ctx,|ui|{
+        let mut close = false;
+        crate::theme::dialog("PhotoSuite Help").open(&mut self.help_open).default_width(430.).max_width((ctx.content_rect().width()-32.).max(260.)).vscroll(true).show(ctx,|ui|{
             ui.heading("PhotoSuite");
             ui.label("File → Open Library…: Fotosammlung öffnen. Jahre links aufklappen und ein Jahr oder einen Monat auswählen.");
             ui.label("View: Seitenleiste, quadratische Vorschauen, Videofilter und fünf Vorschaugrößen.");
@@ -340,6 +341,10 @@ impl Suite {
             ui.label("Edit: Drehbefehle, Videowiedergabe, Tags sowie anpassbare Tastenkürzel. Bildbefehle benötigen eine geöffnete Großansicht.");
             ui.label("Die Audioleiste startet und pausiert mit ▶ / ⏸. Ein Klick auf die Jahresachse springt zur gewünschten Aufnahme.");
             ui.label("PhotoSuite → Settings…: Einstellungen der Bibliothek. Originale bleiben unverändert, außer bei ausdrücklich aktivierten Schreib- oder bestätigten Bereinigungsaktionen.");
+            if crate::theme::default_dialog_button(ui,"OK") {close=true;}
         });
+        if close {
+            self.help_open = false;
+        }
     }
 }

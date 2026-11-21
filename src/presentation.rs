@@ -171,6 +171,7 @@ impl Suite {
         }
         self.items.clear();
         self.gallery.selection.clear();
+        self.gallery.removed.clear();
         self.known_media.clear();
         self.media_dates.clear();
         self.geo_markers.clear();
@@ -374,7 +375,7 @@ impl Suite {
             ),
             _ => base,
         };
-        match &self.root {
+        let mut visible = match &self.root {
             Some(root) => self.place_filter.catalog().filter(
                 &self.items,
                 root,
@@ -382,7 +383,9 @@ impl Suite {
                 &self.place_filter.selected,
             ),
             None => tagged,
-        }
+        };
+        self.media_dates.sort_newest(&self.items, &mut visible);
+        visible
     }
 
     fn unfiltered_visible(&self) -> Vec<usize> {
@@ -541,15 +544,7 @@ impl eframe::App for Suite {
                         );
                     }
                     for media in collection.items {
-                        let media = self.comments.project(media);
-                        let media = photosuite_application::date_correction::project(
-                            &collection.root,
-                            &self.date_corrections.catalog,
-                            media,
-                        );
-                        if self.known_media.insert(media.path().to_owned()) {
-                            self.items.push(media);
-                        }
+                        self.accept_collection_media(&collection.root, media);
                     }
                     self.status = if collection.unreadable == 0 {
                         "Bereit".into()

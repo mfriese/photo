@@ -60,6 +60,13 @@ impl Suite {
                 self.tag_view.options_cache = None;
                 self.place_options = None;
                 if saved {
+                    if let Some(path) = self
+                        .date_editor
+                        .as_ref()
+                        .map(|editor| editor.media.path().to_owned())
+                    {
+                        self.follow_corrected_media(&path);
+                    }
                     self.date_editor = None;
                     self.diary.cancel();
                     let playback_error = self
@@ -83,6 +90,23 @@ impl Suite {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
+    fn follow_corrected_media(&mut self, path: &std::path::Path) {
+        let Some(media) = self.items.iter().find(|media| media.path() == path) else {
+            return;
+        };
+        self.group = photosuite_application::date_correction::destination_group(
+            self.group.as_deref(),
+            media,
+        );
+        // Automatic following preserves filters that already matched this media. Manual navigation still resets them.
+        let scope = (self.root.clone(), self.group.clone());
+        self.tag_view.filter_scope = Some(scope.clone());
+        self.place_scope = Some(scope);
+        self.tag_view.options_cache = None;
+        self.place_options = None;
+        self.scroll_to_photo = Some(path.into());
+        self.highlighted_photo = Some(path.into());
+    }
     pub(super) fn date_correction_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut editor) = self.date_editor.take() else {
             return;
@@ -104,7 +128,7 @@ impl Suite {
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        egui::Window::new("Datum korrigieren")
+        crate::theme::dialog("Datum korrigieren")
             .id(egui::Id::new("photo_date_correction"))
             .open(&mut open)
             .collapsible(false)
@@ -325,6 +349,135 @@ mod tests {
             let editor = suite.date_editor.as_ref().unwrap();
             assert_eq!((editor.year, editor.month, editor.day), (2024, 2, 29));
             assert_eq!(editor.original.as_ref().unwrap().time_label(), "03:58:11");
+        }
+    }
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::*;
+    use photosuite_application::{
+        media_geo::{LocatedPhoto, LocationIndex},
+        organization::Action,
+        place_filter::{Selection, Session},
+    };
+    use std::{
+        path::Path,
+        sync::{Arc, atomic::AtomicBool},
+    };
+    struct Places {
+        file: LibraryFile,
+    }
+    impl LocationIndex for Places {
+        fn locations(&self, _: &Path, _: &AtomicBool) -> Result<Vec<LocatedPhoto>, String> {
+            Ok(vec![LocatedPhoto {
+                photo: self.file.clone(),
+                country: "DE".into(),
+                country_name: "Deutschland".into(),
+                region: None,
+                place_id: 1,
+                place_name: "Berlin".into(),
+            }])
+        }
+    }
+    #[test]
+    fn corrected_media_keeps_tags_and_places_visible_and_selected_in_destination() {
+        for initial in [Some("2011/11"), Some("2011"), None] {
+            let mut suite = super::super::layout_tests::test_suite();
+            let root = std::path::PathBuf::from("/memory-only-fixture");
+            suite.videos_only = false;
+            suite.root = Some(root.clone());
+            suite.group = initial.map(str::to_owned);
+            suite.organization.open(root.clone()).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while suite.organization.catalog().is_none() {
+                suite.organization.poll();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            let file = LibraryFile::new("2011/11/img_20111111_124844.jpg".into()).unwrap();
+            let path = root.join(file.as_str());
+            suite.items = vec![Media::from_library_path(path.clone(), "2011/11".into()).unwrap()];
+            suite
+                .organization
+                .apply(Action::Create {
+                    name: "urlaub".into(),
+                    file: Some(file.clone()),
+                })
+                .unwrap();
+            suite.prepare_tag_filter();
+            suite.tag_view.filters.insert("urlaub".into());
+            suite.place_filter = Session::new(Arc::new(Places { file }), Arc::default());
+            loop {
+                suite.place_filter.poll(Some(&root));
+                if !suite.place_filter.pending() {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            suite.place_scope = Some((Some(root.clone()), suite.group.clone()));
+            suite
+                .place_filter
+                .selected
+                .insert(Selection::Country("DE".into()));
+            assert_eq!(suite.visible(), vec![0]);
+            suite.items[0] = suite.items[0].clone().with_capture_correction(Some(
+                CaptureTime::parse("1980:07:08 12:48:44", "test").unwrap(),
+            ));
+            suite.follow_corrected_media(&path);
+            suite.prepare_tag_filter();
+            let expected = match initial {
+                Some("2011") => Some("1980"),
+                Some(_) => Some("1980/07"),
+                None => None,
+            };
+            assert_eq!(suite.group.as_deref(), expected);
+            assert_eq!(suite.visible(), vec![0]);
+            assert!(suite.tag_view.filters.contains("urlaub"));
+            assert!(
+                suite
+                    .place_filter
+                    .selected
+                    .contains(&Selection::Country("DE".into()))
+            );
+            assert!(
+                suite
+                    .tag_view
+                    .options_cache
+                    .as_ref()
+                    .unwrap()
+                    .tags
+                    .contains(&"urlaub".into())
+            );
+            let rows = suite.place_filter.catalog().options(
+                &suite.items,
+                &root,
+                &suite.unfiltered_visible(),
+            );
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].name, "Deutschland");
+            assert_eq!(rows[0].count, 1);
+            assert_eq!(suite.scroll_to_photo.as_deref(), Some(path.as_path()));
+            let ctx = egui::Context::default();
+            crate::theme::install(&ctx);
+            for frame in 0..3 {
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800., 700.),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| suite.library_sidebar(ctx),
+                );
+                if frame == 2 {
+                    for label in ["urlaub", "Deutschland"] {
+                        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()==label)),"missing sidebar entry {label}");
+                    }
+                }
+            }
         }
     }
 }

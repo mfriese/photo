@@ -92,6 +92,38 @@ impl Drop for TrashSession {
         self.cancel();
     }
 }
+/// Project confirmed removals into the current in-memory collection, never rescan the library.
+pub struct Removal {
+    pub removed: std::collections::BTreeSet<PathBuf>,
+    pub selected: Option<usize>,
+}
+pub fn apply_outcome(
+    items: &mut Vec<Media>,
+    selected: Option<usize>,
+    root: &Path,
+    outcome: &Outcome,
+) -> Removal {
+    if root != outcome.root {
+        return Removal {
+            removed: Default::default(),
+            selected,
+        };
+    }
+    let selected_path = selected
+        .and_then(|index| items.get(index))
+        .map(|media| media.path().to_owned());
+    let removed = outcome
+        .files
+        .iter()
+        .filter(|(_, result)| result.is_ok())
+        .map(|(file, _)| root.join(file.as_str()))
+        .collect::<std::collections::BTreeSet<_>>();
+    items.retain(|media| !removed.contains(media.path()));
+    let selected =
+        selected_path.and_then(|path| items.iter().position(|media| media.path() == path));
+    Removal { removed, selected }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,5 +220,41 @@ mod cancellation_tests {
         assert_eq!(outcome.files.len(), 1);
         assert!(outcome.files[0].1.is_ok());
         assert_eq!(port.calls.load(Ordering::Relaxed), 1);
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    #[test]
+    fn only_successes_are_removed_and_surviving_viewer_indices_are_remapped() {
+        let root = Path::new("/memory-only");
+        let mut items = ["a.jpg", "b.jpg", "c.jpg"]
+            .map(|name| {
+                Media::from_library_path(root.join("2026/11").join(name), "2026/11".into()).unwrap()
+            })
+            .to_vec();
+        let outcome = Outcome {
+            root: root.into(),
+            requested: 3,
+            files: vec![
+                (LibraryFile::new("2026/11/a.jpg".into()).unwrap(), Ok(())),
+                (
+                    LibraryFile::new("2026/11/c.jpg".into()).unwrap(),
+                    Err("test failure".into()),
+                ),
+            ],
+        };
+        let ignored = apply_outcome(&mut items, Some(1), Path::new("/other"), &outcome);
+        assert!(ignored.removed.is_empty());
+        assert_eq!(items.len(), 3);
+        let result = apply_outcome(&mut items, Some(1), root, &outcome);
+        assert_eq!(result.selected, Some(0));
+        assert_eq!(items.len(), 2);
+        assert!(items[0].path().ends_with("b.jpg"));
+        assert!(items[1].path().ends_with("c.jpg"));
+        assert_eq!(result.removed, [root.join("2026/11/a.jpg")].into());
+        let result = apply_outcome(&mut items, Some(3928), root, &outcome);
+        assert!(result.selected.is_none());
     }
 }

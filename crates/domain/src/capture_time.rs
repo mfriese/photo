@@ -76,20 +76,42 @@ impl CaptureTime {
     pub fn origin(&self) -> &str {
         &self.origin
     }
-    pub fn from_photo_filename(stem: &str) -> Option<Self> {
-        let base = stem.get(..19)?;
-        if !base.get(..4)?.eq_ignore_ascii_case("img_") || base.as_bytes()[12] != b'_' {
+    /// Validated, borrowed filename key for allocation-free chronological comparison.
+    pub fn photo_filename_stamp(stem: &str) -> Option<&str> {
+        if !stem.get(..4)?.eq_ignore_ascii_case("img_") {
             return None;
         }
-        let date = base.get(4..12)?;
-        let clock = base.get(13..19)?;
-        if !date
-            .bytes()
-            .chain(clock.bytes())
-            .all(|b| b.is_ascii_digit())
+        let stamp = stem.get(4..19)?;
+        if stamp.as_bytes()[8] != b'_'
+            || !stamp
+                .bytes()
+                .enumerate()
+                .all(|(i, byte)| i == 8 || byte.is_ascii_digit())
         {
             return None;
         }
+        let year = stamp[..4].parse::<i32>().ok()?;
+        if year == 0 {
+            return None;
+        }
+        chrono::NaiveDate::from_ymd_opt(
+            year,
+            stamp[4..6].parse().ok()?,
+            stamp[6..8].parse().ok()?,
+        )?;
+        let hour = stamp[9..11].parse::<u8>().ok()?;
+        let minute = stamp[11..13].parse::<u8>().ok()?;
+        let second = stamp[13..15].parse::<u8>().ok()?;
+        // Match chrono's existing parser, which also accepts leap seconds.
+        if hour > 23 || minute > 59 || second > 60 {
+            return None;
+        }
+        Some(stamp)
+    }
+    pub fn from_photo_filename(stem: &str) -> Option<Self> {
+        let stamp = Self::photo_filename_stamp(stem)?;
+        let date = &stamp[..8];
+        let clock = &stamp[9..];
         Self::parse(
             &format!(
                 "{}:{}:{} {}:{}:{}",
@@ -257,5 +279,26 @@ mod scan_layout_tests {
             file.metadata_path().unwrap(),
             "yaml/2026/11/img_20261114_121314.jpg.yaml"
         );
+    }
+}
+
+#[cfg(test)]
+mod filename_sort_tests {
+    use super::*;
+    #[test]
+    fn borrowed_sort_keys_reject_invalid_dates_and_keep_valid_filename_variants() {
+        for name in [
+            "img_20230229_120000",
+            "img_20241301_120000",
+            "img_20240101_240000",
+            "img_00000101_120000",
+            "img_20240101_12é000",
+        ] {
+            assert!(CaptureTime::photo_filename_stamp(name).is_none(), "{name}");
+        }
+        for name in ["IMG_20240229_035811_002", "img_20161231_235960"] {
+            let key = CaptureTime::photo_filename_stamp(name).unwrap();
+            assert_eq!(CaptureTime::from_photo_filename(name).unwrap().stamp(), key);
+        }
     }
 }

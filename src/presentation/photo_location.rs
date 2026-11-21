@@ -37,7 +37,8 @@ impl super::Suite {
         let mut open = true;
         let mut retry = false;
         let mut settings = false;
-        egui::Window::new("Ort des Fotos")
+        let mut close = false;
+        crate::theme::dialog("Ort des Fotos")
             .id(egui::Id::new("photo_location"))
             .open(&mut open)
             .collapsible(false)
@@ -82,6 +83,9 @@ impl super::Suite {
                     if ui.button("Geodaten-Einstellungen").clicked() {
                         settings = true;
                     }
+                    if theme::default_dialog_button(ui, "OK") {
+                        close = true;
+                    }
                 });
             });
         if retry
@@ -95,7 +99,7 @@ impl super::Suite {
             self.settings_view.page = crate::options_ui::SettingsPage::Geodata;
             open = false;
         }
-        if !open {
+        if !open || close {
             self.location_open = false;
             self.photo_location.cancel();
         }
@@ -275,7 +279,7 @@ mod tests {
                             ..Default::default()
                         },
                         |ctx| {
-                            let shown = egui::Window::new("Ort des Fotos")
+                            let shown = crate::theme::dialog("Ort des Fotos")
                                 .default_width(420.)
                                 .max_width(width - 32.)
                                 .resizable(false)

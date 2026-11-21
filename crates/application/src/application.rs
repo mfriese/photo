@@ -19,31 +19,27 @@ pub fn visible(items: &[Media], query: &str, group: Option<&str>, videos_only: b
         })
         .map(|(i, _)| i)
         .collect();
-    if items
-        .iter()
-        .any(|media| !media.is_audio() && media.reference_time().is_some())
-    {
-        fn key(media: &Media) -> &str {
-            media
-                .reference_time()
-                .map(|date| date.stamp())
-                .or_else(|| {
-                    media
-                        .path()
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .and_then(|s| s.strip_prefix("img_"))
-                        .and_then(|s| s.get(..15))
-                })
-                .unwrap_or("")
-        }
-        result.sort_by(|&a, &b| {
-            key(&items[a])
-                .cmp(key(&items[b]))
-                .then_with(|| items[a].path().cmp(items[b].path()))
-        });
+    if !diary {
+        sort_newest_by(items, &mut result, capture_stamp);
     }
     result
+}
+
+/// Borrow canonical filename timestamps without metadata reads or per-comparison parsing.
+pub(crate) fn capture_stamp(media: &Media) -> Option<&str> {
+    if let Some(date) = media.reference_time() {
+        return Some(date.stamp());
+    }
+    crate::domain::CaptureTime::photo_filename_stamp(media.path().file_stem()?.to_str()?)
+}
+pub(crate) fn sort_newest_by<'a>(
+    items: &'a [Media],
+    indices: &mut [usize],
+    key: impl Fn(&'a Media) -> Option<&'a str>,
+) {
+    // Resolve each key once, rather than validating/looking it up for every comparison.
+    indices
+        .sort_by_cached_key(|&index| (std::cmp::Reverse(key(&items[index])), items[index].path()));
 }
 
 /// Gallery destination for a contextual photo; never performs I/O or changes playback.
@@ -188,5 +184,30 @@ mod flat_audio_tests {
         );
         assert_eq!(visible(&items, "com_", Some("2023/audio"), false), vec![1]);
         assert_eq!(visible(&items, "", Some("2023"), false), vec![4]);
+    }
+}
+
+#[cfg(test)]
+mod newest_tests {
+    use super::*;
+    #[test]
+    fn grid_order_is_newest_first_independent_of_scan_order_and_filters() {
+        let items = [
+            "2020/01/img_20200102_120000.jpg",
+            "2024/01/IMG_20240101_120000.mp4",
+            "2020/01/img_20200103_120000.jpg",
+            "2020/01/unknown.jpg",
+        ]
+        .map(|file| {
+            Media::from_library_path(file.into(), file.rsplit_once('/').unwrap().0.into()).unwrap()
+        });
+        assert_eq!(visible(&items, "", None, false), vec![1, 2, 0, 3]);
+        assert_eq!(visible(&items, "", Some("2020"), false), vec![2, 0, 3]);
+        assert_eq!(visible(&items, "", None, true), vec![1]);
+        let mut corrected = items.to_vec();
+        corrected[0] = corrected[0].clone().with_capture_correction(Some(
+            crate::domain::CaptureTime::parse("2026:01:01 12:00:00", "test").unwrap(),
+        ));
+        assert_eq!(visible(&corrected, "", None, false), vec![0, 1, 2, 3]);
     }
 }

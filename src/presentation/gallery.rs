@@ -62,7 +62,7 @@ pub(super) struct GalleryState {
     pub pending: Option<(PathBuf, Vec<LibraryFile>)>,
     pub job: photosuite_application::media_trash::TrashSession,
     pub report: Option<String>,
-    pub refresh: Option<PathBuf>,
+    pub removed: BTreeSet<PathBuf>,
 }
 impl super::Suite {
     pub(super) fn prepare_gallery_selection(&mut self) {
@@ -78,10 +78,87 @@ impl super::Suite {
             self.gallery.scope = Some(scope);
         }
     }
+    pub(super) fn accept_collection_media(&mut self, root: &Path, media: crate::domain::Media) {
+        if self.root.as_deref() != Some(root) || self.gallery.removed.contains(media.path()) {
+            return;
+        }
+        let media = self.comments.project(media);
+        let media = photosuite_application::date_correction::project(
+            root,
+            &self.date_corrections.catalog,
+            media,
+        );
+        if self.known_media.insert(media.path().to_owned()) {
+            self.items.push(media);
+        }
+    }
+    pub(super) fn apply_trash_outcome(
+        &mut self,
+        outcome: &photosuite_application::media_trash::Outcome,
+    ) {
+        let Some(root) = self.root.as_deref() else {
+            return;
+        };
+        if root != outcome.root {
+            return;
+        }
+        let record_path = self
+            .record_photo
+            .and_then(|index| self.items.get(index))
+            .map(|media| media.path().to_owned());
+        let removal = photosuite_application::media_trash::apply_outcome(
+            &mut self.items,
+            self.selected,
+            root,
+            outcome,
+        );
+        self.selected = removal.selected;
+        self.record_photo =
+            record_path.and_then(|path| self.items.iter().position(|media| media.path() == path));
+        if self.selected.is_none() {
+            self.storyboard.clear();
+        }
+        self.gallery
+            .selection
+            .paths
+            .retain(|path| !removal.removed.contains(path));
+        if self
+            .gallery
+            .selection
+            .anchor
+            .as_ref()
+            .is_some_and(|path| removal.removed.contains(path))
+        {
+            self.gallery.selection.anchor = None;
+        }
+        for path in &removal.removed {
+            self.known_media.remove(path);
+        }
+        if self
+            .highlighted_photo
+            .as_ref()
+            .is_some_and(|path| removal.removed.contains(path))
+        {
+            self.highlighted_photo = None;
+        }
+        if self
+            .scroll_to_photo
+            .as_ref()
+            .is_some_and(|path| removal.removed.contains(path))
+        {
+            self.scroll_to_photo = None;
+        }
+        self.gallery.removed.extend(removal.removed);
+        self.tag_view.options_cache = None;
+        self.place_options = None;
+        // Reconcile remaining transcription candidates without restarting audio/library maintenance.
+        self.transcription_seen = None;
+    }
     pub(super) fn gallery_actions(&mut self, ctx: &egui::Context) {
         if let Some(result) = self.gallery.job.poll() {
             match result {
                 Ok(outcome) => {
+                    self.apply_trash_outcome(&outcome);
                     let successes = outcome.files.iter().filter(|(_, r)| r.is_ok()).count();
                     let mut report = format!("{successes} Datei(en) in den Papierkorb verschoben.");
                     if outcome.files.len() < outcome.requested {
@@ -95,29 +172,14 @@ impl super::Suite {
                             report.push_str(&format!("\n{}: {error}", file.as_str()));
                         }
                     }
-                    self.gallery.refresh = Some(outcome.root);
                     self.gallery.report = Some(report);
                 }
                 Err(error) => self.gallery.report = Some(error),
             }
         }
-        if let Some(root) = self.gallery.refresh.clone() {
-            if self.root.as_ref() != Some(&root) {
-                self.gallery.refresh = None;
-            } else if !self.organization.dirty()
-                && !self.organization.saving()
-                && !self.comments.has_unsaved()
-                && !self.comments.is_saving()
-            {
-                let group = self.group.clone();
-                self.load_library(root, true, false);
-                self.group = group;
-                self.gallery.refresh = None;
-            }
-        }
         if self.gallery.job.running() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
-            egui::Window::new("In den Papierkorb verschieben")
+            crate::theme::dialog("In den Papierkorb verschieben")
                 .collapsible(false)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -133,7 +195,7 @@ impl super::Suite {
         if let Some((root, files)) = self.gallery.pending.clone() {
             let mut confirm = false;
             let mut cancel = false;
-            egui::Window::new("Ausgewählte Medien löschen?").collapsible(false).resizable(false)
+            crate::theme::dialog("Ausgewählte Medien löschen?").collapsible(false).resizable(false)
                 .max_width((ctx.content_rect().width()-32.).max(260.)).show(ctx,|ui|{
                 ui.label(format!("{} Datei(en) in den macOS-Papierkorb verschieben?",files.len()));
                 ui.add_space(8.);
@@ -142,7 +204,7 @@ impl super::Suite {
                 ui.small("Tags und Kommentarzuordnungen bleiben erhalten. Keine endgültige Löschung.");
                 ui.add_space(12.);
                 ui.horizontal(|ui|{
-                    if ui.button("Abbrechen").clicked(){cancel=true;}
+                    if theme::default_dialog_button(ui,"Abbrechen"){cancel=true;}
                     if ui.add(egui::Button::new(egui::RichText::new("In den Papierkorb").color(theme::DANGER))).clicked(){confirm=true;}
                 });
             });
@@ -165,7 +227,9 @@ impl super::Suite {
         }
         if let Some(report) = self.gallery.report.clone() {
             let mut open = true;
-            egui::Window::new("Papierkorb – Ergebnis")
+            crate::theme::dialog("Papierkorb – Ergebnis")
+                .collapsible(false)
+                .resizable(false)
                 .open(&mut open)
                 .max_width(560.)
                 .show(ctx, |ui| {
@@ -174,7 +238,7 @@ impl super::Suite {
                         .show(ui, |ui| {
                             ui.label(report);
                         });
-                    if ui.button("OK").clicked() {
+                    if theme::default_dialog_button(ui, "OK") {
                         self.gallery.report = None;
                     }
                 });
@@ -205,5 +269,181 @@ mod tests {
         assert_eq!(selection.paths, [paths[3].clone()].into());
         selection.clear();
         assert!(selection.paths.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod incremental_tests {
+    use super::*;
+    use crate::domain::Media;
+    use photosuite_application::{
+        media_geo::{LocatedPhoto, LocationIndex},
+        media_trash::Outcome,
+        organization::Action,
+        place_filter::Session,
+    };
+    use std::sync::{Arc, atomic::AtomicBool};
+    struct Places;
+    impl LocationIndex for Places {
+        fn locations(&self, _: &Path, _: &AtomicBool) -> Result<Vec<LocatedPhoto>, String> {
+            Ok(["a.jpg", "b.jpg"]
+                .map(|name| LocatedPhoto {
+                    photo: LibraryFile::new(format!("2026/11/{name}")).unwrap(),
+                    country: "DE".into(),
+                    country_name: "Deutschland".into(),
+                    region: None,
+                    place_id: 1,
+                    place_name: "Berlin".into(),
+                })
+                .to_vec())
+        }
+    }
+    #[test]
+    fn trash_preserves_sidebar_catalogs_filters_and_remaining_media_without_any_scan() {
+        let root = PathBuf::from("/memory-only-gallery");
+        let mut suite = super::super::layout_tests::test_suite();
+        suite.root = Some(root.clone());
+        suite.group = Some("2026/11".into());
+        suite.videos_only = false;
+        suite.organization.open(root.clone()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while suite.organization.catalog().is_none() {
+            suite.organization.poll();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        suite.items = ["a.jpg", "b.jpg", "c.jpg"]
+            .map(|name| {
+                Media::from_library_path(root.join("2026/11").join(name), "2026/11".into()).unwrap()
+            })
+            .to_vec();
+        suite.known_media = suite
+            .items
+            .iter()
+            .map(|media| media.path().to_owned())
+            .collect();
+        suite
+            .organization
+            .apply(Action::CreateMany {
+                name: "urlaub".into(),
+                files: ["a.jpg", "b.jpg"]
+                    .map(|name| LibraryFile::new(format!("2026/11/{name}")).unwrap())
+                    .to_vec(),
+            })
+            .unwrap();
+        suite.prepare_tag_filter();
+        suite.tag_view.filters.insert("urlaub".into());
+        suite.place_filter = Session::new(Arc::new(Places), Arc::default());
+        loop {
+            suite.place_filter.poll(Some(&root));
+            if !suite.place_filter.pending() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let location = photosuite_application::place_filter::Selection::Country("DE".into());
+        suite.place_filter.selected.insert(location.clone());
+        suite.place_scope = Some((Some(root.clone()), suite.group.clone()));
+        suite.selected = Some(1);
+        let deleted = suite.items[0].clone();
+        let outcome = Outcome {
+            root: root.clone(),
+            requested: 2,
+            files: vec![
+                (LibraryFile::new("2026/11/a.jpg".into()).unwrap(), Ok(())),
+                (
+                    LibraryFile::new("2026/11/c.jpg".into()).unwrap(),
+                    Err("simulated failure".into()),
+                ),
+            ],
+        };
+        suite.apply_trash_outcome(&outcome);
+        suite.accept_collection_media(&root, deleted);
+        assert_eq!(suite.items.len(), 2);
+        assert_eq!(suite.selected, Some(0));
+        assert!(suite.items[0].path().ends_with("b.jpg"));
+        assert!(!suite.collection.is_loading());
+        assert_eq!(suite.group.as_deref(), Some("2026/11"));
+        assert!(suite.tag_view.filters.contains("urlaub"));
+        assert!(suite.place_filter.selected.contains(&location));
+        suite.prepare_tag_filter();
+        assert!(
+            suite
+                .tag_view
+                .options_cache
+                .as_ref()
+                .unwrap()
+                .tags
+                .contains(&"urlaub".into())
+        );
+        assert_eq!(suite.visible(), vec![0]);
+        let places =
+            suite
+                .place_filter
+                .catalog()
+                .options(&suite.items, &root, &suite.unfiltered_visible());
+        assert_eq!(places[0].name, "Deutschland");
+        assert_eq!(places[0].count, 1);
+        assert_eq!(
+            suite.organization.catalog().unwrap().tags()["urlaub"].len(),
+            2,
+            "metadata membership must not be rewritten"
+        );
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        for frame in 0..3 {
+            let output = ctx.run(input(vec![]), |ctx| suite.library_sidebar(ctx));
+            if frame == 2 {
+                for label in ["urlaub", "Deutschland"] {
+                    assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()==label)),"missing sidebar entry {label}");
+                }
+            }
+        }
+    }
+    fn input(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800., 700.),
+            )),
+            events,
+            ..Default::default()
+        }
+    }
+    fn enter() -> Vec<egui::Event> {
+        vec![egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: Some(egui::Key::Enter),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]
+    }
+    #[test]
+    fn result_dialog_closes_with_enter_and_delete_confirmation_defaults_to_cancel() {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut suite = super::super::layout_tests::test_suite();
+        suite.gallery.report = Some("Fertig".into());
+        for _ in 0..3 {
+            let _ = ctx.run(input(vec![]), |ctx| suite.gallery_actions(ctx));
+        }
+        let _ = ctx.run(input(enter()), |ctx| suite.gallery_actions(ctx));
+        assert!(suite.gallery.report.is_none());
+        assert!(!suite.gallery.job.running());
+        suite.gallery.pending = Some((
+            PathBuf::from("/memory-only"),
+            vec![LibraryFile::new("2026/11/a.jpg".into()).unwrap()],
+        ));
+        for _ in 0..3 {
+            let _ = ctx.run(input(vec![]), |ctx| suite.gallery_actions(ctx));
+        }
+        let _ = ctx.run(input(enter()), |ctx| suite.gallery_actions(ctx));
+        assert!(suite.gallery.pending.is_none());
+        assert!(
+            !suite.gallery.job.running(),
+            "Enter must not start a destructive action"
+        );
     }
 }

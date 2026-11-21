@@ -141,7 +141,7 @@ impl ImportPanel {
             self.target = library.map(std::path::Path::to_path_buf);
         }
         let mut visible = self.visible;
-        egui::Window::new("Importieren · Schritt für Schritt").open(&mut visible).default_size([700.,600.])
+        crate::theme::dialog("Importieren · Schritt für Schritt").open(&mut visible).default_size([700.,600.])
             .max_width((ctx.content_rect().width()-32.).max(260.)).max_height((ctx.content_rect().height()-48.).max(240.)).vscroll(true)
             .show(ctx,|ui|{
                 crate::options_ui::spacing(ui);

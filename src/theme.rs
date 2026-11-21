@@ -479,6 +479,34 @@ pub fn tag_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Respons
         .on_hover_text(label)
 }
 
+/// Modal-style dialogs open centrally; the main viewer and anchored popovers keep their layout.
+pub fn dialog<'a>(title: impl Into<egui::WidgetText>) -> egui::Window<'a> {
+    egui::Window::new(title).anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+}
+/// Focus the acknowledgement on opening, without stealing focus back from later user input.
+pub fn default_dialog_button(ui: &mut egui::Ui, label: &str) -> bool {
+    let response = ui.button(label);
+    // egui first measures a new window invisibly; that pass must not consume initial focus.
+    if !response.enabled() || !ui.is_visible() {
+        return response.clicked();
+    }
+    let frame = ui.ctx().cumulative_frame_nr();
+    let id = ui.id().with(("default_dialog_button", label));
+    let first = ui.ctx().data_mut(|data| {
+        let last = data.get_temp::<u64>(id);
+        data.insert_temp(id, frame);
+        last.is_none_or(|last| frame > last.saturating_add(1))
+    });
+    let top = ui.memory(|memory| memory.top_modal_layer());
+    if first && top.is_none_or(|layer| layer == ui.layer_id()) {
+        response.request_focus();
+    }
+    response.clicked()
+        || (response.has_focus()
+            && top.is_none_or(|layer| layer == ui.layer_id())
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)))
+}
+
 #[cfg(test)]
 pub fn assert_text_glyphs(ctx: &egui::Context, text: &egui::epaint::TextShape) {
     for section in &text.galley.job.sections {
@@ -662,6 +690,41 @@ mod tag_height_tests {
                     );
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod dialog_tests {
+    use super::*;
+    #[test]
+    fn popup_is_centered_and_acknowledgement_receives_initial_focus() {
+        for size in [egui::vec2(360., 400.), egui::vec2(1024., 768.)] {
+            let ctx = egui::Context::default();
+            install(&ctx);
+            let mut rect = None;
+            let mut focused = false;
+            for _ in 0..3 {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        rect = dialog("Hinweis")
+                            .collapsible(false)
+                            .resizable(false)
+                            .show(ctx, |ui| {
+                                ui.label("Vorgang abgeschlossen.");
+                                let _ = default_dialog_button(ui, "OK");
+                                focused = ui.memory(|memory| memory.focused().is_some());
+                            })
+                            .map(|response| response.response.rect);
+                    },
+                );
+            }
+            assert!(rect.unwrap().center().distance(size.to_pos2() * 0.5) < 2.);
+            assert!(focused);
         }
     }
 }
