@@ -59,6 +59,11 @@ impl SqliteTranscriptionQueue {
         candidate: &Candidate,
         failure: Option<media_records_fs::Failure>,
     ) -> Result<(), String> {
+        let guard = media_records_fs::lock_records()?;
+        let original = metadata_fs::library_path(root, candidate.record.as_str(), false)?;
+        if !metadata_fs::check_file(&original)? {
+            return Ok(());
+        }
         let path = media_records_fs::path(root, &candidate.record, false)?;
         let previous = media_records_fs::read(&path)?;
         let mut record = previous
@@ -81,7 +86,13 @@ impl SqliteTranscriptionQueue {
                 .transcription_failures
                 .remove(candidate.source.as_str());
         }
-        media_records_fs::write(root, &candidate.record, &record, previous.as_deref())
+        media_records_fs::write_locked(
+            &guard,
+            root,
+            &candidate.record,
+            &record,
+            previous.as_deref(),
+        )
     }
     pub(crate) fn reconstruct(
         &self,
@@ -291,6 +302,7 @@ impl QueueStore for SqliteTranscriptionQueue {
         candidate: &Candidate,
         transcript: &Transcript,
     ) -> Result<(), String> {
+        let guard = media_records_fs::lock_records()?;
         let mut last_error = String::new();
         for _ in 0..4 {
             if self.version(root, &candidate.source)? != *transcript.source() {
@@ -327,7 +339,13 @@ impl QueueStore for SqliteTranscriptionQueue {
                 candidate.source.as_str().into(),
                 crate::transcript_codec::TranscriptDto::from_value(transcript),
             );
-            match media_records_fs::write(root, &candidate.record, &record, previous.as_deref()) {
+            match media_records_fs::write_locked(
+                &guard,
+                root,
+                &candidate.record,
+                &record,
+                previous.as_deref(),
+            ) {
                 Ok(()) => {
                     return self.database.transaction(root, |tx| {
                         library_db::record_address(tx, &candidate.record, root)

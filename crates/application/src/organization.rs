@@ -165,6 +165,18 @@ impl OrganizationSession {
         self.error.clear();
         Ok(())
     }
+    pub fn refresh_relocated(
+        &mut self,
+        from: &LibraryFile,
+        to: &LibraryFile,
+    ) -> Result<(), String> {
+        let root = self.root.clone().ok_or("Keine Bibliothek geöffnet")?;
+        let mut catalog = self.catalog.as_deref().cloned().unwrap_or_default();
+        catalog.relocate_file(from, to);
+        self.open_cached(root)?;
+        self.catalog = Some(Arc::new(catalog));
+        Ok(())
+    }
     pub fn catalog(&self) -> Option<&TagCatalog> {
         self.catalog.as_deref()
     }

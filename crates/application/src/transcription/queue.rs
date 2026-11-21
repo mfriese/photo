@@ -484,6 +484,19 @@ impl QueueSession {
         self.engine.release_model();
         failure.map_or(Ok(()), Err)
     }
+    /// A committed source-path change invalidates old revisions/results, while preserving user pause.
+    pub fn media_paths_changed(&mut self) {
+        if let Some(active) = &self.active {
+            active.cancel.store(true, Ordering::Relaxed);
+        }
+        self.generation = self.generation.wrapping_add(1);
+        self.journal = None;
+        self.reconcile = true;
+        self.current = None;
+        self.last = None;
+        self.error.clear();
+        self.retry_pending = false;
+    }
     pub fn reset(&mut self) {
         if let Some(active) = &self.active {
             active.cancel.store(true, Ordering::Relaxed);

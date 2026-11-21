@@ -1,4 +1,5 @@
 //! Media YAML is authoritative; SQLite contains only its reconstructible date projection.
+mod relocation;
 use crate::{
     domain::{CaptureTime, tags::LibraryFile},
     library_db::{self, Database},
@@ -49,6 +50,7 @@ pub(crate) fn parse_index(value: &str) -> Result<CaptureTime, String> {
 }
 impl Repository for CaptureDates {
     fn load(&self, root: &Path) -> Result<Catalog, String> {
+        relocation::recover(self, root)?;
         self.database
             .read(root, |db| {
                 let mut catalog = Catalog::new();
@@ -86,6 +88,15 @@ impl Repository for CaptureDates {
                 Ok(catalog)
             })
     }
+    fn relocate(
+        &self,
+        root: &Path,
+        file: &LibraryFile,
+        date: &CaptureTime,
+        expected: Option<&CaptureTime>,
+    ) -> Result<LibraryFile, String> {
+        relocation::relocate(self, root, file, date, expected)
+    }
     fn save(
         &self,
         root: &Path,
@@ -93,6 +104,7 @@ impl Repository for CaptureDates {
         date: &CaptureTime,
         expected: Option<&CaptureTime>,
     ) -> Result<(), String> {
+        relocation::recover(self, root)?;
         let group = Path::new(file.as_str())
             .parent()
             .unwrap_or(Path::new(""))

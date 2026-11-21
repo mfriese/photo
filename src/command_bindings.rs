@@ -175,7 +175,7 @@ impl CommandBindings {
                 }
             }
         }
-        egui::Window::new("Befehle & Tastenkürzel")
+        crate::theme::dialog("Befehle & Tastenkürzel")
             .default_width(500.).max_width((ctx.content_rect().width()-32.).max(260.))
             .max_height((ctx.content_rect().height()-48.).max(200.)).vscroll(true)
             .open(&mut self.visible).show(ctx,|ui| {

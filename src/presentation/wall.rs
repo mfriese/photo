@@ -271,6 +271,7 @@ impl super::Suite {
                                         };
                                         if response.secondary_clicked() {self.gallery.selection.context(m.path());}
                                         response.context_menu(|ui| {
+                                            if self.date_corrections.pending_target().is_some() {ui.label("Datei wird gerade einsortiert …");return;}
                                             self.gallery.selection.context(m.path());
                                             let count=self.gallery.selection.paths.len();
                                             if ui.button("Im Finder zeigen …").clicked() {

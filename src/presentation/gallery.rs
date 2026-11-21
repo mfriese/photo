@@ -11,6 +11,14 @@ pub(super) struct Selection {
     anchor: Option<PathBuf>,
 }
 impl Selection {
+    pub fn relocate(&mut self, from: &Path, to: &Path) {
+        if self.paths.remove(from) {
+            self.paths.insert(to.into());
+        }
+        if self.anchor.as_deref() == Some(from) {
+            self.anchor = Some(to.into());
+        }
+    }
     pub fn clear(&mut self) {
         self.paths.clear();
         self.anchor = None;
@@ -63,6 +71,7 @@ pub(super) struct GalleryState {
     pub job: photosuite_application::media_trash::TrashSession,
     pub report: Option<String>,
     pub removed: BTreeSet<PathBuf>,
+    pub deferred: Vec<(PathBuf, crate::domain::Media)>,
 }
 impl super::Suite {
     pub(super) fn prepare_gallery_selection(&mut self) {
@@ -79,6 +88,21 @@ impl super::Suite {
         }
     }
     pub(super) fn accept_collection_media(&mut self, root: &Path, media: crate::domain::Media) {
+        if self
+            .date_corrections
+            .pending_target()
+            .is_some_and(|file| root.join(file.as_str()) == media.path())
+        {
+            if !self
+                .gallery
+                .deferred
+                .iter()
+                .any(|(_, entry)| entry.path() == media.path())
+            {
+                self.gallery.deferred.push((root.into(), media));
+            }
+            return;
+        }
         if self.root.as_deref() != Some(root) || self.gallery.removed.contains(media.path()) {
             return;
         }
@@ -115,6 +139,10 @@ impl super::Suite {
         self.selected = removal.selected;
         self.record_photo =
             record_path.and_then(|path| self.items.iter().position(|media| media.path() == path));
+        if removal.removed.is_empty() {
+            return;
+        }
+        self.media_counts = Default::default();
         if self.selected.is_none() {
             self.storyboard.clear();
         }

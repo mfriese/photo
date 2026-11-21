@@ -7,6 +7,16 @@ use std::{
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
 };
+static RECORDS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) struct RecordGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+pub(crate) fn lock_records() -> Result<RecordGuard, String> {
+    RECORDS
+        .lock()
+        .map(|guard| RecordGuard { _guard: guard })
+        .map_err(|_| "Medien-Schreibsperre unterbrochen".into())
+}
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Record {
@@ -170,6 +180,16 @@ pub(crate) fn path(
     crate::metadata_fs::library_path(root, &relative, create)
 }
 pub(crate) fn write(
+    root: &Path,
+    file: &LibraryFile,
+    record: &Record,
+    expected: Option<&[u8]>,
+) -> Result<(), String> {
+    let guard = lock_records()?;
+    write_locked(&guard, root, file, record, expected)
+}
+pub(crate) fn write_locked(
+    _guard: &RecordGuard,
     root: &Path,
     file: &LibraryFile,
     record: &Record,

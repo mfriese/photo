@@ -237,6 +237,18 @@ impl Session {
     pub fn error(&self) -> &str {
         &self.error
     }
+    pub fn relocate(&mut self, from: &LibraryFile, to: &LibraryFile) {
+        if let Some(worker) = &self.worker {
+            worker.stop.store(true, Ordering::Relaxed);
+        }
+        self.last = None;
+        if let Some(mut entry) = self.catalog.entries.remove(from) {
+            entry.photo = to.clone();
+            self.catalog.entries.insert(to.clone(), entry);
+        }
+        self.revision = self.revision.wrapping_add(1);
+        self.dirty = true;
+    }
     pub fn refresh(&mut self) {
         self.dirty = true;
     }

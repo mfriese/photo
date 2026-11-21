@@ -1,5 +1,7 @@
 # Architekturprüfung der gesamten PhotoSuite
 
+Arbeitsablauf und aktueller Prüfungsumfang stehen in [AGENTS.md](AGENTS.md); bereichsspezifische Regeln unter [docs/instructions](docs/instructions/). Dieses Dokument erläutert Entwurfsentscheidungen und frühere Reviews und muss nicht für jede lokale Änderung vollständig gelesen werden.
+
 ## Ziel und Abhängigkeitsrichtung
 
 Clean Architecture mit pragmatischem DDD: fachliche Regeln klar abgrenzen, Anwendungsfälle unabhängig testen, Plattformdetails austauschbar halten. Optimierung richtet sich nach konkreten Anforderungen; die Architektur ist keine allgemeine Perfektionsgarantie.
@@ -75,7 +77,7 @@ Kern-Tests ohne GUI, EXIF-Programme und reale Dateisystemzugriffe für Workflows
 
 Neue Regressionen decken insbesondere Gruppenwechsel erst nach Entscheidung, Abbruch ohne Folgeschritt, begrenzte Bildparallelität, veraltete Cachegenerationen und unerwarteten Preferences-Workerabbruch ab. Echte Nutzerdateien werden in Tests nicht verändert.
 
-Verbindlicher Abschluss: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo build --workspace`. Bei Änderungen am nativen Player zusätzlich `tests/native_playback.m` ausführen. Die Architekturpflege ist in `AGENTS.md` als dauerhafte Projektanforderung festgelegt.
+Für Releases und vollständige Architekturreviews: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `cargo build --workspace` und `make check-architecture`. Bei nativen Änderungen die betroffenen nativen Tests ausführen. Für lokale Änderungen gilt der risikobasierte Prüfungsumfang aus `AGENTS.md`; reine Dokumentationsänderungen erfordern keinen Rust-Build.
 
 
 ## Paketierung und Laufzeitressourcen
@@ -138,7 +140,7 @@ Die Kontextfoto-Ansicht ist als `native/context_photo_view.h/.m` aus dem Audio-C
 
 Fotoklicks werden mit Sitzungs-/Anfragekennung und Slot gemeldet. Die Anwendungssitzung `PhotoContext` löst nur Slots ihrer aktuell veröffentlichten Auswahl zu Pfaden auf. Der frameworkfreie Port liefert sie über `AudioPlayerUpdate` zur Präsentation. `application::locate_photo` prüft die Zugehörigkeit zur aktuellen Sammlung und bestimmt das Bibliotheksjahr aus der vorhandenen Ordnerzuordnung. Die Präsentation setzt Jahresauswahl, sichtbare Filter und eine pfadgebundene Scroll-/Markierungsanforderung. Kein Bildbetrachter und kein Fokuswechsel werden ausgelöst; native Ansichten greifen nicht auf den Galerie-Zustand zu. Die virtualisierte Wand berechnet die Zielzeile aus aktuellen Spalten und Zeilenabständen, bevor sichtbare Zeilen erzeugt werden. Audio und Hintergrundprüfung laufen unverändert weiter.
 
-Geprüfte Grenzen: Domäne bleibt fachlich (Zeitstempel/Nachbarauswahl), Anwendung steuert Hintergrundsuche/aktuelle Auswahl, Ports verwenden ausschließlich Rust-Standard-/Domänentypen, Adapter kapseln Dateisystem/ImageIO/FFI, Präsentation verwaltet Zeichnen/Fokus/Ansicht. Cargo erzwingt weiterhin Desktop → Anwendung → Domäne; innere Crates verbieten unsafe und enthalten keine Dateisystem-/GUI-Adapter. Gegenüber dem bisherigen Stand wurden die vermischte native Fotodarstellung und der gemeinsame Probe-/Playeradapter getrennt. Verbleibende Snapshot-, Cache- und Plattformgrenzen bleiben oben dokumentiert. Diese Prüfung ist bei jeder Änderung verbindlich, einschließlich kleiner UI-Korrekturen.
+Geprüfte Grenzen: Domäne bleibt fachlich (Zeitstempel/Nachbarauswahl), Anwendung steuert Hintergrundsuche/aktuelle Auswahl, Ports verwenden ausschließlich Rust-Standard-/Domänentypen, Adapter kapseln Dateisystem/ImageIO/FFI, Präsentation verwaltet Zeichnen/Fokus/Ansicht. Cargo erzwingt weiterhin Desktop → Anwendung → Domäne; innere Crates verbieten unsafe und enthalten keine Dateisystem-/GUI-Adapter. Gegenüber dem bisherigen Stand wurden die vermischte native Fotodarstellung und der gemeinsame Probe-/Playeradapter getrennt. Verbleibende Snapshot-, Cache- und Plattformgrenzen bleiben oben dokumentiert. Bei jeder Änderung sind die betroffenen Schichtengrenzen zu prüfen; kleine UI-Korrekturen erfordern keine erneute Prüfung des gesamten Projekts.
 
 Regressionen: native Bitmaptests prüfen echte gefüllte Hoch-/Querformat-Kacheln, Geometrie an drei Breiten, Klickerkennung und explizite Beschriftungen. Anwendungstests verwerfen überholte Slotklicks. Präsentationstests prüfen Jahresnavigation mit Scrollen/Markierung ohne Betrachter oder Fokuswechsel, korrekt zurückgesetzte Filter und Ablehnen fremder Bibliothekspfade. Dies ersetzt keine manuelle Sichtprüfung.
 
@@ -661,3 +663,15 @@ Der gemeinsame Medien-Locator prüft den vollständigen `file`-Eigentümer, bevo
 Die Anwendungsschicht definiert eine gemeinsame absteigende Rasterordnung, mit unbekannten Zeiten zuletzt und stabilem Pfadgleichstand. CaptureTime liefert validierte geliehene Dateinamenschlüssel; MediaDates ergänzt ausschließlich bereits im RAM aufgelöste Fallback-Zeiten. Es entstehen beim Sortieren keine Dateioperationen oder neuen Metadatenaufträge. Die sichtbare Indexprojektion wird sortiert, die Medienliste behält stabile Viewer-/Auswahlindizes.
 
 `date_correction::destination_group` bestimmt nach expliziter Korrektur den passenden Zeitraum. Die Präsentation übernimmt diesen, behält passende Tag-/Ortsfilter und invalidiert deren Optionen, damit nach logischem Monats-/Jahreswechsel keine veraltete leere Ansicht übrig bleibt. Alles bleibt Alles. Die Zuordnungen bleiben über den unveränderten Medienpfad erhalten. Tests nutzen ausschließlich künstliche RAM-Daten bzw. temporäre Bibliotheken.
+
+
+### Inkrementelle Entfernung statt Bibliotheks-Neustart
+`media_trash::apply_outcome` ist eine reine Speicherprojektion der bestätigten Papierkorb-Ergebnisse. Bibliotheksidentität, Erfolg pro Datei und die über Pfade remappte Auswahl bestimmen die verbleibende Medienliste. Die Präsentation übernimmt diese Projektion, behält Tag-/Geo-Kataloge, Zeitraum und Filter und verwirft nur abgeleitete Optionscaches bzw. betroffene Markierungen. Verspätete Collection-Batches werden gegen die entfernten Pfade der aktuellen Sitzung gefiltert. Explizites Neuladen erlaubt restaurierte Originale wieder; es findet nach normalem Löschen kein automatischer Scan-Neustart statt.
+
+Zentrierte Standarddialoge und initialer Fokus für Bestätigungsbuttons liegen in der Präsentation (`theme::dialog`, `theme::default_dialog_button`). eguis unsichtbare Größenmessung und modale Überlagerungen dürfen den einmaligen Anfangsfokus nicht verbrauchen. Die Core-Schichten enthalten keine Fenster- oder Tastaturdetails. Destruktive Bestätigungen bleiben eine bewusste Nutzeraktion.
+
+
+### Explizites physisches Einsortieren nach Datumskorrektur
+Die standardmäßig ausgeschaltete Verschiebeoption erweitert den Repository-Port der Datumskorrektur. Zielpfad und validierte Uhrzeit stammen aus dem bestehenden Domänenmodell; die UI enthält keine Dateitransferregeln. Der Dateisystemadapter veröffentlicht ein exklusives, byteweise geprüftes Ziel auf demselben Dateisystem und erhält die Änderungszeit. Ein dauerhaftes Journal erlaubt Rückabwicklung bzw. Abschluss nach Prozessabbruch. Medien-YAML, Tags, Transkripte und Kommentarverweise werden umgebunden; SQLite bleibt daraus rekonstruierbar. Kollisionen führen weder zu Überschreiben noch zu Suffixen. Ein gemeinsames Schreibgate verhindert verspätete Transkripte unter dem alten Pfad. Plattformübergreifende Übertragung von Dateisystem-Zusatzattributen wird nicht garantiert.
+
+Die Darstellung übernimmt neue Pfade inkrementell, erhält Filter und Auswahl und verwirft veraltete Hintergrundresultate. Die Mausgeschwindigkeit der Datumsfelder wird ausschließlich im Theme festgelegt und durch einen echten egui-Ziehereignistest abgesichert. Fehler- und Prozessabbruchtests verwenden ausschließlich temporäre Medien.

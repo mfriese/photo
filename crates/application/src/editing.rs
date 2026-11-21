@@ -19,6 +19,11 @@ impl EditingSession {
     pub fn rotations(&self) -> &HashMap<PathBuf, u8> {
         &self.rotations
     }
+    pub fn relocate(&mut self, from: &std::path::Path, to: &std::path::Path) {
+        if let Some(turns) = self.rotations.remove(from) {
+            self.rotations.insert(to.into(), turns);
+        }
+    }
     pub fn is_saving(&self) -> bool {
         self.pending.is_some()
     }

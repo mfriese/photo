@@ -20,6 +20,8 @@ pub const BADGE_FONT_SIZE: f32 = 12.;
 pub const BADGE_HEIGHT: f32 = 20.;
 pub const SECTION_HEADING_SIZE: f32 = 18.;
 pub const TRANSPORT_EDGE: f32 = 34.;
+/// Calendar/time fields: twenty pointer pixels per integer step.
+pub const DATE_FIELD_DRAG_SPEED: f64 = 0.05;
 pub const BADGE_PADDING: f32 = 3.;
 pub const SELECTED: Color32 = Color32::from_rgb(43, 67, 103);
 
@@ -487,7 +489,8 @@ pub fn dialog<'a>(title: impl Into<egui::WidgetText>) -> egui::Window<'a> {
 pub fn default_dialog_button(ui: &mut egui::Ui, label: &str) -> bool {
     let response = ui.button(label);
     // egui first measures a new window invisibly; that pass must not consume initial focus.
-    if !response.enabled() || !ui.is_visible() {
+    let top = ui.memory(|memory| memory.top_modal_layer());
+    if !response.enabled() || !ui.is_visible() || top.is_some_and(|layer| layer != ui.layer_id()) {
         return response.clicked();
     }
     let frame = ui.ctx().cumulative_frame_nr();
@@ -497,13 +500,11 @@ pub fn default_dialog_button(ui: &mut egui::Ui, label: &str) -> bool {
         data.insert_temp(id, frame);
         last.is_none_or(|last| frame > last.saturating_add(1))
     });
-    let top = ui.memory(|memory| memory.top_modal_layer());
-    if first && top.is_none_or(|layer| layer == ui.layer_id()) {
+    if first {
         response.request_focus();
     }
     response.clicked()
         || (response.has_focus()
-            && top.is_none_or(|layer| layer == ui.layer_id())
             && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)))
 }
 

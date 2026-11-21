@@ -101,6 +101,13 @@ pub struct TagCatalog {
     tags: BTreeMap<String, BTreeSet<LibraryFile>>,
 }
 impl TagCatalog {
+    pub fn relocate_file(&mut self, from: &LibraryFile, to: &LibraryFile) {
+        for files in self.tags.values_mut() {
+            if files.remove(from) {
+                files.insert(to.clone());
+            }
+        }
+    }
     /// Derive managed tags without removing unseen files during a partial collection scan.
     pub fn reconcile_automatic(
         &mut self,

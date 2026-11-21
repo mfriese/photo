@@ -9,6 +9,15 @@ use std::{
 pub type Catalog = BTreeMap<LibraryFile, CaptureTime>;
 pub trait Repository: Send + Sync + 'static {
     fn load(&self, root: &Path) -> Result<Catalog, String>;
+    fn relocate(
+        &self,
+        _root: &Path,
+        _file: &LibraryFile,
+        _date: &CaptureTime,
+        _expected: Option<&CaptureTime>,
+    ) -> Result<LibraryFile, String> {
+        Err("Verschieben wird von dieser Ablage nicht unterstützt".into())
+    }
     fn save(
         &self,
         root: &Path,
@@ -28,6 +37,47 @@ pub fn replace_date(
         &format!("{year:04}:{month:02}:{day:02} {}", original.time_label()),
         "Korrigiertes Mediendatum",
     )
+}
+pub fn replace_timestamp(
+    year: u32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Result<CaptureTime, String> {
+    CaptureTime::parse(
+        &format!("{year:04}:{month:02}:{day:02} {hour:02}:{minute:02}:{second:02}"),
+        "Korrigiertes Mediendatum",
+    )
+}
+/// Canonical destination, without suffixes or fallback collision names.
+pub fn relocation_target(file: &LibraryFile, date: &CaptureTime) -> Result<LibraryFile, String> {
+    let path = Path::new(file.as_str());
+    let group = path
+        .parent()
+        .unwrap_or(Path::new(""))
+        .to_string_lossy()
+        .into_owned();
+    let media = Media::from_library_path(path.into(), group).ok_or("Ungültiges Medium")?;
+    if media.is_audio() {
+        return Err("Nur Fotos und Videos können einsortiert werden".into());
+    }
+    let target = date.target(Path::new(""), &media, 0);
+    LibraryFile::new(
+        target
+            .to_str()
+            .ok_or("Zielpfad ist nicht darstellbar")?
+            .into(),
+    )
+}
+pub struct Relocated {
+    pub from: LibraryFile,
+    pub to: LibraryFile,
+}
+struct Loaded {
+    catalog: Catalog,
+    relocated: Option<Relocated>,
 }
 pub fn project(root: &Path, catalog: &Catalog, media: Media) -> Media {
     let date = media
@@ -81,7 +131,7 @@ pub fn destination_group(selected: Option<&str>, media: &Media) -> Option<String
 }
 struct Worker {
     handle: JoinHandle<()>,
-    receiver: mpsc::Receiver<Result<Catalog, String>>,
+    receiver: mpsc::Receiver<Result<Loaded, String>>,
     generation: u64,
 }
 pub struct Session {
@@ -92,6 +142,8 @@ pub struct Session {
     pending_load: bool,
     pub catalog: Catalog,
     pub error: String,
+    relocated: Option<Relocated>,
+    pending_target: Option<LibraryFile>,
 }
 impl Session {
     pub fn new(repository: Option<Arc<dyn Repository>>) -> Self {
@@ -103,12 +155,16 @@ impl Session {
             pending_load: false,
             catalog: Catalog::new(),
             error: String::new(),
+            relocated: None,
+            pending_target: None,
         }
     }
     pub fn open(&mut self, root: &Path) {
         self.generation += 1;
         self.root = Some(root.into());
         self.catalog.clear();
+        self.relocated = None;
+        self.pending_target = None;
         self.error.clear();
         self.pending_load = true;
         self.launch();
@@ -128,7 +184,10 @@ impl Session {
         let (sender, receiver) = mpsc::channel();
         let generation = self.generation;
         let handle = std::thread::spawn(move || {
-            let _ = sender.send(repository.load(&root));
+            let _ = sender.send(repository.load(&root).map(|catalog| Loaded {
+                catalog,
+                relocated: None,
+            }));
         });
         self.worker = Some(Worker {
             handle,
@@ -136,10 +195,24 @@ impl Session {
             generation,
         });
     }
+    pub fn pending_target(&self) -> Option<&LibraryFile> {
+        self.pending_target.as_ref()
+    }
     pub fn busy(&self) -> bool {
         self.worker.is_some() || self.pending_load
     }
     pub fn save(&mut self, file: LibraryFile, date: CaptureTime) -> Result<(), String> {
+        self.save_with_relocation(file, date, false)
+    }
+    pub fn take_relocated(&mut self) -> Option<Relocated> {
+        self.relocated.take()
+    }
+    pub fn save_with_relocation(
+        &mut self,
+        file: LibraryFile,
+        date: CaptureTime,
+        relocate: bool,
+    ) -> Result<(), String> {
         if self.busy() {
             return Err("Datumsänderung wird bereits verarbeitet".into());
         }
@@ -151,10 +224,28 @@ impl Session {
         let expected = self.catalog.get(&file).cloned();
         let generation = self.generation;
         let (sender, receiver) = mpsc::channel();
+        self.pending_target = if relocate {
+            Some(relocation_target(&file, &date)?)
+        } else {
+            None
+        };
+        let mut catalog = self.catalog.clone();
         let handle = std::thread::spawn(move || {
-            let result = repository
-                .save(&root, &file, &date, expected.as_ref())
-                .and_then(|()| repository.load(&root));
+            let result = (|| {
+                let target = if relocate {
+                    repository.relocate(&root, &file, &date, expected.as_ref())?
+                } else {
+                    repository.save(&root, &file, &date, expected.as_ref())?;
+                    file.clone()
+                };
+                catalog.remove(&file);
+                catalog.insert(target.clone(), date);
+                let relocated = (target != file).then_some(Relocated {
+                    from: file,
+                    to: target,
+                });
+                Ok(Loaded { catalog, relocated })
+            })();
             let _ = sender.send(result);
         });
         self.error.clear();
@@ -179,9 +270,11 @@ impl Session {
         let joined = worker.handle.join();
         let current = worker.generation == self.generation;
         if current {
+            self.pending_target = None;
             match result {
                 Ok(catalog) if joined.is_ok() => {
-                    self.catalog = catalog;
+                    self.catalog = catalog.catalog;
+                    self.relocated = catalog.relocated;
                     self.error.clear();
                 }
                 Ok(_) => self.error = "Datumsauftrag fehlgeschlagen".into(),
@@ -330,5 +423,28 @@ mod navigation_tests {
         ] {
             assert_eq!(destination_group(from, &media).as_deref(), to);
         }
+    }
+}
+
+#[cfg(test)]
+mod relocation_plan_tests {
+    use super::*;
+    #[test]
+    fn target_is_exact_and_clock_is_validated_without_any_collision_suffix() {
+        let date = replace_timestamp(1980, 7, 8, 12, 48, 45).unwrap();
+        let source = LibraryFile::new("broken/img_20111111_124844.mp4".into()).unwrap();
+        assert_eq!(
+            relocation_target(&source, &date).unwrap().as_str(),
+            "1980/07/img_19800708_124845.mp4"
+        );
+        assert!(replace_timestamp(1980, 7, 8, 24, 0, 0).is_err());
+        assert!(replace_timestamp(2023, 2, 29, 0, 0, 0).is_err());
+        assert!(
+            relocation_target(
+                &LibraryFile::new("2026/audio/diary/aud_20261121_120000.mp4".into()).unwrap(),
+                &date
+            )
+            .is_err()
+        );
     }
 }

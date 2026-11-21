@@ -172,6 +172,7 @@ impl Suite {
         self.items.clear();
         self.gallery.selection.clear();
         self.gallery.removed.clear();
+        self.gallery.deferred.clear();
         self.known_media.clear();
         self.media_dates.clear();
         self.geo_markers.clear();
@@ -194,6 +195,10 @@ impl Suite {
         index: usize,
         ctx: &egui::Context,
     ) {
+        if self.date_corrections.pending_target().is_some() {
+            self.status = "Datei wird gerade einsortiert …".into();
+            return;
+        }
         let Some(media) = self.items.get(index) else {
             self.selected = None;
             self.storyboard.clear();
