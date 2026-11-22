@@ -3037,6 +3037,19 @@ fn fullscreen_video_waits_for_space_before_starting_playback() {
         if !tiles.is_empty() {
             painted_grid = true;
             assert_eq!(tiles.len(), 6);
+            let top = tiles
+                .iter()
+                .map(|rect| rect.top())
+                .fold(f32::INFINITY, f32::min);
+            let bottom = tiles
+                .iter()
+                .map(|rect| rect.bottom())
+                .fold(f32::NEG_INFINITY, f32::max);
+            assert!(
+                ((top + bottom) / 2. - 360.).abs() < 24.,
+                "grid must be vertically centered: {top}..{bottom}"
+            );
+
             for rect in tiles {
                 assert!(rect.is_finite());
                 assert!(rect.left() >= 0. && rect.top() >= 0.);

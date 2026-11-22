@@ -122,6 +122,26 @@ impl CommandBindings {
         self.bindings = candidate;
         Ok(())
     }
+    pub fn fixed_pressed(
+        &self,
+        ctx: &egui::Context,
+        id: &str,
+        context: photosuite_application::preferences::bindings::BindingContext,
+    ) -> bool {
+        if self.visible {
+            return false;
+        }
+        let Some(binding) = photosuite_application::preferences::bindings::fixed_bindings()
+            .into_iter()
+            .find(|b| b.id == id)
+        else {
+            return false;
+        };
+        context.allows(binding.scope)
+            && egui::Key::from_name(&binding.shortcut.key).is_some_and(|key| {
+                ctx.input(|input| input.modifiers.is_none() && input.key_pressed(key))
+            })
+    }
     pub fn shortcuts(&mut self, ctx: &egui::Context, enabled: bool) -> Vec<Command> {
         if self.visible || !enabled || ctx.wants_keyboard_input() {
             return Vec::new();

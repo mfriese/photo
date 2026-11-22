@@ -13,6 +13,7 @@ mod menu;
 mod photo_location;
 mod place_tree;
 mod processing_ui;
+mod shortcut_overlay;
 mod startup;
 mod tag_filter;
 mod tags;
@@ -632,6 +633,7 @@ impl eframe::App for Suite {
         if let Some(path) = self.duplicate_dialog.show(ctx, &self.services) {
             self.refresh_changed_library(path);
         }
+        self.shortcut_overlay(ctx);
     }
 }
 impl Suite {

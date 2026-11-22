@@ -280,6 +280,8 @@ impl Suite {
     }
     pub(super) fn search_dialog(&mut self, ctx: &egui::Context) {
         if !self.search_open {
+            self.focus_search = false;
+            ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("library_search")));
             return;
         }
         let mut clear = false;

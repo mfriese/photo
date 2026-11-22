@@ -18,17 +18,30 @@ impl super::Suite {
                 self.storyboard.clear();
                 return;
             };
-            if !ctx.wants_keyboard_input()
-                && !self.comments.is_open()
-                && !self.options_open
-                && !self.tag_view.open
-                && !self.bindings.visible
-                && ctx.input(|i| i.modifiers.is_none() && i.key_pressed(egui::Key::F))
+            let binding_context = photosuite_application::preferences::bindings::BindingContext {
+                focused: ctx.input(|i| i.focused),
+                modal: (self.comments.is_open() && !self.comment_view.inline)
+                    || self.options_open
+                    || self.tag_view.open
+                    || self.bindings.visible
+                    || self.location_open
+                    || self.date_editor.is_some(),
+                text_input: ctx.wants_keyboard_input(),
+                viewer: true,
+                ..Default::default()
+            };
+            if self
+                .bindings
+                .fixed_pressed(ctx, "viewer_fullscreen", binding_context)
             {
                 self.viewer_fullscreen = !self.viewer_fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.viewer_fullscreen));
             }
-            if self.viewer_fullscreen && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.viewer_fullscreen
+                && self
+                    .bindings
+                    .fixed_pressed(ctx, "viewer_close", binding_context)
+            {
                 self.viewer_fullscreen = false;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
                 return;
@@ -38,7 +51,9 @@ impl super::Suite {
                 && !self.options_open
                 && !self.tag_view.open
                 && !self.bindings.visible
-                && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+                && self
+                    .bindings
+                    .fixed_pressed(ctx, "viewer_close", binding_context)
             {
                 if self.leave_inline_recording() {
                     self.selected = None;
@@ -68,7 +83,7 @@ impl super::Suite {
                             );
                         } else {
                             ui.label("Video abspielen: konfiguriertes Tastenkürzel (standardmäßig Leertaste) · ← / →: Blättern · F: Vollbild beenden");
-                            self.storyboard.show(ui, m.path(), self.services.video_preview.clone());
+                            self.storyboard.show_fullscreen(ui, m.path(), self.services.video_preview.clone());
                         }
                     });
             } else {
@@ -138,8 +153,12 @@ impl super::Suite {
                 && (!self.comments.is_open() || self.comment_view.inline)
                 && !self.tag_view.open
             {
-                next |= ctx.input(|i| i.key_pressed(egui::Key::ArrowRight));
-                previous |= ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft));
+                next |= self
+                    .bindings
+                    .fixed_pressed(ctx, "viewer_next", binding_context);
+                previous |= self
+                    .bindings
+                    .fixed_pressed(ctx, "viewer_previous", binding_context);
             }
             if let Some(p) = position {
                 let recording = self.comment_view.inline

@@ -29,6 +29,23 @@ impl StoryboardView {
         self.session.poll();
     }
     pub fn show(&mut self, ui: &mut egui::Ui, path: &Path, source: Arc<dyn VideoPreviewSource>) {
+        self.show_inner(ui, path, source, false);
+    }
+    pub fn show_fullscreen(
+        &mut self,
+        ui: &mut egui::Ui,
+        path: &Path,
+        source: Arc<dyn VideoPreviewSource>,
+    ) {
+        self.show_inner(ui, path, source, true);
+    }
+    fn show_inner(
+        &mut self,
+        ui: &mut egui::Ui,
+        path: &Path,
+        source: Arc<dyn VideoPreviewSource>,
+        centered: bool,
+    ) {
         if self.state.as_ref().is_none_or(|s| s.path != path) {
             self.session.request(source, path.into());
             self.state = Some(State {
@@ -96,6 +113,14 @@ impl StoryboardView {
         let rows = FRAME_COUNT.div_ceil(columns);
         let height = (width * 9. / 16.)
             .min(((ui.available_height() - rows as f32 * 28.) / rows as f32).max(32.));
+        if centered {
+            let grid_height = rows as f32
+                * (height
+                    + ui.text_style_height(&egui::TextStyle::Body)
+                    + ui.spacing().item_spacing.y * 2.);
+            let padding = (ui.max_rect().center().y - ui.cursor().top() - grid_height / 2.).max(0.);
+            ui.add_space(padding);
+        }
         egui::ScrollArea::vertical()
             .id_salt("video_storyboard")
             .max_height(ui.available_height().max(180.))
