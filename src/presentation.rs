@@ -242,6 +242,28 @@ impl Suite {
             Err(error) => self.status = error,
         }
     }
+    fn local_media_commands(&mut self, ctx: &egui::Context) -> Vec<crate::commands::Command> {
+        if self.native_menu.is_some() && !self.viewer_fullscreen {
+            Vec::new()
+        } else {
+            self.bindings.shortcuts(
+                ctx,
+                self.selected.is_some()
+                    && !self.editor.is_saving()
+                    && self.date_editor.is_none()
+                    && !self.options_open
+                    && !self.duplicate_dialog.visible
+                    && !self.duplicate_dialog.running()
+                    && !self.import_panel.visible
+                    && !self.comments.is_open()
+                    && !self.tag_view.open
+                    && self.gallery.pending.is_none()
+                    && !self.gallery.job.running()
+                    && self.gallery.report.is_none()
+                    && self.settings_ready(),
+            )
+        }
+    }
     fn settings_ready(&self) -> bool {
         self.startup
             .as_ref()
@@ -526,26 +548,7 @@ impl eframe::App for Suite {
         if self.editor.is_saving() {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
-        let mut pending = if self.native_menu.is_some() {
-            Vec::new()
-        } else {
-            self.bindings.shortcuts(
-                ctx,
-                self.selected.is_some()
-                    && !self.editor.is_saving()
-                    && self.date_editor.is_none()
-                    && !self.options_open
-                    && !self.duplicate_dialog.visible
-                    && !self.duplicate_dialog.running()
-                    && !self.import_panel.visible
-                    && !self.comments.is_open()
-                    && !self.tag_view.open
-                    && self.gallery.pending.is_none()
-                    && !self.gallery.job.running()
-                    && self.gallery.report.is_none()
-                    && self.settings_ready(),
-            )
-        };
+        let mut pending = self.local_media_commands(ctx);
         self.poll_library_settings(ctx);
         if let Some(result) = self.collection.poll() {
             match result {

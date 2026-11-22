@@ -3002,6 +3002,7 @@ fn fullscreen_video_waits_for_space_before_starting_playback() {
         }
     }
     let mut suite = test_suite();
+    suite.native_menu = Some(Box::new(TestMenu(Arc::new(MenuHarness::default()))));
     let video = Arc::new(Video(AtomicUsize::new(0)));
     suite.services.video_player = video.clone();
     suite.services.video_preview = video.clone();
@@ -3070,7 +3071,7 @@ fn fullscreen_video_waits_for_space_before_starting_playback() {
         ..Default::default()
     };
     let _ = ctx.run(input, |ctx| {
-        let commands = suite.bindings.shortcuts(ctx, true);
+        let commands = suite.local_media_commands(ctx);
         suite.media_viewer(ctx, &[0], &mut Vec::new());
         for command in commands {
             suite.execute(command, ctx);
@@ -3092,7 +3093,7 @@ fn fullscreen_video_waits_for_space_before_starting_playback() {
             ..Default::default()
         };
         let _ = ctx.run(input, |ctx| {
-            let commands = suite.bindings.shortcuts(ctx, true);
+            let commands = suite.local_media_commands(ctx);
             suite.media_viewer(ctx, &[0], &mut Vec::new());
             for command in commands {
                 suite.execute(command, ctx);

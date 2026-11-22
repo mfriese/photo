@@ -82,7 +82,11 @@ impl super::Suite {
                                 egui::Image::from_uri(image_uri(m.path(), self.editor.rotations())),
                             );
                         } else {
-                            ui.label("Video abspielen: konfiguriertes Tastenkürzel (standardmäßig Leertaste) · ← / →: Blättern · F: Vollbild beenden");
+                            ui.horizontal_wrapped(|ui| {
+                                previous = button(ui, Icon::Previous, position.is_some_and(|p| p > 0), "Vorheriges Medium (Pfeiltaste links)").clicked();
+                                next = button(ui, Icon::Next, position.is_some_and(|p| p + 1 < visible.len()), "Nächstes Medium (Pfeiltaste rechts)").clicked();
+                                ui.label("Video abspielen: konfiguriertes Tastenkürzel (standardmäßig Leertaste) · F: Vollbild beenden");
+                            });
                             self.storyboard.show_fullscreen(ui, m.path(), self.services.video_preview.clone());
                         }
                     });

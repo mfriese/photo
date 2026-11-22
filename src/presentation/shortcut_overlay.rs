@@ -15,7 +15,13 @@ impl Suite {
             .into_iter()
             .filter(|entry| entry.enabled)
         {
-            let Some(shortcut) = entry.shortcut else {
+            let shortcut = entry.shortcut.or_else(|| match entry.action {
+                Action::Edit(command) => {
+                    self.bindings.export().get(command.id()).cloned().flatten()
+                }
+                _ => None,
+            });
+            let Some(shortcut) = shortcut else {
                 continue;
             };
             let title = match entry.action {

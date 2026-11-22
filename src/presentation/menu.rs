@@ -171,7 +171,11 @@ impl Suite {
                 action: Action::Edit(command),
                 enabled,
                 checked: None,
-                shortcut: bindings.get(command.id()).cloned().flatten(),
+                shortcut: if self.viewer_fullscreen {
+                    None
+                } else {
+                    bindings.get(command.id()).cloned().flatten()
+                },
             });
         }
         entries
