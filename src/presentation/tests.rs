@@ -239,7 +239,6 @@ pub(super) fn test_suite() -> Suite {
         diary_catalog: Default::default(),
         remember_after_scan: false,
         viewer_fullscreen: false,
-        viewer_video: None,
         storyboard: Default::default(),
         preferences: Default::default(),
         persistence: None,
@@ -2012,10 +2011,17 @@ fn sidebar_tags_filter_period_with_and_and_keep_options_visible() {
         let output = ctx.run(input(events, width), |ctx| {
             suite.library_sidebar(ctx);
         });
+        fn flatten(shape: egui::epaint::Shape) -> Vec<egui::epaint::Shape> {
+            match shape {
+                egui::epaint::Shape::Vec(shapes) => shapes.into_iter().flat_map(flatten).collect(),
+                shape => vec![shape],
+            }
+        }
         output
             .shapes
             .into_iter()
-            .filter_map(|shape| match shape.shape {
+            .flat_map(|shape| flatten(shape.shape))
+            .filter_map(|shape| match shape {
                 egui::Shape::Text(t) => {
                     Some((t.galley.job.text.trim().into(), t.visual_bounding_rect()))
                 }
@@ -2119,6 +2125,7 @@ fn sidebar_tags_filter_period_with_and_and_keep_options_visible() {
             })
             .unwrap();
         let labels = draw(&mut suite, &ctx, vec![], width);
+        // Empty tag definitions are pruned by the application.
         assert!(!labels.iter().any(|(name, _)| name == "unused"));
         suite.tag_view.filters.insert("scan".into());
         // Text search does not hide the remaining period's tag choices.
@@ -2129,11 +2136,16 @@ fn sidebar_tags_filter_period_with_and_and_keep_options_visible() {
         suite.group = Some("2024".into());
         let labels = draw(&mut suite, &ctx, vec![], width);
         assert!(suite.tag_view.filters.is_empty());
-        assert!(
-            !labels
-                .iter()
-                .any(|(name, _)| name == "scan" || name == "dia")
-        );
+        assert!(labels.iter().any(|(name, _)| name == "scan"));
+        assert!(labels.iter().any(|(name, _)| name == "dia"));
+        let scan = labels
+            .iter()
+            .find(|(name, _)| name == "scan")
+            .unwrap()
+            .1
+            .center();
+        draw(&mut suite, &ctx, click(scan), width);
+        assert!(suite.tag_view.filters.is_empty());
         suite.group = None;
         let labels = draw(&mut suite, &ctx, vec![], width);
         assert!(labels.iter().any(|(name, _)| name == "scan"));
@@ -2962,4 +2974,88 @@ fn fullscreen_viewer_toggles_and_navigates_without_reloading() {
         assert_eq!(suite.selected, Some(selected));
         assert!(!suite.collection.is_loading());
     }
+}
+
+#[test]
+fn fullscreen_video_waits_for_space_before_starting_playback() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Video(AtomicUsize);
+    impl crate::ports::VideoPlayer for Video {
+        fn play(&self, _: &std::path::Path) -> Result<(), String> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    impl crate::ports::VideoPreviewSource for Video {
+        fn duration(&self, _: &std::path::Path) -> Result<f64, String> {
+            Err("test preview".into())
+        }
+        fn frame_at(
+            &self,
+            _: &std::path::Path,
+            _: f64,
+        ) -> Result<crate::ports::VideoFrame, String> {
+            Err("test preview".into())
+        }
+    }
+    let mut suite = test_suite();
+    let video = Arc::new(Video(AtomicUsize::new(0)));
+    suite.services.video_player = video.clone();
+    suite.services.video_preview = video.clone();
+    suite.items =
+        vec![Media::from_path("/Fotos/20211115_102505.mp4".into(), "2021/11".into()).unwrap()];
+    suite.selected = Some(0);
+    suite.viewer_fullscreen = true;
+    let ctx = egui::Context::default();
+    ctx.style_mut(|style| style.animation_time = 0.);
+    let mut painted_grid = false;
+    for _ in 0..3 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280., 720.),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| suite.media_viewer(ctx, &[0], &mut Vec::new()));
+        let tiles: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(rect)
+                    if rect.fill == egui::Color32::from_rgb(20, 24, 30) =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect();
+        // Areas perform an invisible measuring pass before painting.
+        if !tiles.is_empty() {
+            painted_grid = true;
+            assert_eq!(tiles.len(), 6);
+            for rect in tiles {
+                assert!(rect.is_finite());
+                assert!(rect.left() >= 0. && rect.top() >= 0.);
+                assert!(rect.right() <= 1280.5 && rect.bottom() <= 720.5, "{rect:?}");
+            }
+        }
+    }
+    assert!(painted_grid, "fullscreen must paint the six-frame overview");
+    assert_eq!(video.0.load(Ordering::SeqCst), 0);
+    let input = egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        }],
+        ..Default::default()
+    };
+    let _ = ctx.run(input, |ctx| suite.media_viewer(ctx, &[0], &mut Vec::new()));
+    assert_eq!(video.0.load(Ordering::SeqCst), 1);
 }

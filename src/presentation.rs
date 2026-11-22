@@ -67,7 +67,6 @@ pub struct Suite {
     diary_catalog: photosuite_application::diary::DiaryCatalog,
     remember_after_scan: bool,
     viewer_fullscreen: bool,
-    viewer_video: Option<PathBuf>,
     storyboard: crate::storyboard_ui::StoryboardView,
     preferences: photosuite_application::preferences::Preferences,
     persistence: Option<photosuite_application::preferences::Persistence>,
@@ -739,7 +738,6 @@ pub fn create(
         ),
         remember_after_scan: false,
         viewer_fullscreen: false,
-        viewer_video: None,
         storyboard: Default::default(),
         preferences: preferences.clone(),
         persistence: Some(photosuite_application::preferences::Persistence::new(

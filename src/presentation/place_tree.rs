@@ -14,40 +14,55 @@ pub(super) fn show(
         let mut bulk_open = None;
         for country in countries {
             let id = egui::Id::new(("photosuite_place_country", root, &country.code));
-            let header = theme::tree_header(
-                ui,
-                id,
-                &country.name,
-                selected.contains(&Selection::Country(country.code.clone())),
-                Some(country.count),
-                None,
-                |ui| {
-                    for region in &country.regions {
-                        let id = egui::Id::new((
-                            "photosuite_place_region",
-                            root,
-                            &country.code,
-                            &region.code,
-                        ));
-                        egui::collapsing_header::CollapsingState::load_with_default_open(
-                            ui.ctx(),
-                            id,
-                            false,
-                        )
-                        .show_header(ui, |ui| {
-                            toggle(
-                                ui,
-                                selected,
-                                Selection::Region {
-                                    country: country.code.clone(),
-                                    code: region.code.clone(),
-                                },
-                                &region.name,
-                                region.count,
-                            )
-                        })
-                        .body(|ui| {
-                            for place in &region.places {
+            let header = ui
+                .add_enabled_ui(country.count > 0, |ui| {
+                    theme::tree_header(
+                        ui,
+                        id,
+                        &country.name,
+                        selected.contains(&Selection::Country(country.code.clone())),
+                        Some(country.count),
+                        None,
+                        |ui| {
+                            for region in &country.regions {
+                                let id = egui::Id::new((
+                                    "photosuite_place_region",
+                                    root,
+                                    &country.code,
+                                    &region.code,
+                                ));
+                                egui::collapsing_header::CollapsingState::load_with_default_open(
+                                    ui.ctx(),
+                                    id,
+                                    false,
+                                )
+                                .show_header(ui, |ui| {
+                                    toggle(
+                                        ui,
+                                        selected,
+                                        Selection::Region {
+                                            country: country.code.clone(),
+                                            code: region.code.clone(),
+                                        },
+                                        &region.name,
+                                        region.count,
+                                    )
+                                })
+                                .body(|ui| {
+                                    for place in &region.places {
+                                        ui.indent(("place_leaf", place.id), |ui| {
+                                            toggle(
+                                                ui,
+                                                selected,
+                                                Selection::Place(place.id),
+                                                &place.name,
+                                                place.count,
+                                            )
+                                        });
+                                    }
+                                });
+                            }
+                            for place in &country.places {
                                 ui.indent(("place_leaf", place.id), |ui| {
                                     toggle(
                                         ui,
@@ -58,21 +73,10 @@ pub(super) fn show(
                                     )
                                 });
                             }
-                        });
-                    }
-                    for place in &country.places {
-                        ui.indent(("place_leaf", place.id), |ui| {
-                            toggle(
-                                ui,
-                                selected,
-                                Selection::Place(place.id),
-                                &place.name,
-                                place.count,
-                            )
-                        });
-                    }
-                },
-            );
+                        },
+                    )
+                })
+                .inner;
             country_ids.push(header.header_response.id);
             if header.header_response.clicked() {
                 let choice = Selection::Country(country.code.clone());
@@ -104,7 +108,11 @@ fn toggle(
     label: &str,
     count: usize,
 ) -> egui::Response {
-    let response = theme::place_navigation(ui, selected.contains(&choice), label, count);
+    let response = ui
+        .add_enabled_ui(count > 0, |ui| {
+            theme::place_navigation(ui, selected.contains(&choice), label, count)
+        })
+        .inner;
     if response.clicked() && !selected.remove(&choice) {
         selected.insert(choice);
     }

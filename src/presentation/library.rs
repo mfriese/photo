@@ -70,9 +70,11 @@ impl super::Suite {
                     ui.add_space(12.);
                     if theme::filter_heading(ui,"Tags",!self.tag_view.filters.is_empty()) {self.tag_view.filters.clear();}
                     ui.add_space(8.);
-                    for tag in tags {
+                    let all_tags: Vec<_> = self.organization.catalog().map(|c| c.tags().keys().cloned().collect()).unwrap_or_default();
+                    for tag in all_tags {
+                        let available = tags.contains(&tag);
                         let selected = self.tag_view.filters.contains(&tag);
-                        if theme::tag_navigation(ui, selected, &tag).on_hover_text(format!("{tag}\nNur Medien mit allen ausgewählten Tags anzeigen.")).clicked()
+                        if ui.add_enabled_ui(available, |ui| theme::tag_navigation(ui, selected, &tag)).inner.on_hover_text(format!("{tag}\nNur Medien mit allen ausgewählten Tags anzeigen.")).clicked()
                             && !self.tag_view.filters.remove(&tag) {
                             self.tag_view.filters.insert(tag);
                         }
@@ -83,7 +85,7 @@ impl super::Suite {
                         ui.add_space(8.);
                         if self.place_options.as_ref().is_none_or(|cache|cache.revision!=self.place_filter.revision() || cache.count!=self.items.len() || cache.group!=self.group) {
                             let candidates=crate::application::visible(&self.items,"",self.group.as_deref(),false);
-                            let rows=self.root.as_ref().map(|root|self.place_filter.catalog().options(&self.items,root,&candidates)).unwrap_or_default();
+                            let rows=self.root.as_ref().map(|root|self.place_filter.catalog().options_in_scope(&self.items,root,&candidates)).unwrap_or_default();
                             self.place_options=Some(PlaceOptionsCache {revision:self.place_filter.revision(),count:self.items.len(),group:self.group.clone(),rows});
                         }
                         let options=self.place_options.as_ref().map(|cache|cache.rows.as_slice()).unwrap_or(&[]);

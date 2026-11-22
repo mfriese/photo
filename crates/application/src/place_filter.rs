@@ -167,6 +167,28 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unavailable_locations_keep_their_position_and_zero_counts() {
+        let root = Path::new("/Photos");
+        let items: Vec<_> = ["2020/01/a.jpg", "2021/01/b.jpg"]
+            .into_iter()
+            .map(|p| Media::from_path(root.join(p), p[..7].into()).unwrap())
+            .collect();
+        let catalog = Catalog::new(vec![
+            located("2020/01/a.jpg", "DE", 1, "Berlin"),
+            located("2021/01/b.jpg", "FR", 2, "Paris"),
+        ]);
+        let all = catalog.options_in_scope(&items, root, &[0, 1]);
+        let period = catalog.options_in_scope(&items, root, &[0]);
+        assert_eq!(
+            all.iter().map(|c| &c.code).collect::<Vec<_>>(),
+            period.iter().map(|c| &c.code).collect::<Vec<_>>()
+        );
+        let unavailable = period.iter().find(|c| c.code == "FR").unwrap();
+        assert_eq!(unavailable.count, 0);
+        assert_eq!(unavailable.places[0].count, 0);
+        assert_eq!(unavailable.places[0].name, "Paris");
+    }
     fn located(photo: &str, country: &str, id: i64, name: &str) -> LocatedPhoto {
         LocatedPhoto {
             photo: LibraryFile::new(photo.into()).unwrap(),

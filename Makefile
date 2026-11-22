@@ -28,3 +28,8 @@ test-native: test-audio test-video test-menu test-recorder test-icon
 .PHONY: test-icon
 test-icon:
 	python3 scripts/check_native_icon.py
+
+.PHONY: check-formats
+check-formats:
+	python3 scripts/check_format_fixtures.py
+	cargo test --workspace frozen_

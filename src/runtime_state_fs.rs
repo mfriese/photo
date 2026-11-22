@@ -103,3 +103,27 @@ mod tests {
         assert!(read(root.path()).is_err());
     }
 }
+
+#[cfg(test)]
+mod format_contract {
+    use super::*;
+    #[test]
+    fn frozen_runtime_v1_preserves_mode_and_rejects_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("yaml")).unwrap();
+        let path = dir.path().join(FILE);
+        let fixture = include_bytes!("../tests/fixtures/formats/runtime/v1/runtime.yaml");
+        fs::write(&path, fixture).unwrap();
+        let (state, expected) = read(dir.path()).unwrap();
+        assert_eq!(state.transcription.mode, Mode::Paused);
+        let bytes = save(dir.path(), &state, expected.as_deref()).unwrap();
+        assert_eq!(
+            serde_saphyr::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            serde_saphyr::from_slice::<serde_json::Value>(fixture).unwrap()
+        );
+        let future = b"version: 999\ntranscription:\n  mode: paused\n";
+        fs::write(&path, future).unwrap();
+        assert!(read(dir.path()).is_err());
+        assert_eq!(fs::read(path).unwrap(), future);
+    }
+}

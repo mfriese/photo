@@ -350,3 +350,39 @@ mod tests {
         assert!(!root.path().join("yaml/layout.yaml").exists());
     }
 }
+
+#[cfg(test)]
+mod format_contract {
+    use super::*;
+    #[test]
+    fn frozen_media_v3_remains_lossless_and_rejects_future_data() {
+        for fixture in [
+            include_bytes!("../tests/fixtures/formats/media/v3/photo.yaml").as_slice(),
+            include_bytes!("../tests/fixtures/formats/media/v3/minimal.yaml").as_slice(),
+            include_bytes!("../tests/fixtures/formats/media/v3/video.yaml").as_slice(),
+        ] {
+            let record = parse(fixture).unwrap();
+            let encoded = serde_saphyr::to_string(&record).unwrap();
+            let reread = parse(encoded.as_bytes()).unwrap();
+            let before: serde_json::Value = serde_saphyr::from_slice(fixture).unwrap();
+            let after = serde_json::to_value(reread).unwrap();
+            assert_eq!(before, after);
+            let directory = tempfile::tempdir().unwrap();
+            let file = LibraryFile::new(record.file.clone()).unwrap();
+            write(directory.path(), &file, &record, None).unwrap();
+            let saved = fs::read(path(directory.path(), &file, false).unwrap()).unwrap();
+            assert_eq!(
+                serde_json::to_value(parse(&saved).unwrap()).unwrap(),
+                before
+            );
+            for invalid in [
+                String::from_utf8(fixture.to_vec())
+                    .unwrap()
+                    .replace("version: 3", "version: 999"),
+                format!("{}\nfuture_field: true\n", String::from_utf8_lossy(fixture)),
+            ] {
+                assert!(parse(invalid.as_bytes()).is_err());
+            }
+        }
+    }
+}

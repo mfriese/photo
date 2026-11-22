@@ -10,7 +10,6 @@ impl super::Suite {
     ) {
         if self.selected.is_none() && self.viewer_fullscreen {
             self.viewer_fullscreen = false;
-            self.viewer_video = None;
             ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(false));
         }
         if let Some(index) = self.selected {
@@ -56,8 +55,10 @@ impl super::Suite {
                 egui::Area::new(egui::Id::new("fullscreen_viewer"))
                     .order(egui::Order::Foreground)
                     .fixed_pos(ctx.content_rect().min)
+                    .default_size(ctx.content_rect().size())
                     .show(ctx, |ui| {
                         ui.set_min_size(ctx.content_rect().size());
+                        ui.set_max_size(ctx.content_rect().size());
                         ui.painter()
                             .rect_filled(ctx.content_rect(), 0., egui::Color32::BLACK);
                         if !m.is_video() {
@@ -66,10 +67,18 @@ impl super::Suite {
                                 egui::Image::from_uri(image_uri(m.path(), self.editor.rotations())),
                             );
                         } else {
-                            ui.label("Videowiedergabe im nativen Player · F beendet Vollbild");
+                            ui.label("Leertaste: Video abspielen · ← / →: Blättern · F: Vollbild beenden");
+                            self.storyboard.show(ui, m.path(), self.services.video_preview.clone());
                         }
                     });
-                if m.is_video() && self.viewer_video.as_deref() != Some(m.path()) {
+                if m.is_video()
+                    && !ctx.wants_keyboard_input()
+                    && !self.comments.is_open()
+                    && !self.options_open
+                    && !self.tag_view.open
+                    && !self.bindings.visible
+                    && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
+                {
                     let transport = self.services.audio_player.transport();
                     let result = if transport.playing {
                         self.services.audio_player.control(
@@ -86,12 +95,8 @@ impl super::Suite {
                     {
                         self.status = error;
                     }
-                    self.viewer_video = Some(m.path().to_owned());
-                } else if !m.is_video() {
-                    self.viewer_video = None;
                 }
             } else {
-                self.viewer_video = None;
                 egui::Window::new(format!("Großansicht · {date} {clock}"))
                     .id(egui::Id::new("media_viewer"))
                     .open(&mut open)

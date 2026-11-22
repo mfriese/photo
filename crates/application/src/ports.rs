@@ -100,6 +100,25 @@ pub struct VideoFrame {
 pub trait VideoPreviewSource: Send + Sync + 'static {
     fn duration(&self, path: &std::path::Path) -> Result<f64, String>;
     fn frame_at(&self, path: &std::path::Path, seconds: f64) -> Result<VideoFrame, String>;
+    /// Some containers have no frame at zero. Reuse bounded storyboard positions.
+    fn preview_frame(&self, path: &std::path::Path) -> Result<VideoFrame, String> {
+        match self.frame_at(path, 0.) {
+            Ok(frame) => Ok(frame),
+            Err(first_error) => {
+                let times = self
+                    .duration(path)
+                    .and_then(crate::storyboard::sample_times);
+                if let Ok(times) = times {
+                    for seconds in times {
+                        if let Ok(frame) = self.frame_at(path, seconds) {
+                            return Ok(frame);
+                        }
+                    }
+                }
+                Err(first_error)
+            }
+        }
+    }
 }
 
 /// Native playback UI is invoked on the desktop UI thread; loading is asynchronous.
@@ -128,5 +147,32 @@ mod tests {
         let image = DecodedImage::new(1, 1, vec![1, 2, 3, 255]).unwrap();
         assert_eq!((image.width(), image.height()), (1, 1));
         assert_eq!(image.rgba(), &[1, 2, 3, 255]);
+    }
+}
+
+#[cfg(test)]
+mod video_preview_tests {
+    use super::*;
+    struct DelayedFirstFrame;
+    impl VideoPreviewSource for DelayedFirstFrame {
+        fn duration(&self, _: &std::path::Path) -> Result<f64, String> {
+            Ok(12.)
+        }
+        fn frame_at(&self, _: &std::path::Path, seconds: f64) -> Result<VideoFrame, String> {
+            if seconds == 0. {
+                return Err("Kein Bild am Containeranfang".into());
+            }
+            Ok(VideoFrame {
+                seconds,
+                image: DecodedImage::new(1, 1, vec![0, 0, 0, 255]).unwrap(),
+            })
+        }
+    }
+    #[test]
+    fn thumbnail_uses_storyboard_position_when_zero_has_no_frame() {
+        let frame = DelayedFirstFrame
+            .preview_frame(std::path::Path::new("fixture.mp4"))
+            .unwrap();
+        assert_eq!(frame.seconds, 1.);
     }
 }

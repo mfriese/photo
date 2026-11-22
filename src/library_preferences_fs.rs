@@ -857,3 +857,28 @@ mod startup_readiness_tests {
         assert_eq!(fs::read(locator).unwrap(), before);
     }
 }
+
+#[cfg(test)]
+mod format_contract {
+    use super::*;
+    #[test]
+    fn frozen_settings_v1_and_locator_v1_remain_readable() {
+        let bytes = include_bytes!("../tests/fixtures/formats/settings/v1/settings.yaml");
+        let prefs = decode_yaml(bytes).unwrap();
+        let encoded = yaml(&prefs).unwrap();
+        let before: serde_json::Value = serde_saphyr::from_slice(bytes).unwrap();
+        let after: serde_json::Value = serde_saphyr::from_str(&encoded).unwrap();
+        assert_eq!(before, after);
+        for fixture in [
+            include_bytes!("../tests/fixtures/formats/locator/v1/minimal.plist").as_slice(),
+            include_bytes!("../tests/fixtures/formats/locator/v1/history.plist").as_slice(),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("locator.plist");
+            fs::write(&path, fixture).unwrap();
+            let prefs = LibraryPreferences::new(path.clone()).local().unwrap();
+            assert_eq!(prefs.last_library, Some("/fixture/Photos".into()));
+            assert_eq!(fs::read(path).unwrap(), fixture);
+        }
+    }
+}

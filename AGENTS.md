@@ -29,7 +29,7 @@
 - Originalmedien grundsätzlich nur lesen. Nur ausdrücklich ausgelöste Import-, Aufnahme-, EXIF-, Papierkorb- und Verschiebeaktionen dürfen nach ihren jeweiligen Regeln schreiben. Import selbst löscht niemals Quellen.
 - Keine fremden Dateien überschreiben/löschen, keine Symlinks verfolgen, keine Fehler still als leeren erfolgreichen Datenbestand behandeln. Bestätigte Teilerfolge erhalten und melden.
 - Einzel-Medien-YAMLs halten essentielle, nicht aus Originalen rekonstruierbare Benutzerdaten. SQLite ist rekonstruierbare Projektion/Cache. Keine redundanten maßgeblichen Datenquellen oder Cache-Kaskaden; rekonstruierbare EXIF-/GPS-Daten nicht zusätzlich in YAML speichern.
-- Nur aktuelles vereinbartes Format unterstützen; keine Legacy-Migrationen/Fallback-Stores hinzufügen. Ausnahme: optionales `recent_libraries` bleibt kompatibel zur lokalen Locator-Plist Version 1.
+- Dauerhafte Formatkompatibilität ab der eingefrorenen Basis vom 22.11.2026: [Datenverträge und Upgradeverfahren](docs/DATA_FORMATS.md) bei jeder Persistenzänderung lesen. Versionierte Fixtures und Baseline-Manifeste niemals verändern/ersetzen. Erweiterungen auf Datenverlust prüfen; neue Versionen nur mit neuen Fixtures und getestetem Upgradepfad aus allen unterstützten Ständen freigeben. `make check-formats` ausführen. Unbekannte Versionen/Felder niemals still überschreiben. Verworfene Prototypformate vor dieser Basis bleiben ausgeschlossen.
 
 ## Passende Anleitung gezielt lesen
 | Aufgabe | Verbindliche Detailregeln |

@@ -301,6 +301,20 @@ mod tests {
         }
     }
     #[test]
+    fn frozen_transcription_preferences_v1() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(PREFS);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let fixture =
+            include_bytes!("../tests/fixtures/formats/transcription/v1/preferences.plist");
+        fs::write(&path, fixture).unwrap();
+        let store = WhisperModels::new(home.path().into(), Arc::new(Transfer::default()));
+        let (settings, bytes) = store.preferences().unwrap();
+        assert_eq!(settings.language(), "de");
+        assert_eq!(bytes.as_deref(), Some(fixture.as_slice()));
+        assert_eq!(fs::read(path).unwrap(), fixture);
+    }
+    #[test]
     fn global_model_is_shared_verified_and_reused_without_writing_any_library() {
         let home = tempfile::tempdir().unwrap();
         let transport = Arc::new(Transfer::default());

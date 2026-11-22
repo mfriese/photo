@@ -443,6 +443,24 @@ mod tests {
         }
     }
     #[test]
+    fn frozen_geodata_preferences_v1() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join(PREFERENCES);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let fixture = include_bytes!("../tests/fixtures/formats/geodata/v1/preferences.plist");
+        fs::write(&path, fixture).unwrap();
+        let store = GeoData::new(
+            home.path().into(),
+            Arc::new(Transfer::default()),
+            Arc::new(crate::geodata_db::SqlitePlaces),
+        );
+        let (prefs, bytes) = store.preferences().unwrap();
+        assert!(prefs.enabled);
+        assert_eq!(prefs.sha256, Some("a".repeat(64)));
+        assert_eq!(bytes.as_deref(), Some(fixture.as_slice()));
+        assert_eq!(fs::read(path).unwrap(), fixture);
+    }
+    #[test]
     fn global_data_is_opt_in_reused_across_libraries_and_disabling_keeps_archive() {
         let home = tempfile::tempdir().unwrap();
         let transport = Arc::new(Transfer::default());

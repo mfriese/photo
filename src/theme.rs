@@ -213,30 +213,39 @@ pub fn tree_header<R>(
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::collapsing_header::CollapsingResponse<R> {
     let count = count.map(|count| {
-        egui::WidgetText::from(RichText::new(count.to_string()).monospace().color(MUTED))
-            .into_galley(
-                ui,
-                Some(egui::TextWrapMode::Extend),
-                f32::INFINITY,
-                TextStyle::Button,
-            )
+        egui::WidgetText::from(RichText::new(count.to_string()).monospace().color(
+            if ui.is_enabled() {
+                MUTED
+            } else {
+                DISABLED_TEXT
+            },
+        ))
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            TextStyle::Button,
+        )
     });
     let reserve = count.as_ref().map_or(0., |g| g.size().x + 12.);
     let width =
         (ui.available_width() - ui.spacing().indent - ui.spacing().button_padding.x - reserve)
             .max(1.);
-    let label_galley =
-        egui::WidgetText::from(RichText::new(label).size(14.).strong().color(if selected {
+    let label_galley = egui::WidgetText::from(RichText::new(label).size(14.).strong().color(
+        if !ui.is_enabled() {
+            DISABLED_TEXT
+        } else if selected {
             ACCENT
         } else {
             TEXT
-        }))
-        .into_galley(
-            ui,
-            Some(egui::TextWrapMode::Truncate),
-            width,
-            TextStyle::Button,
-        );
+        },
+    ))
+    .into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        width,
+        TextStyle::Button,
+    );
     let mut result = egui::CollapsingHeader::new(label_galley)
         .id_salt(id)
         .default_open(false)
@@ -261,19 +270,23 @@ pub fn place_navigation(
     label: &str,
     count: usize,
 ) -> egui::Response {
-    ui.add_sized([ui.available_width(),BADGE_HEIGHT],egui::Button::new(RichText::new(label).color(TEXT))
-        .right_text(RichText::new(count.to_string()).monospace().color(MUTED))
+    ui.add_sized([ui.available_width(),BADGE_HEIGHT],egui::Button::new(RichText::new(label).color(if ui.is_enabled() { TEXT } else { DISABLED_TEXT }))
+        .right_text(RichText::new(count.to_string()).monospace().color(if ui.is_enabled() { MUTED } else { DISABLED_TEXT }))
         .selected(selected).frame(selected).wrap_mode(egui::TextWrapMode::Truncate))
         .on_hover_text(format!("{label} · {count} Medien im gewählten Zeitraum\nKlick: Ortsfilter umschalten. Mehrere Ortsfilter werden mit ODER verknüpft; Tags gelten zusätzlich. Pfeil: Unterebenen auf-/zuklappen. Rechtsklick auf ein Land: alle Orte auf-/zuklappen."))
 }
 fn navigation_row(ui: &mut egui::Ui, selected: bool, label: &str, height: f32) -> egui::Response {
     ui.add_sized(
         [ui.available_width(), height],
-        egui::Button::new(RichText::new(label).color(TEXT))
-            .right_text("")
-            .selected(selected)
-            .frame(selected)
-            .wrap_mode(egui::TextWrapMode::Truncate),
+        egui::Button::new(RichText::new(label).color(if ui.is_enabled() {
+            TEXT
+        } else {
+            DISABLED_TEXT
+        }))
+        .right_text("")
+        .selected(selected)
+        .frame(selected)
+        .wrap_mode(egui::TextWrapMode::Truncate),
     )
     .on_hover_text(label)
 }

@@ -1,6 +1,6 @@
 # Persistenz und rekonstruierbare Indizes
 
-Nur bei Änderungen an Speichern, Laden, Tags, Konfiguration oder Datenbank lesen. Übergeordnete Regeln: [AGENTS.md](../../AGENTS.md).
+Nur bei Änderungen an Speichern, Laden, Tags, Konfiguration oder Datenbank lesen. Verbindlich zusätzlich: [Datenverträge, eingefrorene Versionen und Upgradeverfahren](../DATA_FORMATS.md). Übergeordnete Regeln: [AGENTS.md](../../AGENTS.md).
 
 ## Quellen und Identitäten
 - Maßgebliche Quellen: vorhandene Originalmedien und aktuelle Einzel-Medien-YAMLs Version 3 mit `file`. YAML enthält essentielle Benutzerinformationen: Tags, Foto-Kommentarverweise mit GUID/Audiopfad, Transkripte/Versuchsmarker und optionale `capture_date`-Korrektur. Keine aus Dateinamen/EXIF rekonstruierbaren Datumsduplikate.
@@ -10,9 +10,10 @@ Nur bei Änderungen an Speichern, Laden, Tags, Konfiguration oder Datenbank lese
 - Revisionsgeprüft und atomar zuerst Quelle veröffentlichen, danach Index transaktional aktualisieren. Fehler nach Quellcommit als reparierbare Indexfehler melden. Angenommene Schreibstände beim normalen Beenden abschließen; externe Änderungen nicht still überschreiben.
 
 ## SQLite
+- Nach Migration maßgeblicher Quellformate SQLite aus den migrierten Quellen neu aufbauen, keinen parallelen fachlichen SQLite-Upgrader pflegen. Neubau vollständig prüfen, erst dann veröffentlichen; Fehler/Abbruch erhalten Quellen und bisherigen Index. Kleine technische Schemaschritte ohne Quellformatänderung dürfen tabellenbezogen und transaktional migriert werden; abhängige Tabellen/Indizes/Fremdschlüssel gemeinsam konsistent halten; Details und Wiederaufnahme siehe [Datenverträge](../DATA_FORMATS.md).
 - `yaml/library.sqlite`: lesbare typisierte Tabellen für Medien, Tagzuordnungen, Kommentare, Audiolängen, Jahresblöcke, Geo und Transkriptionsaufträge. Keine maßgeblichen Nur-in-SQLite-Benutzerdaten; kein generischer Key-Value-Store. Betriebszustand typisiert in `yaml/runtime.yaml`.
 - Datenbankverlust muss aus Medien/Einzel-YAMLs rekonstruierbar sein; Dauern/GPS/Orte erneut berechnen, bestätigte Texte aus YAML übernehmen. Keine Cache-Kaskaden, GPS-YAMLs oder großen Gesamt-YAMLs hinzufügen.
-- Alte große YAML-Listen/Tagdefinitionen weder lesen, migrieren, schreiben noch löschen. Nur aktuelles Format; keine Alben oder Albumflags.
+- Alte große YAML-Listen/Tagdefinitionen weder lesen, migrieren, schreiben noch löschen. Historische Formate ab der eingefrorenen Basis über getestete Upgradepfade erhalten; davor verworfene Prototypformate bleiben ausgeschlossen. Keine Alben oder Albumflags.
 - Neuaufbau hinter Anwendungsport, abbrechbar, Quellen validieren, Konflikte/Scanfehler melden. Erst vollständigen bestätigten Stand veröffentlichen; Fehler, Abbruch oder konkurrierende Quellenänderung erhalten den bisherigen Index. Ungültigen abgeleiteten Index nur ausdrücklich und nach Sicherung ersetzen.
 - Normales Öffnen liest Tag-/Kommentar-/Audioprojektionen gesammelt aus SQLite; keine Quell-Vollscans oder Schreibreservierungen für Lesepfade. Wiederverwendete readonly Verbindungen, kurze deferred Snapshots, keine Abfrage/Schemaprüfung pro Medium. Datenbankersatz invalidiert Verbindungen; Schreibtransaktionen kurz und gebündelt.
 

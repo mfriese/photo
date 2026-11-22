@@ -1,0 +1,11 @@
+{
+  "geodata/v1/preferences.plist": "b8792169d4a19a6c8ca97883ab8b61d2b36e72c9e4b7dd8b83eec5de7249034c",
+  "locator/v1/history.plist": "f6baf23a81d0253003202400c313f89d953db8411b48e3792461e076509055ad",
+  "locator/v1/minimal.plist": "a3dc0867287b5a953276b6e10f28d8ce5cd8c442d0ac2474e6839ad8ca789680",
+  "media/v3/minimal.yaml": "151b63ce5f7e07bfbf06a5faab65ecbed156e0251cca0b5c74cf80c7be057bb5",
+  "media/v3/photo.yaml": "babbf78bde6ab5385424b99033cc3fabc84f08c408ac145c62beee093b144fb7",
+  "media/v3/video.yaml": "9c86cbd0cb99e2bd51b6bfcf505d86ae660f631ba9add0bc8ccf3705003638d4",
+  "runtime/v1/runtime.yaml": "c432515eb48750423c61a9cdcea4e399b4f86e34feaf8d19798ef6045041ad0f",
+  "settings/v1/settings.yaml": "a7db42fb7b4da079e3babe0eff5d4ed84d5258b551471a4f5ff8d96c32a2a3b9",
+  "transcription/v1/preferences.plist": "ffde0b6489bb90d6a965cf33687d3b2498e02df52a911d73de24709a1e6acb5e"
+}

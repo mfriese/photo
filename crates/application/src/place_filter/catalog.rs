@@ -59,6 +59,37 @@ impl Catalog {
             })
             .collect()
     }
+    /// Preserve the library hierarchy while projecting counts for the current period.
+    pub fn options_in_scope(
+        &self,
+        items: &[Media],
+        root: &Path,
+        candidates: &[usize],
+    ) -> Vec<CountryOption> {
+        let all: Vec<_> = (0..items.len()).collect();
+        let mut rows = self.options(items, root, &all);
+        let scoped = self.options(items, root, candidates);
+        for country in &mut rows {
+            let current = scoped.iter().find(|c| c.code == country.code);
+            country.count = current.map_or(0, |c| c.count);
+            for region in &mut country.regions {
+                let current =
+                    current.and_then(|c| c.regions.iter().find(|r| r.code == region.code));
+                region.count = current.map_or(0, |r| r.count);
+                for place in &mut region.places {
+                    place.count = current
+                        .and_then(|r| r.places.iter().find(|p| p.id == place.id))
+                        .map_or(0, |p| p.count);
+                }
+            }
+            for place in &mut country.places {
+                place.count = current
+                    .and_then(|c| c.places.iter().find(|p| p.id == place.id))
+                    .map_or(0, |p| p.count);
+            }
+        }
+        rows
+    }
     /// Counts cover distinct media in the supplied period, before place/tag selection.
     pub fn options(
         &self,

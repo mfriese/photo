@@ -93,7 +93,9 @@ impl StoryboardView {
         };
         let gap = ui.spacing().item_spacing.x;
         let width = ((ui.available_width() - gap * (columns - 1) as f32) / columns as f32).max(1.);
-        let height = width * 9. / 16.;
+        let rows = FRAME_COUNT.div_ceil(columns);
+        let height = (width * 9. / 16.)
+            .min(((ui.available_height() - rows as f32 * 28.) / rows as f32).max(32.));
         egui::ScrollArea::vertical()
             .id_salt("video_storyboard")
             .max_height(ui.available_height().max(180.))

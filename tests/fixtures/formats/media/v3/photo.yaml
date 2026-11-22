@@ -1,0 +1,18 @@
+version: 3
+file: 2021/11/20211115_102505.jpg
+capture_date: '2021:11:15 10:25:05'
+tags: [familie, urlaub]
+comments:
+  12345678-1234-4234-8234-123456789abc: 2021/audio/comments/com_20211115_102505.wav
+transcripts:
+  2021/audio/comments/com_20211115_102505.wav:
+    status: complete
+    model: tiny-q5_1
+    language: de
+    source_bytes: 1024
+    source_modified: '1795341600.123456789'
+    text: Ein schöner Tag.
+    segments:
+      - start_ms: 0
+        end_ms: 1000
+        text: Ein schöner Tag.

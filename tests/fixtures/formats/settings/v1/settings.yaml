@@ -1,0 +1,15 @@
+version: 1
+preview_size: 2
+square_previews: true
+show_library: true
+videos_only: false
+write_exif: false
+reopen_library: true
+shortcuts:
+  rotate_left:
+    key: L
+    alt: false
+    ctrl: false
+    shift: true
+    command: true
+    mac_cmd: false

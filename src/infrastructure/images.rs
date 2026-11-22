@@ -66,7 +66,7 @@ impl crate::ports::ImageDecoder for RasterDecoder {
             return Err("Ungültige Vorschauauflösung".into());
         }
         let pixels = if crate::domain::is_video(path) {
-            let frame = self.videos.frame_at(path, 0.)?;
+            let frame = self.videos.preview_frame(path)?;
             image::DynamicImage::ImageRgba8(
                 image::RgbaImage::from_raw(
                     frame.image.width(),
@@ -89,7 +89,7 @@ impl crate::ports::ImageDecoder for RasterDecoder {
 
     fn decode(&self, path: &Path, turns: u8) -> Result<crate::ports::DecodedImage, String> {
         if crate::domain::is_video(path) {
-            return self.videos.frame_at(path, 0.).map(|frame| frame.image);
+            return self.videos.preview_frame(path).map(|frame| frame.image);
         }
         let rgba = decode_oriented(path, turns)
             .map_err(|e| e.to_string())?
