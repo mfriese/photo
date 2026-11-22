@@ -172,6 +172,7 @@ mod platform {
         duration: *const f64,
         language: String,
         error: Option<String>,
+        repetitions: photosuite_application::transcription::quality::RepetitionGuard,
     }
     impl Decode<'_> {
         fn ensure_model(&mut self) -> Result<(), String> {
@@ -251,30 +252,23 @@ mod platform {
             self.bridge
                 .chunk_ms
                 .store(self.buffer.len() as u64 / 16, Ordering::Relaxed);
-            let prompt = self
-                .bridge
-                .segments
-                .lock()
-                .map_err(|_| "Transkript nicht verfügbar")?
-                .last()
-                .map(|s| {
-                    s.text()
-                        .chars()
-                        .rev()
-                        .take(200)
-                        .collect::<String>()
-                        .chars()
-                        .rev()
-                        .collect::<String>()
-                })
-                .unwrap_or_default();
             let mut params =
                 whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
             let threads = std::thread::available_parallelism().map_or(1, |n| n.get() / 2);
             params.set_n_threads(threads.clamp(1, 4) as i32);
             params.set_language(Some(self.choice.settings.language()));
             params.set_no_context(true);
-            params.set_initial_prompt(&prompt.replace('\0', ""));
+            // Decode each chunk independently. Feeding unverified output back as
+            // a prompt can propagate hallucinations into subsequent chunks.
+            // Keep decoding conservative instead of retrying at higher temperatures.
+            params.set_temperature(0.0);
+            params.set_temperature_inc(0.0);
+            params.set_suppress_blank(true);
+            // Pin the library's established thresholds; do not tighten them
+            // without speech samples, which could otherwise hide quiet speech.
+            params.set_no_speech_thold(0.6);
+            params.set_logprob_thold(-1.0);
+            params.set_entropy_thold(2.4);
             params.set_print_progress(false);
             params.set_print_realtime(false);
             params.set_print_timestamps(false);
@@ -338,6 +332,7 @@ mod platform {
                     .saturating_mul(10)
                     .min(duration)
                     .max(start);
+                self.repetitions.push_text(&text)?;
                 values.push(Segment::new(offset + start, offset + end, text)?);
             }
             drop(values);
@@ -415,6 +410,7 @@ mod platform {
                 duration: duration.get(),
                 language: String::new(),
                 error: None,
+                repetitions: Default::default(),
             };
             let path = CString::new(path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
             let status = unsafe {

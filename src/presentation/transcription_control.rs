@@ -319,7 +319,7 @@ impl Suite {
                     &self.transcription_queue,
                     &self.transcription,
                 );
-                let height = (ui.ctx().content_rect().height() - 260.).max(100.);
+                let height = (ui.ctx().content_rect().height() - 288.).max(100.);
                 let scope = egui::Id::new(("queue_cards", self.root.as_ref()));
                 egui::ScrollArea::vertical()
                     .id_salt("queue_step_cards")
@@ -467,6 +467,14 @@ impl Suite {
                 );
             }
         });
+        if ui.add_enabled(self.transcription_complete && self.transcription_queue.can_restart_all(), egui::Button::new("Alle Transkriptionen neu erstellen"))
+                .on_hover_text("Alle Audio- und Videodateien dieser Bibliothek erneut erkennen. Vorhandene Texte werden erst nach einem erfolgreichen Ergebnis ersetzt. Bei laufender Verarbeitung zuerst pausieren.")
+                .clicked() {
+                match self.transcription_queue.restart_all() {
+                    Ok(count) => self.status = format!("Neutranskription für {count} Dateien gestartet"),
+                    Err(error) => self.status = error,
+                }
+            }
     }
 }
 

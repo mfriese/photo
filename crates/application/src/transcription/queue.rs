@@ -7,7 +7,7 @@ use crate::{
     transcription::Settings,
 };
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -208,6 +208,7 @@ pub struct QueueSession {
     error: String,
     controls_dirty: bool,
     retry_pending: bool,
+    forced: BTreeSet<LibraryFile>,
     closed: bool,
 }
 fn check(cancel: &AtomicBool) -> Result<(), String> {
@@ -221,7 +222,12 @@ fn persist(store: &dyn QueueStore, root: &Path, journal: &mut Journal) -> Result
     journal.revision = Some(store.save(root, journal)?);
     Ok(())
 }
-fn plan(store: &dyn QueueStore, catalog: &Catalog, cancel: &AtomicBool) -> Result<Journal, String> {
+fn plan(
+    store: &dyn QueueStore,
+    catalog: &Catalog,
+    cancel: &AtomicBool,
+    forced: &BTreeSet<LibraryFile>,
+) -> Result<Journal, String> {
     let mut journal = store.load_cancellable(&catalog.root, cancel)?;
     for candidate in &catalog.sources {
         check(cancel)?;
@@ -253,7 +259,9 @@ fn plan(store: &dyn QueueStore, catalog: &Catalog, cancel: &AtomicBool) -> Resul
                 continue;
             }
         };
-        let state = if cached.as_ref().is_some_and(|t| t.source() == &version) {
+        let state = if forced.contains(&candidate.source) {
+            JobState::Pending
+        } else if cached.as_ref().is_some_and(|t| t.source() == &version) {
             JobState::Complete
         } else if let Some(old) = journal
             .jobs
@@ -286,6 +294,7 @@ fn plan(store: &dyn QueueStore, catalog: &Catalog, cancel: &AtomicBool) -> Resul
     Ok(journal)
 }
 struct RunContext<'a> {
+    force: bool,
     root: &'a Path,
     model: &'a ModelChoice,
     cancel: &'a AtomicBool,
@@ -300,6 +309,7 @@ fn run(
     context: RunContext<'_>,
 ) -> Result<(Journal, Option<Receipt>), String> {
     let RunContext {
+        force,
         root,
         model,
         cancel,
@@ -316,7 +326,7 @@ fn run(
         job.version = before.clone();
         let transcript = if let Some(cached) = store
             .existing(root, &job.candidate)?
-            .filter(|t| t.source() == &before)
+            .filter(|t| !force && t.source() == &before)
         {
             cached
         } else {
@@ -330,6 +340,7 @@ fn run(
             if store.version(root, &job.candidate.source)? != before {
                 return Err("Datei wurde während der Transkription verändert; bisheriger Text bleibt erhalten".into());
             }
+            super::quality::validate(&output.segments)?;
             let text = output
                 .segments
                 .iter()
@@ -418,6 +429,7 @@ impl QueueSession {
             error: String::new(),
             controls_dirty: false,
             retry_pending: false,
+            forced: BTreeSet::new(),
             closed: false,
         }
     }
@@ -503,6 +515,7 @@ impl QueueSession {
         }
         self.generation += 1;
         self.catalog = None;
+        self.forced.clear();
         self.journal = None;
         self.reconcile = false;
         self.current = None;
@@ -530,6 +543,7 @@ impl QueueSession {
                 active.cancel.store(true, Ordering::Relaxed);
             }
             self.generation += 1;
+            self.forced.clear();
             self.journal = None;
             self.retry_pending = false;
             if self.catalog.is_some() || !self.mode_loaded {
@@ -579,6 +593,36 @@ impl QueueSession {
         {
             active.cancel.store(true, Ordering::Relaxed);
         }
+    }
+    /// Explicit session-scoped reprocessing. Existing texts remain until replacement succeeds.
+    pub fn can_restart_all(&self) -> bool {
+        !self.closed
+            && self.active.is_none()
+            && self
+                .catalog
+                .as_ref()
+                .is_some_and(|catalog| catalog.complete && !catalog.sources.is_empty())
+    }
+    pub fn restart_all(&mut self) -> Result<usize, String> {
+        if !self.can_restart_all() {
+            return Err(
+                "Bitte vollständigen Bestand abwarten und laufende Verarbeitung zuerst pausieren."
+                    .into(),
+            );
+        }
+        self.forced = self
+            .catalog
+            .as_ref()
+            .unwrap()
+            .sources
+            .iter()
+            .map(|candidate| candidate.source.clone())
+            .collect();
+        self.reconcile = true;
+        self.error.clear();
+        self.retry_pending = false;
+        self.set_mode(Mode::Running);
+        Ok(self.forced.len())
     }
     pub fn rescan(&mut self) {
         self.error.clear();
@@ -781,6 +825,15 @@ impl QueueSession {
                 }
                 match result {
                     Ok((journal, receipt)) => {
+                        if !active.planning
+                            && let Some(source) = &self.current
+                            && journal
+                                .jobs
+                                .get(source)
+                                .is_some_and(|job| matches!(job.state, JobState::Complete))
+                        {
+                            self.forced.remove(source);
+                        }
                         if active.planning && !self.mode_loaded {
                             self.mode.store(journal.mode.byte(), Ordering::Relaxed);
                             self.mode_loaded = true;
@@ -873,8 +926,9 @@ impl QueueSession {
                 planning: true,
                 findings: Default::default(),
             });
+            let forced = self.forced.clone();
             let worker = std::thread::spawn(move || {
-                let result = plan(store.as_ref(), &catalog, &stop).map(|j| (j, None));
+                let result = plan(store.as_ref(), &catalog, &stop, &forced).map(|j| (j, None));
                 let _ = tx.send(Event::Done(result));
             });
             self.active.as_mut().unwrap().worker = Some(worker);
@@ -951,6 +1005,7 @@ impl QueueSession {
             planning: false,
             findings: findings.clone(),
         });
+        let force = self.forced.contains(&key);
         let worker = std::thread::spawn(move || {
             let _lease = lease;
             let notify = |mut p: WorkProgress| {
@@ -969,6 +1024,7 @@ impl QueueSession {
                 journal,
                 &key,
                 RunContext {
+                    force,
                     root: &catalog.root,
                     model: &model,
                     cancel: &stop,
@@ -1149,6 +1205,81 @@ mod tests {
         fn release_model(&self) {
             self.released.fetch_add(1, Ordering::SeqCst);
         }
+    }
+    #[test]
+    fn repetition_failure_never_replaces_a_previously_confirmed_transcript() {
+        struct LoopEngine;
+        impl Engine for LoopEngine {
+            fn transcribe(
+                &self,
+                _: &ModelChoice,
+                _: &Path,
+                _: &AtomicBool,
+                _: &(dyn Fn(WorkProgress) + Sync),
+            ) -> Result<EngineOutput, String> {
+                Ok(EngineOutput {
+                    language: "de".into(),
+                    no_audio: false,
+                    segments: vec![Segment::new(0, 1000, "Danke ".repeat(20)).unwrap()],
+                })
+            }
+        }
+        let (_, store, _, power) = setup();
+        let root = Path::new("/fixture");
+        let candidate = candidate("a.wav");
+        let old = Transcript::new(
+            SourceVersion::new(99, "0".into()).unwrap(),
+            TranscriptStatus::Complete,
+            "tiny".into(),
+            "de".into(),
+            "Bestätigter Text".into(),
+            vec![Segment::new(0, 1000, "Bestätigter Text".into()).unwrap()],
+        )
+        .unwrap();
+        store
+            .texts
+            .lock()
+            .unwrap()
+            .insert(storage_key(root, &candidate), old.clone());
+        let mut queue =
+            QueueSession::new(store.clone(), Arc::new(LoopEngine), Arc::new(Power(power)));
+        queue.sync(root, vec![candidate.clone()], true);
+        queue.set_model(Some(choice()));
+        until(&mut queue, |queue| queue.counts().2 == 1);
+        assert_eq!(
+            store.texts.lock().unwrap()[&storage_key(root, &candidate)],
+            old
+        );
+        assert!(
+            matches!(&store.journals.lock().unwrap()[root].jobs[&candidate.source].state, JobState::Failed(error) if error.contains("Wiederholungsschleife"))
+        );
+    }
+    #[test]
+    fn explicit_restart_reprocesses_cached_files_once_and_keeps_old_text_until_success() {
+        let (mut queue, store, engine, _) = setup();
+        let root = Path::new("/fixture");
+        let file = candidate("a.wav");
+        queue.sync(root, vec![file.clone()], true);
+        queue.set_model(Some(choice()));
+        until(&mut queue, |q| q.counts() == (1, 1, 0) && !q.busy());
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 1);
+        let old = store.texts.lock().unwrap()[&storage_key(root, &file)].clone();
+        assert_eq!(queue.restart_all().unwrap(), 1);
+        assert_eq!(store.texts.lock().unwrap()[&storage_key(root, &file)], old);
+        queue.set_mode(Mode::Paused);
+        until(&mut queue, |q| q.planned() && !q.busy());
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 1);
+        queue.resume();
+        until(&mut queue, |q| {
+            engine.calls.load(Ordering::SeqCst) == 2 && q.counts() == (1, 1, 0) && !q.busy()
+        });
+        assert!(queue.forced.is_empty());
+        queue.rescan();
+        until(&mut queue, |q| q.planned() && !q.busy());
+        assert_eq!(engine.calls.load(Ordering::SeqCst), 2);
+        queue.forced.insert(file.source);
+        queue.sync(Path::new("/other"), Vec::new(), true);
+        assert!(queue.forced.is_empty());
     }
     fn candidate(name: &str) -> Candidate {
         let source = LibraryFile::new(format!("2026/11/{name}")).unwrap();
