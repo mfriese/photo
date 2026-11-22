@@ -511,3 +511,7 @@ mod tests {
         );
     }
 }
+
+pub mod inventory_sync;
+
+pub mod maintenance;

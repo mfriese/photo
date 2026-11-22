@@ -52,36 +52,26 @@ impl Suite {
             self.status = format!("Audiokommentare: {}", self.comments.error());
         }
 
-        if let Some(changes) = self.comments.take_changes()
-            && self.root.as_ref() == Some(&changes.root)
-        {
-            let affected: std::collections::BTreeSet<_> = changes
-                .media
-                .iter()
-                .map(|file| changes.root.join(file.as_str()))
-                .collect();
-            self.transcription_seen = None;
-            self.tag_view.options_cache = None;
-            if let Some((root, catalog)) = self.comments.authoritative_catalog() {
-                self.audio_library.observe_comments(catalog);
-                if self.audio_library.complete() {
-                    self.organization.reconcile_comments(root, catalog);
-                }
+        if let Some(changes) = self.comments.take_changes() {
+            let updated = photosuite_application::comments::reconciliation::Reconciliation {
+                comments: &self.comments,
+                audio: &mut self.audio_library,
+                organization: &mut self.organization,
+                diary_catalog: &mut self.diary_catalog,
+                dates: &mut self.media_dates,
             }
-            for media in &mut self.items {
-                if affected.contains(media.path()) {
-                    *media = self.comments.project(media.clone());
-                }
+            .apply(
+                self.root.as_deref(),
+                &changes,
+                &mut self.items,
+                &mut self.known_media,
+            );
+            if updated {
+                self.transcription_seen = None;
+                self.tag_view.options_cache = None;
+                self.audio_header.draft = Default::default();
+                self.viewer_audio = Default::default();
             }
-            for media in self.comments.comment_media() {
-                if self.known_media.insert(media.path().to_owned()) {
-                    self.items.push(media);
-                }
-            }
-            self.diary_catalog.cancel();
-            self.audio_header.draft = Default::default();
-            self.viewer_audio = Default::default();
-            self.media_dates.invalidate(&affected);
         }
         if self.comments.busy() || self.comments.is_open() {
             ctx.request_repaint_after(std::time::Duration::from_millis(33));

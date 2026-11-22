@@ -32,7 +32,7 @@ pub struct Suite {
     processing_repeats: photosuite_application::processing::Repeats,
     audio_library: photosuite_application::audio_library::Session,
     transcription_queue: photosuite_application::transcription::queue::QueueSession,
-    transcription_seen: Option<transcription_control::Seen>,
+    transcription_seen: Option<photosuite_application::processing::inventory_sync::Revision>,
     transcription_complete: bool,
     transcription: photosuite_application::transcription::ModelSession,
     geodata: photosuite_application::geodata::Session,

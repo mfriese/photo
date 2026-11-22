@@ -693,6 +693,20 @@ impl DiaryCatalog {
             pending: None,
         }
     }
+    /// Chronological diary order; missing dates last, stable path tie-breaker.
+    pub fn sort_indices(&self, items: &[Media], indices: &mut [usize]) {
+        indices.sort_by(|&a, &b| {
+            let date = |i: usize| {
+                self.date(items[i].path())
+                    .and_then(|r| r.as_ref().ok())
+                    .map(|d| d.stamp())
+            };
+            date(a)
+                .unwrap_or("99999999_999999")
+                .cmp(date(b).unwrap_or("99999999_999999"))
+                .then(items[a].path().cmp(items[b].path()))
+        });
+    }
     pub fn date(&self, path: &Path) -> Option<&Result<CaptureTime, String>> {
         self.dates.get(path)
     }
@@ -1848,5 +1862,33 @@ mod reference_period_tests {
             "19800916_035811"
         );
         assert_eq!(timeline.month(), Some("09"));
+    }
+}
+
+pub mod overview;
+
+#[cfg(test)]
+mod chronology_tests {
+    use super::*;
+    #[test]
+    fn diary_order_uses_resolved_dates_and_places_unknown_dates_last() {
+        let items: Vec<_> = ["z.wav", "b.wav", "a.wav", "unknown.wav"]
+            .into_iter()
+            .map(|path| Media::from_path(path.into(), "2020/audio".into()).unwrap())
+            .collect();
+        let mut catalog = DiaryCatalog::default();
+        for (index, date) in [
+            (0, "2020:01:01 00:00:00"),
+            (1, "2021:01:01 00:00:00"),
+            (2, "2021:01:01 00:00:00"),
+        ] {
+            catalog.dates.insert(
+                items[index].path().into(),
+                CaptureTime::parse(date, "fixture"),
+            );
+        }
+        let mut order = vec![3, 1, 2, 0];
+        catalog.sort_indices(&items, &mut order);
+        assert_eq!(order, vec![0, 2, 1, 3]);
     }
 }

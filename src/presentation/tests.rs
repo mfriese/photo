@@ -3148,3 +3148,34 @@ fn saved_date_refreshes_comments_even_when_stopping_playback_fails() {
     }
     assert_eq!(suite.comments.authoritative_catalog().unwrap().0, root);
 }
+
+#[test]
+fn application_comment_reconciliation_ignores_stale_library_changes() {
+    use photosuite_application::comments::{CommentChanges, reconciliation::Reconciliation};
+    let mut suite = test_suite();
+    let root = std::path::Path::new("/current");
+    let photo = Media::from_path(root.join("2020/01/photo.jpg"), "2020/01".into()).unwrap();
+    suite.items.push(photo.clone());
+    suite.known_media.insert(photo.path().into());
+    let changes = CommentChanges {
+        root: "/previous".into(),
+        media: [crate::domain::tags::LibraryFile::new("2020/01/photo.jpg".into()).unwrap()].into(),
+    };
+    let updated = Reconciliation {
+        comments: &suite.comments,
+        audio: &mut suite.audio_library,
+        organization: &mut suite.organization,
+        diary_catalog: &mut suite.diary_catalog,
+        dates: &mut suite.media_dates,
+    }
+    .apply(
+        Some(root),
+        &changes,
+        &mut suite.items,
+        &mut suite.known_media,
+    );
+    assert!(!updated);
+    assert_eq!(suite.items.len(), 1);
+    assert_eq!(suite.items[0].path(), photo.path());
+    assert!(!suite.comments.is_loading());
+}

@@ -584,39 +584,23 @@ impl super::Suite {
         let Some(root) = &self.root else {
             return;
         };
-        let audio_items = if self.services.audio_library.is_some() {
-            &self.audio_library.snapshot().media
-        } else {
-            &self.items
-        };
-        let year_group =
-            photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
-        let group = year_group.as_str();
-        self.audio_header.draft.ensure(audio_items, root, group);
-        if self.services.audio_player.transport().active
-            && self
-                .diary
-                .timeline_for_view(group)
-                .is_some_and(|timeline| self.audio_header.draft.accepts_active(timeline))
-        {
-            if let Err(error) = self.services.audio_player.control(AudioControl::ShowWindow) {
-                self.status = error;
-            }
-            return;
-        }
-        if let Some(path) = self.audio_header.draft.selected()
-            && let Some(selected) = audio_items.iter().find(|media| media.path() == path)
-            && let Err(error) = self.diary.request_window(
-                &if self.services.audio_library.is_some() {
-                    self.audio_library.snapshot().with_photos(&self.items)
-                } else {
-                    self.items.clone()
-                },
-                selected,
-                self.audio_preparation.source(),
-                group,
-            )
-        {
+        let result = photosuite_application::diary::overview::open(
+            photosuite_application::diary::overview::Overview {
+                root,
+                items: &self.items,
+                group: self.group.as_deref(),
+                cached_audio: self
+                    .services
+                    .audio_library
+                    .as_ref()
+                    .map(|_| self.audio_library.snapshot()),
+            },
+            &mut self.audio_header.draft,
+            &mut self.diary,
+            self.audio_preparation.source(),
+            self.services.audio_player.as_ref(),
+        );
+        if let Err(error) = result {
             self.status = error;
         }
     }

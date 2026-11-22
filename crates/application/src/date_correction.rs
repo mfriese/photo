@@ -130,6 +130,7 @@ pub fn destination_group(selected: Option<&str>, media: &Media) -> Option<String
     }
 }
 struct Worker {
+    saving: bool,
     handle: JoinHandle<()>,
     receiver: mpsc::Receiver<Result<Loaded, String>>,
     generation: u64,
@@ -140,6 +141,7 @@ pub struct Session {
     worker: Option<Worker>,
     generation: u64,
     pending_load: bool,
+    saved: bool,
     pub catalog: Catalog,
     pub error: String,
     relocated: Option<Relocated>,
@@ -153,6 +155,7 @@ impl Session {
             worker: None,
             generation: 0,
             pending_load: false,
+            saved: false,
             catalog: Catalog::new(),
             error: String::new(),
             relocated: None,
@@ -161,6 +164,7 @@ impl Session {
     }
     pub fn open(&mut self, root: &Path) {
         self.generation += 1;
+        self.saved = false;
         self.root = Some(root.into());
         self.catalog.clear();
         self.relocated = None;
@@ -190,6 +194,7 @@ impl Session {
             }));
         });
         self.worker = Some(Worker {
+            saving: false,
             handle,
             receiver,
             generation,
@@ -250,11 +255,16 @@ impl Session {
         });
         self.error.clear();
         self.worker = Some(Worker {
+            saving: true,
             handle,
             receiver,
             generation,
         });
         Ok(())
+    }
+    /// A committed save, independent of whether an editor is currently visible.
+    pub fn take_saved(&mut self) -> bool {
+        std::mem::take(&mut self.saved)
     }
     pub fn poll(&mut self) -> bool {
         let Some(worker) = &self.worker else {
@@ -273,6 +283,7 @@ impl Session {
             self.pending_target = None;
             match result {
                 Ok(catalog) if joined.is_ok() => {
+                    self.saved |= worker.saving;
                     self.catalog = catalog.catalog;
                     self.relocated = catalog.relocated;
                     self.error.clear();
@@ -375,6 +386,27 @@ mod session_tests {
             assert!(std::time::Instant::now() < limit);
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+    }
+    #[test]
+    fn committed_save_is_reported_without_an_editor_and_refresh_is_not_a_save() {
+        let store = Arc::new(Store::default());
+        *store.gate.0.lock().unwrap() = true;
+        let mut session = Session::new(Some(store));
+        session.open(Path::new("/fixture"));
+        drain(&mut session);
+        assert!(!session.take_saved());
+        session
+            .save(
+                LibraryFile::new("2020/01/photo.jpg".into()).unwrap(),
+                CaptureTime::parse("2021:02:03 04:05:06", "fixture").unwrap(),
+            )
+            .unwrap();
+        drain(&mut session);
+        assert!(session.take_saved());
+        assert!(!session.take_saved());
+        session.refresh();
+        drain(&mut session);
+        assert!(!session.take_saved());
     }
     #[test]
     fn library_switch_never_adopts_old_results_and_drop_finishes_accepted_saves() {

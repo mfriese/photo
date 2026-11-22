@@ -4,136 +4,45 @@ use super::{
     processing_ui::{self, page_selector, paged_text},
 };
 use eframe::egui;
-use photosuite_application::transcription::queue::{Indicator, Mode, ModelChoice, Phase};
-#[derive(Clone, PartialEq, Eq)]
-pub(super) struct Seen {
-    root: std::path::PathBuf,
-    items: usize,
-    comments: usize,
-    complete: bool,
-}
+use photosuite_application::transcription::queue::{Indicator, Mode, Phase};
 impl Suite {
     pub(super) fn poll_transcription_queue(&mut self, ctx: &egui::Context) {
-        if let Some(root) = &self.root
-            && self.comments.is_loaded()
-        {
-            let observed = Seen {
-                root: root.clone(),
-                items: self.items.len(),
-                comments: self.comments.catalog().entries().len(),
-                complete: self.transcription_complete,
-            };
-            if self.transcription_seen.as_ref() != Some(&observed) {
-                if self.transcription_complete
-                    && self.transcription_seen.as_ref().is_some_and(|old| {
-                        old.complete
-                            && (old.items != observed.items || old.comments != observed.comments)
-                    })
-                {
-                    self.audio_library.retry();
-                }
-                let inventory = match photosuite_application::processing::inventory(
-                    root,
-                    &self.items,
-                    self.comments.catalog(),
-                ) {
-                    Ok(inventory) => inventory,
-                    Err(error) => {
-                        self.status = format!("Medienverarbeitung: {error}");
-                        photosuite_application::processing::advance_with_audio(
-                            &mut self.audio_library,
-                            &mut self.geo_sweep,
-                            &mut self.transcription_queue,
-                            photosuite_application::processing::Readiness {
-                                library_open: true,
-                                ..Default::default()
-                            },
-                            self.transcription.busy(),
-                        );
-                        if self.geo_sweep.busy() || self.transcription_queue.busy() {
-                            ctx.request_repaint_after(std::time::Duration::from_millis(80));
-                        }
-                        return;
-                    }
-                };
-
-                self.transcription_queue.sync(
-                    root,
-                    inventory.transcriptions,
-                    self.transcription_complete,
-                );
-                if self.transcription_complete {
-                    self.geo_sweep.sync(root, inventory.photos);
-                }
-                self.transcription_seen = Some(observed);
-            }
+        use photosuite_application::processing::maintenance::{Input, Maintenance};
+        let update = Maintenance {
+            audio: &mut self.audio_library,
+            geo: &mut self.geo_sweep,
+            queue: &mut self.transcription_queue,
+            model: &mut self.transcription,
+            repeats: &mut self.processing_repeats,
+            comments: &mut self.comments,
+            organization: &mut self.organization,
+            preparation: &mut self.audio_preparation,
         }
-        if self.audio_library.complete()
-            && self.geo_sweep.complete()
-            && self.transcription_complete
-            && !self.processing_repeats.pending()
-            && self.transcription_queue.mode() == Mode::Running
-            && !self.transcription_queue.busy()
-            && !self.geo_sweep.busy()
-            && !self.audio_library.busy()
-        {
-            self.transcription.ensure_loaded();
-        }
-        let model = self
-            .transcription
-            .prepared()
-            .filter(|_| !self.transcription.busy() && self.transcription.error().is_empty())
-            .and_then(|p| {
-                p.ready_path.as_ref().map(|path| ModelChoice {
-                    path: path.clone(),
-                    settings: p.settings.clone(),
-                })
-            });
-        self.transcription_queue.set_model(model);
-        self.processing_repeats.advance(
-            &mut self.audio_library,
-            &mut self.geo_sweep,
-            &mut self.transcription_queue,
-            &mut self.transcription,
-            photosuite_application::processing::Readiness {
-                library_open: self.root.is_some(),
+        .advance(
+            Input {
+                root: self.root.as_deref(),
+                items: &self.items,
                 inventory_complete: self.transcription_complete,
-                index_maintenance: self.index_maintenance.busy(),
-                comments_ready: self.comments.is_loaded(),
-                comments_pending: self.comments.has_unsaved() || self.comments.is_saving(),
-                metadata_pending: self.organization.loading()
-                    || self.organization.saving()
-                    || self.organization.dirty(),
+                index_busy: self.index_maintenance.busy(),
                 audio_active: self.services.work_priority.audio_active(),
             },
+            &mut self.transcription_seen,
+            &mut self.audio_library_revision,
         );
-        if self.audio_library.revision() != self.audio_library_revision {
-            self.audio_library_revision = self.audio_library.revision();
+        if update.audio_changed {
             self.audio_header.draft = Default::default();
-            if self.audio_library.complete()
-                && let Some(root) = &self.root
-            {
-                self.comments.load_cached(root.clone());
-                if let Err(error) = self.organization.open_cached(root.clone()) {
-                    self.status = error;
-                }
-                self.organization
-                    .observe_media(root, &self.items, self.transcription_complete);
-                self.transcription_seen = None;
-            }
-            self.audio_preparation
-                .display_hints(&self.audio_library.snapshot().durations);
         }
-        if self.processing_repeats.pending()
-            || self.transcription_queue.busy()
-            || self.geo_sweep.busy()
-            || self.audio_library.busy()
-            || (self.root.is_some()
-                && self.transcription_queue.mode() == Mode::Running
-                && self.transcription_queue.held()
-                && self.audio_library.complete()
-                && self.geo_sweep.complete())
-        {
+        if let Some(error) = update.error {
+            self.status = match error {
+                photosuite_application::processing::maintenance::UpdateError::Inventory(error) => {
+                    format!("Medienverarbeitung: {error}")
+                }
+                photosuite_application::processing::maintenance::UpdateError::Metadata(error) => {
+                    error
+                }
+            };
+        }
+        if update.pending {
             ctx.request_repaint_after(std::time::Duration::from_millis(80));
         }
     }

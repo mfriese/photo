@@ -18,6 +18,18 @@ flowchart TD
 
 `photosuite-domain` hängt ausschließlich von chrono ab; `photosuite-application` ausschließlich von der Domänen-Crate. Cargo verhindert Rückabhängigkeiten auf die Desktop-Crate. Beide Kern-Crates verbieten unsicheren Rust-Code. UI und Infrastruktur liegen weiterhin in derselben Desktop-Crate; ihre gegenseitige Trennung ist eine bewusst dokumentierte Modulkonvention.
 
+## Aktuelle Grenze zwischen Präsentation und Ablaufsteuerung
+
+Die Präsentation sammelt Eingaben, ruft Anwendungsfälle auf und aktualisiert Auswahl, Dialoge, Scrollpositionen und Texturen. Mehrstufige Daten-/Sitzungsänderungen werden in Application koordiniert:
+
+- `library_opening`: Bibliotheksöffnung und Sitzungsinitialisierung.
+- `comments::reconciliation`: bibliotheksbezogene Kommentaränderungen, Medienprojektion, Tag-/Audiobestand und Datumsinvalidierung.
+- `date_correction::follow_up`: bestätigte Verschiebungen, Datumsprojektion und Folgen einer gespeicherten Korrektur. Erfolgreiches Speichern meldet die Anwendungssitzung; es wird nicht aus einem sichtbaren Editor abgeleitet.
+- `processing::maintenance` und `inventory_sync`: Inventar, Freigabe der seriellen Hintergrundverarbeitung, Modellbereitschaft und Reaktion auf Audiorevisionen. Ergebnis enthält Ansichtsänderungsbedarf, ausstehende Arbeit und unterscheidbare Fehler; kein egui-Repaint-Aufruf im Kern.
+- `diary::overview`: Wiederverwendung oder Öffnen der gemeinsamen Wiedergabe. Tagebuchsortierung liegt beim Anwendungskatalog.
+
+Die Koordinatoren leihen die bestehenden Sitzungen und injizierten Ports; sie erzeugen keine Adapter. `Suite` besitzt weiterhin gemeinsamen Ansichts- und Sitzungszustand und treibt den Anwendungstakt an. Damit ist die Oberfläche deutlich dünner, aber noch nicht als Ganzes austauschbar. Ein zukünftiger eigenständiger Anwendungshost müsste insbesondere Sitzungsbesitz, nativen Hauptthread und Lebenszyklus übernehmen. Native Fenster-/Fokusverträge und rein visuelle Hilfen bleiben äußere Aufgaben. Keine neue globale Ereignisvermittlung oder zweite Quelle für Medienbestände einführen.
+
 ## Vollständige Zuständigkeitsprüfung
 
 | Bereich | Verantwortlichkeit / Befund |

@@ -47,18 +47,7 @@ impl super::Suite {
             let kind=crate::domain::diary::AudioScope::parse(self.group.as_deref().unwrap_or("")).map(|scope|scope.kind()).unwrap_or(crate::domain::diary::AudioKind::All);
             self.page_heading(ui,&format!("{} · {year}",crate::audio_labels::kind_label(kind)));
         let mut ordered=visible.to_vec();
-        ordered.sort_by(|&a, &b| {
-            let date = |i: usize| {
-                self.diary_catalog
-                    .date(self.items[i].path())
-                    .and_then(|r| r.as_ref().ok())
-                    .map(|d| d.stamp())
-            };
-            date(a)
-                .unwrap_or("99999999_999999")
-                .cmp(date(b).unwrap_or("99999999_999999"))
-                .then(self.items[a].path().cmp(self.items[b].path()))
-        });
+        self.diary_catalog.sort_indices(&self.items, &mut ordered);
 
             if ordered.is_empty(){ui.label("Noch keine Aufnahmen in diesem Bereich. Importierte Audiodateien erscheinen unter Tagebuch.");return;}
             ui.add_space(6.);

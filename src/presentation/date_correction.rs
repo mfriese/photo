@@ -58,29 +58,21 @@ impl Suite {
             self.date_corrections.refresh();
         }
         if self.date_corrections.poll() {
-            let saved = self.date_editor.as_ref().is_some_and(|e| e.saving);
+            let saved = self.date_corrections.take_saved();
             let relocated = self.date_corrections.take_relocated();
             if let (Some(root), Some(moved)) = (self.root.clone(), relocated.as_ref()) {
                 let old = root.join(moved.from.as_str());
                 let new = root.join(moved.to.as_str());
-                if let Some(media) = self.items.iter_mut().find(|media| media.path() == old) {
-                    let group = std::path::Path::new(moved.to.as_str())
-                        .parent()
-                        .unwrap_or(std::path::Path::new(""))
-                        .to_string_lossy()
-                        .into_owned();
-                    if let Some(replacement) = Media::from_library_path(new.clone(), group) {
-                        *media = replacement;
-                    }
+                let result = photosuite_application::date_correction::follow_up::Relocation {
+                    editing: &mut self.editor,
+                    places: &mut self.place_filter,
+                    transcription: &mut self.transcription_queue,
+                    organization: &mut self.organization,
                 }
-                self.known_media.remove(&old);
-                self.known_media.insert(new.clone());
+                .apply(&root, moved, &mut self.items, &mut self.known_media);
                 self.gallery.removed.insert(old.clone());
                 self.gallery.selection.relocate(&old, &new);
-                self.editor.relocate(&old, &new);
-                self.place_filter.relocate(&moved.from, &moved.to);
-                self.transcription_queue.media_paths_changed();
-                if let Err(error) = self.organization.refresh_relocated(&moved.from, &moved.to) {
+                if let Err(error) = result {
                     self.status = error;
                 }
                 self.storyboard.clear();
@@ -92,14 +84,12 @@ impl Suite {
                     editor.error = self.date_corrections.error.clone();
                 }
             } else if let Some(root) = self.root.clone() {
-                for media in &mut self.items {
-                    *media = photosuite_application::date_correction::project(
-                        &root,
-                        &self.date_corrections.catalog,
-                        media.clone(),
-                    );
-                }
-                self.media_dates.clear();
+                photosuite_application::date_correction::follow_up::project_media(
+                    &root,
+                    &self.date_corrections.catalog,
+                    &mut self.items,
+                    &mut self.media_dates,
+                );
                 self.tag_view.options_cache = None;
                 self.place_options = None;
                 if saved {
