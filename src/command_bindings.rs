@@ -37,14 +37,21 @@ impl Default for CommandBindings {
             bindings: ALL
                 .into_iter()
                 .map(|command| {
-                    let (modifiers, key) = match command {
-                        Command::RotateLeft => (egui::Modifiers::ALT, egui::Key::L),
-                        Command::RotateRight => (egui::Modifiers::ALT, egui::Key::R),
-                        Command::ResetRotation => (egui::Modifiers::ALT, egui::Key::Backspace),
-                        Command::PlayVideo => (egui::Modifiers::NONE, egui::Key::Space),
-                        Command::CorrectDate => (egui::Modifiers::ALT, egui::Key::D),
-                    };
-                    (command, Some(egui::KeyboardShortcut::new(modifiers, key)))
+                    let defaults = photosuite_application::preferences::bindings::defaults();
+                    let binding = defaults[command.id()].as_ref().map(|shortcut| {
+                        egui::KeyboardShortcut::new(
+                            egui::Modifiers {
+                                alt: shortcut.alt,
+                                ctrl: shortcut.ctrl,
+                                shift: shortcut.shift,
+                                command: shortcut.command,
+                                mac_cmd: shortcut.mac_cmd,
+                            },
+                            egui::Key::from_name(&shortcut.key)
+                                .expect("catalog default must name a supported key"),
+                        )
+                    });
+                    (command, binding)
                 })
                 .collect(),
             capturing: None,
@@ -82,6 +89,7 @@ impl CommandBindings {
             Option<photosuite_application::preferences::Shortcut>,
         >,
     ) -> Result<(), String> {
+        let saved = photosuite_application::preferences::bindings::resolve(saved)?;
         let mut candidate = Self::default().bindings;
         for (command, shortcut) in &mut candidate {
             if let Some(saved) = saved.get(command.id()) {

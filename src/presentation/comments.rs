@@ -52,7 +52,14 @@ impl Suite {
             self.status = format!("Audiokommentare: {}", self.comments.error());
         }
 
-        if self.comments.take_changed() {
+        if let Some(changes) = self.comments.take_changes()
+            && self.root.as_ref() == Some(&changes.root)
+        {
+            let affected: std::collections::BTreeSet<_> = changes
+                .media
+                .iter()
+                .map(|file| changes.root.join(file.as_str()))
+                .collect();
             self.transcription_seen = None;
             self.tag_view.options_cache = None;
             if let Some((root, catalog)) = self.comments.authoritative_catalog() {
@@ -62,7 +69,9 @@ impl Suite {
                 }
             }
             for media in &mut self.items {
-                *media = self.comments.project(media.clone());
+                if affected.contains(media.path()) {
+                    *media = self.comments.project(media.clone());
+                }
             }
             for media in self.comments.comment_media() {
                 if self.known_media.insert(media.path().to_owned()) {
@@ -72,7 +81,7 @@ impl Suite {
             self.diary_catalog.cancel();
             self.audio_header.draft = Default::default();
             self.viewer_audio = Default::default();
-            self.media_dates.clear();
+            self.media_dates.invalidate(&affected);
         }
         if self.comments.busy() || self.comments.is_open() {
             ctx.request_repaint_after(std::time::Duration::from_millis(33));

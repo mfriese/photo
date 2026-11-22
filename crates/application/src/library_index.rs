@@ -24,6 +24,11 @@ struct Job {
     cancel: Arc<AtomicBool>,
     events: mpsc::Receiver<Event>,
 }
+/// Presentation-independent follow-up after rebuilding the active library.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AfterRebuild {
+    ReloadLibrary { root: PathBuf },
+}
 pub struct Session {
     store: Arc<dyn Rebuilder>,
     job: Option<Job>,
@@ -88,7 +93,10 @@ impl Session {
                     Ok(Event::Progress(n)) => self.checked = n,
                     Ok(Event::Done(result)) => {
                         match result {
-                            Ok(()) => self.completed = Some(job.root.clone()),
+                            Ok(()) if !job.cancel.load(Ordering::Relaxed) => {
+                                self.completed = Some(job.root.clone())
+                            }
+                            Ok(()) => {}
                             Err(e) => self.error = e,
                         }
                         done = true;
@@ -107,8 +115,24 @@ impl Session {
             self.job = None;
         }
     }
-    pub fn take_completed(&mut self) -> Option<PathBuf> {
-        self.completed.take()
+    /// Keep a successful refresh pending while recording data prevents reloading.
+    /// A completion for a library that is no longer active must never navigate back.
+    pub fn after_rebuild(
+        &mut self,
+        active_root: Option<&Path>,
+        recording_pending: bool,
+    ) -> Option<AfterRebuild> {
+        let root = self.completed.as_deref()?;
+        if active_root != Some(root) {
+            self.completed = None;
+            return None;
+        }
+        if recording_pending {
+            return None;
+        }
+        self.completed
+            .take()
+            .map(|root| AfterRebuild::ReloadLibrary { root })
     }
 }
 impl Drop for Session {
@@ -142,6 +166,48 @@ mod tests {
         }
     }
     #[test]
+    fn completed_rebuild_waits_for_recording_and_is_consumed_once() {
+        let mut session = Session::new(Arc::new(Blocked {
+            calls: AtomicUsize::new(0),
+            entered: AtomicBool::new(false),
+        }));
+        session.completed = Some("library".into());
+        assert!(
+            session
+                .after_rebuild(Some(Path::new("library")), true)
+                .is_none()
+        );
+        assert_eq!(
+            session.after_rebuild(Some(Path::new("library")), false),
+            Some(AfterRebuild::ReloadLibrary {
+                root: "library".into()
+            })
+        );
+        assert!(
+            session
+                .after_rebuild(Some(Path::new("library")), false)
+                .is_none()
+        );
+    }
+    #[test]
+    fn completed_rebuild_never_reopens_an_inactive_library() {
+        let mut session = Session::new(Arc::new(Blocked {
+            calls: AtomicUsize::new(0),
+            entered: AtomicBool::new(false),
+        }));
+        session.completed = Some("old".into());
+        assert!(
+            session
+                .after_rebuild(Some(Path::new("new")), false)
+                .is_none()
+        );
+        assert!(
+            session
+                .after_rebuild(Some(Path::new("old")), false)
+                .is_none()
+        );
+    }
+    #[test]
     fn rebuild_is_nonblocking_serial_cancellable_and_does_not_publish_a_cancelled_result() {
         let store = Arc::new(Blocked {
             calls: AtomicUsize::new(0),
@@ -162,7 +228,11 @@ mod tests {
             assert!(std::time::Instant::now() < until);
             std::thread::yield_now();
         }
-        assert!(session.take_completed().is_none());
+        assert!(
+            session
+                .after_rebuild(Some(Path::new("library")), false)
+                .is_none()
+        );
         assert!(session.error().contains("Abgebrochen"));
     }
 }

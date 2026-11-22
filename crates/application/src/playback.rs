@@ -6,6 +6,24 @@ pub fn play(media: &Media, player: &dyn VideoPlayer) -> Result<(), String> {
     }
     player.play(media.path())
 }
+/// Shared user action: preserve audio unless a video is actually requested.
+pub fn play_with_audio(
+    media: &Media,
+    player: &dyn VideoPlayer,
+    audio: &dyn crate::diary::AudioPlayer,
+) -> Result<(), String> {
+    if !media.is_video() {
+        return Err("Bitte ein Video auswählen".into());
+    }
+    let transport = audio.transport();
+    if transport.playing {
+        audio.control(crate::diary::AudioControl::Configure {
+            playing: false,
+            category: transport.category_filter,
+        })?;
+    }
+    play(media, player)
+}
 #[cfg(test)]
 mod tests {
     use super::*;

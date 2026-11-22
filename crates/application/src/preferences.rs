@@ -606,3 +606,5 @@ mod scoped_tests {
 
 mod startup;
 pub use startup::{StartupLocation, StartupOutcome, StartupPreferences, StartupRead, StartupState};
+
+pub mod bindings;

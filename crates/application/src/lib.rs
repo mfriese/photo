@@ -52,3 +52,5 @@ pub mod processing;
 pub mod audio_library;
 
 pub mod date_correction;
+
+pub mod library_opening;

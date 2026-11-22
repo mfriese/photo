@@ -25,6 +25,14 @@ impl Command {
             Self::CorrectDate => "correct_date",
         }
     }
+    /// One availability rule for menus, buttons and shortcut dispatch.
+    pub fn available_for(self, media: &crate::Media) -> bool {
+        match self {
+            Self::PlayVideo => media.is_video(),
+            Self::CorrectDate => !media.is_audio(),
+            Self::RotateLeft | Self::RotateRight | Self::ResetRotation => media.is_photo(),
+        }
+    }
     pub fn apply(self, turns: u8) -> Option<u8> {
         match self {
             Self::RotateLeft => Some((turns % 4 + 3) % 4),

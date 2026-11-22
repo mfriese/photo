@@ -3056,6 +3056,81 @@ fn fullscreen_video_waits_for_space_before_starting_playback() {
         }],
         ..Default::default()
     };
-    let _ = ctx.run(input, |ctx| suite.media_viewer(ctx, &[0], &mut Vec::new()));
+    let _ = ctx.run(input, |ctx| {
+        let commands = suite.bindings.shortcuts(ctx, true);
+        suite.media_viewer(ctx, &[0], &mut Vec::new());
+        for command in commands {
+            suite.execute(command, ctx);
+        }
+    });
     assert_eq!(video.0.load(Ordering::SeqCst), 1);
+    let mut saved = suite.bindings.export();
+    saved.get_mut("play_video").unwrap().as_mut().unwrap().key = "P".into();
+    suite.bindings.restore(&saved).unwrap();
+    for (key, expected) in [(egui::Key::Space, 1), (egui::Key::P, 2)] {
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            }],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            let commands = suite.bindings.shortcuts(ctx, true);
+            suite.media_viewer(ctx, &[0], &mut Vec::new());
+            for command in commands {
+                suite.execute(command, ctx);
+            }
+        });
+        assert_eq!(video.0.load(Ordering::SeqCst), expected);
+    }
+}
+
+#[test]
+fn saved_date_refreshes_comments_even_when_stopping_playback_fails() {
+    use photosuite_application::diary::{AudioControl, AudioPlayer, VerificationProgress};
+    struct Player;
+    impl AudioPlayer for Player {
+        fn open(
+            &self,
+            _: &crate::domain::diary_timeline::DiaryTimeline,
+            _: &std::path::Path,
+            _: &[Media],
+        ) -> Result<(), String> {
+            panic!("must not start playback")
+        }
+        fn revise(
+            &self,
+            _: &crate::domain::diary_timeline::DiaryTimeline,
+            _: &VerificationProgress,
+        ) -> Result<(), String> {
+            panic!("must not revise playback")
+        }
+        fn control(&self, command: AudioControl) -> Result<(), String> {
+            assert_eq!(command, AudioControl::Stop);
+            Err("player unavailable".into())
+        }
+    }
+    let mut suite = test_suite();
+    let root = std::path::Path::new("/fixture");
+    let result = photosuite_application::date_correction::follow_up::FollowUp {
+        diary: &mut suite.diary,
+        diary_catalog: &mut suite.diary_catalog,
+        audio_preparation: &mut suite.audio_preparation,
+        comments: &mut suite.comments,
+        audio_library: &mut suite.audio_library,
+    }
+    .after_save(root, &Player);
+    assert_eq!(result.playback_error.as_deref(), Some("player unavailable"));
+    assert!(suite.comments.is_loading());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !suite.comments.is_loaded() {
+        suite.comments.poll();
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::yield_now();
+    }
+    assert_eq!(suite.comments.authoritative_catalog().unwrap().0, root);
 }

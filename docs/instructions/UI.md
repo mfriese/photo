@@ -4,6 +4,8 @@ Nur bei UI-/Theme-/Navigationsänderungen lesen. Fachabläufe bleiben in Applica
 
 ## Gemeinsames Design
 - Farben, Schriften, Abstände und Maße zentral in src/theme.rs; native Farbwerte daraus ableiten. Kontrastreiche lesbare Texte in allen Zuständen, keine dunklen Texte auf dunklem Grund oder gelben Warntexte ohne ausreichenden Kontrast.
+- Default-Kürzel für bestehende Medienaktionen zentral in `application::preferences::bindings` pflegen. Fehlende Overrides erben Defaults, explizites `None` deaktiviert; unbekannte Aktionskennungen ablehnen. Das aktuelle Settings-Format enthält ein Kürzel pro Aktion; zusätzliche Kürzel pro Aktion benötigen eine versionierte Formaterweiterung. Keine neue Konfigurationsoberfläche ohne Auftrag.
+- Medienaktionen aus dem bestehenden Command-Katalog beziehen; dieselbe Aktion überall über den Dispatcher ausführen, Verfügbarkeit über `Command::available_for` bestimmen und gespeicherte Tastenkürzel verwenden, keine parallelen festen Tastenpfade.
 - Gemeinsame Symbolbuttons mit Tooltip/Accessibility, 34 × 34 Punkte (`TRANSPORT_EDGE`), helle Symbole, Aufnahme rot. Rahmen/Hover/deaktivierte Farben zwischen Player und Recorder abgleichen, keine unzuverlässigen Unicode-Glyphen hinzufügen.
 - Mindestfenster 360 × 400, lange Pfade kürzen mit Tooltip. Keine horizontalen Scroller in Betrachter-Steuerung. Hörleisten gleich hoch wie Buttons, mit gemeinsamen Rahmen.
 - Gewöhnliche Dialoge über theme::dialog zentrieren. OK-Hinweise initial erst nach unsichtbarer Größenmessung fokussieren, Enter bestätigt fokussierten Button. Destruktive Dialoge haben Abbrechen als sichere Vorgabe. Viewer und bewusst angeheftetes Aktivitätspopup behalten eigenes Layout.
@@ -20,7 +22,7 @@ Nur bei UI-/Theme-/Navigationsänderungen lesen. Fachabläufe bleiben in Applica
 - Fußzeile einzeilig: Medien gesamt/Fotos/Audios/Videos, danach weniger beständige Zustände. Startseite letzte fünf andere Bibliotheken ohne Dateisystemprobe beim Rendern.
 
 ## Betrachter und Recorder
-- F schaltet die Großansicht bildschirmfüllend; Escape verlässt zuerst Vollbild. Pfeile links/rechts blättern, außer bei Texteingabe. Audiowiedergabe bei Fotos erhalten; Videos im Vollbild zunächst als Sechserraster zeigen; erst Leertaste startet den nativen Player und pausiert vorher laufendes Audio.
+- F schaltet die Großansicht bildschirmfüllend; Escape verlässt zuerst Vollbild. Pfeile links/rechts blättern, außer bei Texteingabe. Audiowiedergabe bei Fotos erhalten; Videos im Vollbild zunächst als Sechserraster zeigen; erst die konfigurierte Aktion „Video abspielen“ (standardmäßig Leertaste) startet den nativen Player und pausiert vorher laufendes Audio.
 - Bild horizontal zentrieren, sämtliche Controls darüber. Datum/Uhrzeit neben Fenstertitel, keine 1/1- oder EXIF-Statuszeile. Drei dezente Gruppen: Navigation/Aktionen, Tags/Finder untereinander, Audio. Schmal: Audiogruppe als nächste volle Zeile.
 - Audio oben Play/Kommentarspur/Jahresfenster; darunter Record unter Play, gleich hohe Kurve, Pegel, rechts Mikrofon und Zugang zum separaten Recorder. Kein Kommentar: Controls/Spur deutlich deaktivieren.
 - Recorder: Titelzeile mit X, Geräte beim Öffnen der rechtsbündigen Combo aktualisieren. Play/Record-Pause/Stop links, Status dazwischen. Keine kurz flackernden Vorbereitungs-/Pausenmeldungen. Foto neben Beschreibung in voller Höhe, X/Häkchen zum Verwerfen/Speichern; Rückfrage mit Abstand und zentrierten Buttons Speichern/Verwerfen.

@@ -166,15 +166,7 @@ impl Suite {
                 && self
                     .selected
                     .and_then(|i| self.items.get(i))
-                    .is_some_and(|m| {
-                        if command == crate::commands::Command::PlayVideo {
-                            m.is_video()
-                        } else if command == crate::commands::Command::CorrectDate {
-                            !m.is_audio()
-                        } else {
-                            m.is_photo()
-                        }
-                    });
+                    .is_some_and(|m| command.available_for(m));
             entries.push(Entry {
                 action: Action::Edit(command),
                 enabled,

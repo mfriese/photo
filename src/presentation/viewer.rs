@@ -67,35 +67,10 @@ impl super::Suite {
                                 egui::Image::from_uri(image_uri(m.path(), self.editor.rotations())),
                             );
                         } else {
-                            ui.label("Leertaste: Video abspielen · ← / →: Blättern · F: Vollbild beenden");
+                            ui.label("Video abspielen: konfiguriertes Tastenkürzel (standardmäßig Leertaste) · ← / →: Blättern · F: Vollbild beenden");
                             self.storyboard.show(ui, m.path(), self.services.video_preview.clone());
                         }
                     });
-                if m.is_video()
-                    && !ctx.wants_keyboard_input()
-                    && !self.comments.is_open()
-                    && !self.options_open
-                    && !self.tag_view.open
-                    && !self.bindings.visible
-                    && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space))
-                {
-                    let transport = self.services.audio_player.transport();
-                    let result = if transport.playing {
-                        self.services.audio_player.control(
-                            photosuite_application::diary::AudioControl::Configure {
-                                playing: false,
-                                category: transport.category_filter,
-                            },
-                        )
-                    } else {
-                        Ok(())
-                    };
-                    if let Err(error) =
-                        result.and_then(|_| self.services.video_player.play(m.path()))
-                    {
-                        self.status = error;
-                    }
-                }
             } else {
                 egui::Window::new(format!("Großansicht · {date} {clock}"))
                     .id(egui::Id::new("media_viewer"))

@@ -64,6 +64,18 @@ impl MediaDates {
         self.retry = false;
         self.order.clear();
     }
+    /// Preserve unrelated resolved dates. Pending work needs a generation reset.
+    pub fn invalidate(&mut self, paths: &std::collections::BTreeSet<PathBuf>) {
+        if paths
+            .iter()
+            .any(|path| self.entries.get(path).is_some_and(Option::is_none))
+        {
+            self.clear();
+            return;
+        }
+        self.entries.retain(|path, _| !paths.contains(path));
+        self.order.retain(|path| !paths.contains(path));
+    }
     fn insert(&mut self, path: PathBuf, value: Option<Result<CaptureTime, String>>) {
         if self.entries.len() >= LIMIT
             && let Some(old) = self.order.pop_front()
@@ -205,6 +217,20 @@ mod tests {
     }
     fn media(name: &str) -> Media {
         Media::from_path(name.into(), "2008/09".into()).unwrap()
+    }
+    #[test]
+    fn comment_invalidation_preserves_unrelated_resolved_dates() {
+        let mut dates = MediaDates::new(
+            Arc::new(Source(AtomicUsize::new(0))),
+            Arc::new(WorkPriority::default()),
+        );
+        let first = media("img_20080916_035811.jpg");
+        let other = media("img_20080917_035811.jpg");
+        assert!(dates.get(&first).is_some());
+        assert!(dates.get(&other).is_some());
+        dates.invalidate(&std::collections::BTreeSet::from([first.path().to_owned()]));
+        assert!(!dates.entries.contains_key(first.path()));
+        assert!(dates.entries.contains_key(other.path()));
     }
     #[test]
     fn names_need_no_metadata_and_unknown_files_are_loaded_once() {

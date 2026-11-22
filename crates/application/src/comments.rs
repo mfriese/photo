@@ -5,6 +5,7 @@ use crate::domain::{
     tags::LibraryFile,
 };
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
 };
@@ -166,6 +167,12 @@ pub struct PhotoAudio {
     pub group: String,
     pub year: String,
 }
+/// Authoritative comment changes, scoped to one library and affected media.
+#[derive(Debug)]
+pub struct CommentChanges {
+    pub root: PathBuf,
+    pub media: BTreeSet<LibraryFile>,
+}
 pub struct CommentSession {
     repository: Arc<dyn CommentRepository>,
     recorder: Arc<dyn CommentRecorder>,
@@ -199,6 +206,8 @@ pub struct CommentSession {
     published: Option<Comment>,
     saved: bool,
     changed: bool,
+    reported_catalog: CommentCatalog,
+    affected: BTreeSet<LibraryFile>,
     save_intent: Option<SaveIntent>,
     next_photo: Option<PhotoTarget>,
 }
@@ -241,6 +250,8 @@ impl CommentSession {
             published: None,
             saved: false,
             changed: false,
+            reported_catalog: CommentCatalog::default(),
+            affected: BTreeSet::new(),
             save_intent: None,
             next_photo: None,
         }
@@ -316,6 +327,8 @@ impl CommentSession {
             return;
         }
         if self.root.as_ref() != Some(&root) {
+            self.reported_catalog = CommentCatalog::default();
+            self.affected.clear();
             self.discard();
         }
         self.rebuild_cancel
@@ -401,8 +414,30 @@ impl CommentSession {
     pub fn catalog(&self) -> &CommentCatalog {
         &self.catalog
     }
-    pub fn take_changed(&mut self) -> bool {
-        std::mem::take(&mut self.changed)
+    pub fn take_changes(&mut self) -> Option<CommentChanges> {
+        if !self.loaded || !std::mem::take(&mut self.changed) {
+            return None;
+        }
+        for (id, comment) in self.reported_catalog.entries() {
+            if self.catalog.entries().get(id) != Some(comment) {
+                self.affected.insert(comment.photo().clone());
+                self.affected.insert(comment.audio().clone());
+            }
+        }
+        for (id, comment) in self.catalog.entries() {
+            if self.reported_catalog.entries().get(id) != Some(comment) {
+                self.affected.insert(comment.photo().clone());
+                self.affected.insert(comment.audio().clone());
+            }
+        }
+        self.reported_catalog = self.catalog.clone();
+        if self.affected.is_empty() {
+            return None;
+        }
+        Some(CommentChanges {
+            root: self.root.clone()?,
+            media: std::mem::take(&mut self.affected),
+        })
     }
     pub fn is_loading(&self) -> bool {
         !self.loaded && (self.request.is_some() || self.worker.is_some())
@@ -912,6 +947,10 @@ impl CommentSession {
                                 Ok(stored) => {
                                     self.catalog = stored.catalog;
                                     self.revision = stored.revision;
+                                    if let Some(comment) = &self.published {
+                                        self.affected.insert(comment.photo().clone());
+                                        self.affected.insert(comment.audio().clone());
+                                    }
                                     self.saved = true;
                                     self.capture_owned = false;
                                     self.changed = true;
@@ -1132,6 +1171,34 @@ mod tests {
         panic!("worker did not finish");
     }
     #[test]
+    fn change_reports_are_authoritative_scoped_and_include_removed_media() {
+        let fake = Arc::new(Fake::default());
+        let mut session = CommentSession::new(fake.clone(), fake.clone(), fake);
+        session.root = Some("/library".into());
+        session.changed = true;
+        assert!(session.take_changes().is_none());
+        let comment = Comment::new(
+            "12345678-1234-1234-1234-123456789abc".into(),
+            LibraryFile::new("2024/audio/comments/com_20240101_120000.wav".into()).unwrap(),
+            LibraryFile::new("2008/09/photo.jpg".into()).unwrap(),
+        )
+        .unwrap();
+        session.catalog.insert(comment.clone()).unwrap();
+        session.loaded = true;
+        let changed = session.take_changes().unwrap();
+        assert_eq!(changed.root, PathBuf::from("/library"));
+        assert_eq!(
+            changed.media,
+            BTreeSet::from([comment.photo().clone(), comment.audio().clone()])
+        );
+        assert!(session.take_changes().is_none());
+        session.changed = true;
+        assert!(session.take_changes().is_none()); // Same catalog, no invalidation.
+        session.catalog = CommentCatalog::default();
+        session.changed = true;
+        assert_eq!(session.take_changes().unwrap().media, changed.media);
+    }
+    #[test]
     fn same_library_reload_rejects_old_results_and_serializes_workers() {
         struct Slow {
             calls: AtomicUsize,
@@ -1179,7 +1246,7 @@ mod tests {
             1
         );
         session.load("/library".into());
-        session.take_changed();
+        session.take_changes();
         release.send(()).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
@@ -1193,7 +1260,7 @@ mod tests {
         }
         assert!(!session.loaded);
         assert!(session.error().is_empty());
-        assert!(!session.take_changed());
+        assert!(session.take_changes().is_none());
         release.send(()).unwrap();
         wait(&mut session);
         assert!(session.loaded);

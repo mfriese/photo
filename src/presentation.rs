@@ -102,12 +102,6 @@ impl Suite {
         self.load_library(path, remember, false);
     }
     fn load_library(&mut self, path: PathBuf, remember: bool, refresh_tags: bool) {
-        if self.root.as_ref() != Some(&path) {
-            self.geo_markers.clear();
-            self.photo_location.cancel();
-            self.location_open = false;
-            self.index_maintenance.cancel();
-        }
         let path = if path.is_absolute() {
             path
         } else {
@@ -115,57 +109,63 @@ impl Suite {
                 .map(|cwd| cwd.join(&path))
                 .unwrap_or(path)
         };
-        if self.comments.has_unsaved() || self.comments.is_saving() {
-            self.status = "Bitte die Audioaufnahme zuerst speichern oder verwerfen".into();
-            self.comments.show();
-            return;
+        use photosuite_application::library_opening::{LibraryOpening, OpenError};
+        let switched = self.root.as_ref() != Some(&path);
+        let result = LibraryOpening {
+            comments: &mut self.comments,
+            organization: &mut self.organization,
+            processing: &mut self.processing_repeats,
+            transcription: &mut self.transcription_queue,
+            geo_sweep: &mut self.geo_sweep,
+            places: &mut self.place_filter,
+            audio_preparation: &mut self.audio_preparation,
+            dates: &mut self.date_corrections,
+            audio_library: &mut self.audio_library,
+            diary: &mut self.diary,
+            diary_catalog: &mut self.diary_catalog,
+            settings: &mut self.library_settings,
+            collection: &mut self.collection,
+            index: &mut self.index_maintenance,
+            location: &mut self.photo_location,
+            startup: self.startup.as_mut(),
         }
-        if refresh_tags
-            || self.root.as_ref() != Some(&path)
-            || self.organization.catalog().is_none()
-        {
-            if let Err(error) = self.organization.open_cached(path.clone()) {
+        .open(
+            path.clone(),
+            self.root.as_deref(),
+            refresh_tags,
+            &self.services,
+        );
+        match result {
+            Ok(opened) => {
+                if opened.tags_reloaded {
+                    self.tag_view.clear_scope();
+                }
+            }
+            Err(OpenError::RecordingPending) => {
+                self.status = "Bitte die Audioaufnahme zuerst speichern oder verwerfen".into();
+                self.comments.show();
+                return;
+            }
+            Err(OpenError::Catalog(error)) => {
                 self.status = error;
                 self.tag_view.open = true;
                 return;
             }
-            self.tag_view.clear_scope();
         }
-        if let Some(startup) = self.startup.as_mut() {
-            startup.cancel_for_navigation();
+        if switched {
+            self.location_open = false;
         }
-        self.processing_repeats.clear();
-        self.transcription_queue.reset();
-        self.geo_sweep.reset();
-        self.place_filter.reset();
         self.place_scope = None;
         self.place_refresh = None;
         self.place_options = None;
         self.transcription_seen = None;
         self.transcription_complete = false;
-        self.audio_preparation.reset();
-        self.date_corrections.open(&path);
         self.date_editor = None;
         self.date_projection_revision = 0;
-        self.audio_library.open(&path);
-        self.organization.begin_media_scan(&path);
-        self.comments.load_cached(path.clone());
         self.persist_preferences();
         self.preferences.library_scope = None;
         self.storyboard.clear();
-        self.diary_catalog.cancel();
         self.remember_after_scan = !remember;
-        if self.root.as_ref() != Some(&path) {
-            let _ = self
-                .services
-                .audio_player
-                .control(photosuite_application::diary::AudioControl::Stop);
-            self.diary.cancel();
-        }
-        self.library_settings
-            .request(self.services.preferences.clone(), path.clone());
-        self.collection
-            .request(self.services.repository.clone(), path.clone());
         self.root = Some(path.clone());
         if remember {
             self.preferences.remember_library(path.clone());
@@ -206,6 +206,9 @@ impl Suite {
             self.storyboard.clear();
             return;
         };
+        if !command.available_for(media) {
+            return;
+        }
         if command == crate::commands::Command::CorrectDate {
             let media = media.clone();
             if !media.is_audio() && !self.date_corrections.busy() && !self.comments.is_open() {
@@ -214,9 +217,11 @@ impl Suite {
             return;
         }
         if command == crate::commands::Command::PlayVideo {
-            if let Err(error) =
-                photosuite_application::playback::play(media, self.services.video_player.as_ref())
-            {
+            if let Err(error) = photosuite_application::playback::play_with_audio(
+                media,
+                self.services.video_player.as_ref(),
+                self.services.audio_player.as_ref(),
+            ) {
                 self.status = error;
             }
             return;
@@ -423,8 +428,11 @@ impl eframe::App for Suite {
         if self.index_maintenance.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
-        if let Some(root) = self.index_maintenance.take_completed()
-            && self.root.as_ref() == Some(&root)
+        if let Some(photosuite_application::library_index::AfterRebuild::ReloadLibrary { root }) =
+            self.index_maintenance.after_rebuild(
+                self.root.as_deref(),
+                self.comments.has_unsaved() || self.comments.is_saving(),
+            )
         {
             self.load_library(root, true, true);
         }

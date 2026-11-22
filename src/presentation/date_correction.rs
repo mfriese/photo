@@ -115,21 +115,18 @@ impl Suite {
                         self.follow_corrected_media(&path);
                     }
                     self.date_editor = None;
-                    self.diary.cancel();
-                    let playback_error = self
-                        .services
-                        .audio_player
-                        .control(photosuite_application::diary::AudioControl::Stop)
-                        .err();
-
-                    self.diary_catalog.cancel();
-                    self.audio_preparation.reset();
+                    let result = photosuite_application::date_correction::follow_up::FollowUp {
+                        diary: &mut self.diary,
+                        diary_catalog: &mut self.diary_catalog,
+                        audio_preparation: &mut self.audio_preparation,
+                        comments: &mut self.comments,
+                        audio_library: &mut self.audio_library,
+                    }
+                    .after_save(&root, self.services.audio_player.as_ref());
                     self.audio_header = Default::default();
                     self.viewer_audio = Default::default();
-                    self.comments.load_cached(root.clone());
-                    self.audio_library.open(&root);
                     self.transcription_seen = None;
-                    self.status = playback_error.map(|error|format!("Mediendatum gespeichert; Wiedergabe konnte nicht beendet werden: {error}")).unwrap_or_else(||if relocated.is_some() {"Datei verschoben und umbenannt · Metadaten erhalten".into()}else{"Mediendatum gespeichert · Original unverändert".into()});
+                    self.status = result.playback_error.map(|error|format!("Mediendatum gespeichert; Wiedergabe konnte nicht beendet werden: {error}")).unwrap_or_else(||if relocated.is_some() {"Datei verschoben und umbenannt · Metadaten erhalten".into()}else{"Mediendatum gespeichert · Original unverändert".into()});
                 }
             }
         }
