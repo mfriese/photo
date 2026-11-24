@@ -20,7 +20,7 @@ int photosuite_video_frame(const char *path, double seconds, double *actualSecon
         CGImageRef image = [generator copyCGImageAtTime:CMTimeMakeWithSeconds(seconds, 60000) actualTime:&actualTime error:&error];
         *actualSeconds = CMTimeGetSeconds(actualTime);
         if (!image) {
-            snprintf(errorMessage,errorCapacity,"%s",error.localizedDescription.UTF8String ?: "AVFoundation konnte keinen Frame decodieren");
+            snprintf(errorMessage,errorCapacity,"%s (%s/%ld)",error.localizedDescription.UTF8String ?: "AVFoundation konnte keinen Frame decodieren",error.domain.UTF8String ?: "unknown",(long)error.code);
             return 1;
         }
         NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
