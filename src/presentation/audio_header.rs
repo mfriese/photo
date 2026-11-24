@@ -1,5 +1,5 @@
 //! Compact rendering of the existing shared transport; no decoding or filesystem access.
-use crate::domain::diary_timeline::DiaryTimeline;
+use crate::domain::{Media, diary_timeline::DiaryTimeline};
 use crate::theme;
 use eframe::egui;
 use photosuite_application::diary::{AudioControl, AudioTransportSnapshot, VerificationProgress};
@@ -10,6 +10,10 @@ pub(super) struct AudioHeader {
     photo: Option<std::path::PathBuf>,
     followed_scope: Option<String>,
     year_draft: photosuite_application::diary::GalleryAudio,
+    gallery_photo_paths: Option<Vec<std::path::PathBuf>>,
+    gallery_root: Option<std::path::PathBuf>,
+    gallery_visible_indices: Option<Vec<usize>>,
+    gallery_comment_audio: std::collections::BTreeSet<crate::domain::tags::LibraryFile>,
 }
 #[derive(Default)]
 struct Actions {
@@ -293,10 +297,42 @@ fn controls_sized(
     actions
 }
 impl super::Suite {
-    pub(super) fn compact_audio(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn compact_audio(&mut self, ui: &mut egui::Ui, visible: Option<&[usize]>) {
         let Some(root) = &self.root else {
             return;
         };
+        let projection_changed = visible.is_some_and(|indices| {
+            self.audio_header.gallery_root.as_deref() != Some(root.as_path())
+                || self.audio_header.gallery_visible_indices.as_deref() != Some(indices)
+        });
+        if projection_changed {
+            let visible_photos: Vec<_> = visible
+                .into_iter()
+                .flatten()
+                .filter_map(|index| self.items.get(*index))
+                .filter(|media| media.is_photo())
+                .cloned()
+                .collect();
+            self.audio_header.gallery_photo_paths = Some(
+                visible_photos
+                    .iter()
+                    .map(|photo| photo.path().to_owned())
+                    .collect(),
+            );
+            self.audio_header.gallery_comment_audio =
+                photosuite_application::diary::comment_audio_for_photos(
+                    root,
+                    &visible_photos,
+                    self.comments.catalog(),
+                );
+            self.audio_header.gallery_visible_indices = visible.map(<[usize]>::to_vec);
+            self.audio_header.gallery_root = Some(root.clone());
+        } else if visible.is_none() {
+            self.audio_header.gallery_root = None;
+            self.audio_header.gallery_visible_indices = None;
+            self.audio_header.gallery_photo_paths = None;
+            self.audio_header.gallery_comment_audio.clear();
+        }
         let year_group =
             photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
         let group = year_group.as_str();
@@ -305,17 +341,28 @@ impl super::Suite {
         } else {
             &self.items
         };
-        let changed = self.audio_header.draft.ensure(audio_items, root, group);
-        if self.selected.is_none()
-            && (changed || self.audio_header.followed_scope.as_deref() != Some(group))
-        {
+        let changed = self.audio_header.draft.ensure_filtered(
+            audio_items,
+            root,
+            group,
+            visible.map(|_| &self.audio_header.gallery_comment_audio),
+        );
+        if changed || self.audio_header.followed_scope.as_deref() != Some(group) {
             self.audio_header.followed_scope = Some(group.to_owned());
+            let playback_items = if visible.is_some() {
+                photosuite_application::diary::gallery_items_for_photos(
+                    audio_items,
+                    root,
+                    &self.gallery_visible_photos(),
+                    self.comments.catalog(),
+                )
+            } else if self.services.audio_library.is_some() {
+                self.audio_library.snapshot().with_photos(&self.items)
+            } else {
+                self.items.clone()
+            };
             if let Err(error) = self.diary.follow_view(
-                &if self.services.audio_library.is_some() {
-                    self.audio_library.snapshot().with_photos(&self.items)
-                } else {
-                    self.items.clone()
-                },
+                &playback_items,
                 root,
                 self.audio_preparation.source(),
                 group,
@@ -396,6 +443,20 @@ impl super::Suite {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(100));
         }
+    }
+    pub(super) fn invalidate_gallery_audio_filter(&mut self) {
+        self.audio_header.gallery_visible_indices = None;
+    }
+    fn gallery_visible_photos(&self) -> Vec<Media> {
+        let Some(paths) = &self.audio_header.gallery_photo_paths else {
+            return Vec::new();
+        };
+        paths
+            .iter()
+            .filter_map(|path| self.items.iter().find(|media| media.path() == path))
+            .filter(|media| media.is_photo())
+            .cloned()
+            .collect()
     }
     pub(super) fn compact_photo_audio(
         &mut self,
@@ -543,11 +604,13 @@ impl super::Suite {
         let Some(root) = &self.root else {
             return;
         };
-        let audio_items = if self.services.audio_library.is_some() {
+        let all_audio_items = if self.services.audio_library.is_some() {
             &self.audio_library.snapshot().media
         } else {
             &self.items
         };
+        let filtered_items = self.gallery_playback_items(all_audio_items, root);
+        let audio_items = &filtered_items;
         let year_group =
             photosuite_application::diary::header_audio_group(&self.items, self.group.as_deref());
         let group = year_group.as_str();
@@ -567,11 +630,7 @@ impl super::Suite {
         if let Some(path) = self.audio_header.draft.selected()
             && let Some(selected) = audio_items.iter().find(|media| media.path() == path)
             && let Err(error) = self.diary.request_embedded(
-                &if self.services.audio_library.is_some() {
-                    self.audio_library.snapshot().with_photos(&self.items)
-                } else {
-                    self.items.clone()
-                },
+                audio_items,
                 selected,
                 self.audio_preparation.source(),
                 group,
@@ -584,16 +643,18 @@ impl super::Suite {
         let Some(root) = &self.root else {
             return;
         };
+        let all_audio_items = if self.services.audio_library.is_some() {
+            &self.audio_library.snapshot().media
+        } else {
+            &self.items
+        };
+        let filtered_items = self.gallery_playback_items(all_audio_items, root);
         let result = photosuite_application::diary::overview::open(
             photosuite_application::diary::overview::Overview {
                 root,
-                items: &self.items,
+                items: &filtered_items,
                 group: self.group.as_deref(),
-                cached_audio: self
-                    .services
-                    .audio_library
-                    .as_ref()
-                    .map(|_| self.audio_library.snapshot()),
+                cached_audio: None,
             },
             &mut self.audio_header.draft,
             &mut self.diary,
@@ -604,7 +665,31 @@ impl super::Suite {
             self.status = error;
         }
     }
+    fn gallery_playback_items(&self, audio_items: &[Media], root: &std::path::Path) -> Vec<Media> {
+        let Some(_) = &self.audio_header.gallery_photo_paths else {
+            return if self.services.audio_library.is_some() {
+                self.audio_library.snapshot().with_photos(&self.items)
+            } else {
+                self.items.clone()
+            };
+        };
+        let visible_photos = self.gallery_visible_photos();
+        photosuite_application::diary::gallery_items_for_photos(
+            audio_items,
+            root,
+            &visible_photos,
+            self.comments.catalog(),
+        )
+    }
     pub(super) fn page_heading(&mut self, ui: &mut egui::Ui, title: &str) {
+        self.page_heading_for_gallery(ui, title, None);
+    }
+    pub(super) fn page_heading_for_gallery(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &str,
+        visible: Option<&[usize]>,
+    ) {
         let width = ui.available_width();
         ui.horizontal(|ui| {
             ui.set_height(theme::TRANSPORT_EDGE);
@@ -621,7 +706,7 @@ impl super::Suite {
                     theme::TRANSPORT_EDGE,
                 ),
                 egui::Layout::left_to_right(egui::Align::Center),
-                |ui| self.compact_audio(ui),
+                |ui| self.compact_audio(ui, visible),
             );
             self.transcription_button(ui);
         });

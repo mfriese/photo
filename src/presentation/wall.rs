@@ -110,9 +110,9 @@ impl super::Suite {
                         _ => group.into(),
                     }
                 };
-                self.page_heading(ui, &title);
+                self.page_heading_for_gallery(ui, &title, Some(visible));
                 self.prepare_gallery_selection();
-                ui.small(format!("{} ausgewählt · Cmd-Klick: Mehrfachauswahl · Shift-Klick: Bereich · Doppelklick: Öffnen", self.gallery.selection.paths.len()));
+                super::filter_breadcrumbs::show(self, ui);
                 ui.add_space(4.);
                 if visible.is_empty() && !self.collection.is_loading() {
                     ui.add_space(16.);

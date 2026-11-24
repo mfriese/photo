@@ -39,9 +39,10 @@ int main(int argc,char **argv){@autoreleasepool{
  assert(argc==3);PSCommentRecorder *r=[PSCommentRecorder new];assert([snapshot(r)[@"phase"] isEqual:@"idle"]);
  r.identifier=@"12345678-1234-1234-1234-123456789abc";r.startedAt=@"2026-11-12T15:30:00+01:00";
  r.directory=[NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString] isDirectory:YES];assert([NSFileManager.defaultManager createDirectoryAtURL:r.directory withIntermediateDirectories:NO attributes:nil error:nil]);r.file=[r.directory URLByAppendingPathComponent:@"test.m4a"];
- AVURLAsset *source=[AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]]] options:nil];AVAssetExportSession *exporter=[[AVAssetExportSession alloc] initWithAsset:source presetName:AVAssetExportPresetAppleM4A];assert(exporter);exporter.outputURL=r.file;exporter.outputFileType=AVFileTypeAppleM4A;__block BOOL done=NO;[exporter exportAsynchronouslyWithCompletionHandler:^{done=YES;}];NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:10];while(!done&&deadline.timeIntervalSinceNow>0)pump(.01);assert(done&&exporter.status==AVAssetExportSessionStatusCompleted);
- [r.wave addObjectsFromArray:@[@0.1,@0.6,@0.3]];NSArray *frozen=r.wave.copy;double frozenStart=r.waveStart;
+ NSURL *source=[NSURL fileURLWithFileSystemRepresentation:argv[1] isDirectory:NO relativeToURL:nil];assert(source);assert([NSFileManager.defaultManager copyItemAtURL:source toURL:r.file error:nil]);
+ NSArray *frozen=r.wave.copy;double frozenStart=r.waveStart;
  dispatch_sync(r.queue,^{[r finishFile:r.file error:nil];});assert([r.wave isEqualToArray:frozen]);assert(r.waveStart==frozenStart);assert([snapshot(r)[@"wave_span"] doubleValue]==32.);NSDictionary *ready=snapshot(r);assert([ready[@"phase"] isEqual:@"ready"]);assert([ready[@"seconds"] doubleValue]>.9);assert([ready[@"recorded_at"] isEqual:r.startedAt]);NSString *file=r.file.path;
+ for(NSUInteger i=0;i<30;i++)[r.envelope addObject:@[@((double)i/30.),@((i%3)==1?.6:.1)]];[r rebuildWave];
  [r command:3];pump(.1);dispatch_sync(r.queue,^{});assert(r.preview);[r command:3];dispatch_sync(r.queue,^{});assert(!r.preview.isPlaying);assert([snapshot(r)[@"seconds"] doubleValue]>.9);
  // Pause cursor is seekable and preview begins at that exact mark.
  r.phase=@"paused";[r seek:.25];dispatch_sync(r.queue,^{});assert(fabs(r.cursor-.25)<.001);
@@ -51,7 +52,8 @@ int main(int argc,char **argv){@autoreleasepool{
  r.insertion=.25;r.finishPhase=@"paused";r.segment=replacement;r.phase=@"finishing";
  NSArray *beforePause=r.wave.copy;double beforeStart=r.waveStart;
  dispatch_sync(r.queue,^{[r finishFile:replacement error:nil];});NSDate *editDeadline=[NSDate dateWithTimeIntervalSinceNow:10];while([snapshot(r)[@"phase"] isEqual:@"finishing"]&&editDeadline.timeIntervalSinceNow>0)pump(.01);
- assert([snapshot(r)[@"phase"] isEqual:@"paused"]);assert([r.wave isEqualToArray:beforePause]);assert(r.waveStart==beforeStart);assert([snapshot(r)[@"wave_span"] doubleValue]==32.);assert(fabs(r.seconds-3.25)<.08);
+ NSDictionary *edited=snapshot(r);if([edited[@"edit_failed"] boolValue])fprintf(stderr,"M4A replacement failed: %s\n",[edited[@"message"] UTF8String]);
+ assert([edited[@"phase"] isEqual:@"paused"]);assert([r.wave isEqualToArray:beforePause]);assert(r.waveStart==beforeStart);assert([edited[@"wave_span"] doubleValue]==32.);assert(fabs(r.seconds-3.25)<.08);
  assert(fabs(frequency(r.file,.08)-220)<45);assert(fabs(frequency(r.file,.7)-440)<45);
  assert([[NSData dataWithContentsOfURL:replacement] isEqual:sourceBytes]);
  NSURL *master=r.file;NSData *masterBytes=[NSData dataWithContentsOfURL:master];

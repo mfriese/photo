@@ -5,6 +5,7 @@ mod chrome;
 mod comments;
 mod date_correction;
 mod diary;
+mod filter_breadcrumbs;
 mod gallery;
 mod icons;
 mod inline_recording;

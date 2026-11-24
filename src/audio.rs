@@ -121,14 +121,19 @@ impl NativeAudioSource {
 
 #[cfg(test)]
 pub(crate) fn test_wave(path: &Path, seconds: u32, bext: bool) {
-    let samples = 8000 * seconds;
+    test_wave_at_rate(path, seconds, bext, 8000);
+}
+
+#[cfg(test)]
+pub(crate) fn test_wave_at_rate(path: &Path, seconds: u32, bext: bool, sample_rate: u32) {
+    let samples = sample_rate * seconds;
     let mut contents = Vec::new();
     contents.extend_from_slice(b"WAVEfmt ");
     contents.extend_from_slice(&16u32.to_le_bytes());
     contents.extend_from_slice(&1u16.to_le_bytes());
     contents.extend_from_slice(&1u16.to_le_bytes());
-    contents.extend_from_slice(&8000u32.to_le_bytes());
-    contents.extend_from_slice(&16000u32.to_le_bytes());
+    contents.extend_from_slice(&sample_rate.to_le_bytes());
+    contents.extend_from_slice(&(sample_rate * 2).to_le_bytes());
     contents.extend_from_slice(&2u16.to_le_bytes());
     contents.extend_from_slice(&16u16.to_le_bytes());
     if bext {
@@ -142,6 +147,30 @@ pub(crate) fn test_wave(path: &Path, seconds: u32, bext: bool) {
     contents.extend_from_slice(b"data");
     contents.extend_from_slice(&(samples * 2).to_le_bytes());
     contents.resize(contents.len() + samples as usize * 2, 0);
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&(contents.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&contents);
+    std::fs::write(path, bytes).unwrap();
+}
+#[cfg(test)]
+pub(crate) fn test_tone(path: &Path, seconds: u32, sample_rate: u32, frequency: f64) {
+    let count = sample_rate * seconds;
+    let mut contents = Vec::with_capacity(44 + count as usize * 2);
+    contents.extend_from_slice(b"WAVEfmt ");
+    contents.extend_from_slice(&16u32.to_le_bytes());
+    contents.extend_from_slice(&1u16.to_le_bytes());
+    contents.extend_from_slice(&1u16.to_le_bytes());
+    contents.extend_from_slice(&sample_rate.to_le_bytes());
+    contents.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    contents.extend_from_slice(&2u16.to_le_bytes());
+    contents.extend_from_slice(&16u16.to_le_bytes());
+    contents.extend_from_slice(b"data");
+    contents.extend_from_slice(&(count * 2).to_le_bytes());
+    for sample in 0..count {
+        let phase = std::f64::consts::TAU * frequency * f64::from(sample) / f64::from(sample_rate);
+        let value = (i16::MAX as f64 * 0.5 * phase.sin()) as i16;
+        contents.extend_from_slice(&value.to_le_bytes());
+    }
     let mut bytes = b"RIFF".to_vec();
     bytes.extend_from_slice(&(contents.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&contents);
@@ -183,15 +212,9 @@ mod tests {
                 .contains("FALLBACK")
         );
         let m4a = dir.path().join("recording.m4a");
-        assert!(
-            std::process::Command::new("/usr/bin/afconvert")
-                .args(["-f", "m4af", "-d", "aac"])
-                .arg(&path)
-                .arg(&m4a)
-                .status()
-                .unwrap()
-                .success()
-        );
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/aac-audio.m4a");
+        std::fs::copy(fixture, &m4a).unwrap();
         let mp4 = dir.path().join("recording.mp4");
         std::fs::rename(m4a, &mp4).unwrap();
         assert!(source.probe(&mp4).unwrap().audio_only);

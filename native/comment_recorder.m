@@ -205,7 +205,7 @@ static char *PSRecordJSON(id object){NSData *data=[NSJSONSerialization dataWithJ
         self.exporter=nil;self.capture=nil;self.output=nil;
         double total=CMTimeGetSeconds([AVURLAsset URLAssetWithURL:candidate options:nil].duration);
         if(exporter.status==AVAssetExportSessionStatusCompleted&&isfinite(total)&&total>0){[self acceptFile:candidate duration:total];}
-        else {[self restoreMaster:exporter.error.localizedDescription?:@"Einfügen fehlgeschlagen; bisherige Aufnahme bleibt erhalten."];}
+        else {NSError *failure=exporter.error,*underlying=failure.userInfo[NSUnderlyingErrorKey];NSString *message=failure?[NSString stringWithFormat:@"%@ (%@/%ld; %@/%ld)",failure.localizedDescription?:@"Einfügen fehlgeschlagen",failure.domain,(long)failure.code,underlying.domain?:@"kein Ursachecode",(long)underlying.code]:@"Einfügen fehlgeschlagen; bisherige Aufnahme bleibt erhalten.";[self restoreMaster:message];}
     });}];
 }
 - (void)captureOutput:(AVCaptureFileOutput *)output didFinishRecordingToOutputFileAtURL:(NSURL *)url fromConnections:(NSArray<AVCaptureConnection *> *)connections error:(NSError *)error {dispatch_async(self.queue,^{[self finishFile:url error:error];});}

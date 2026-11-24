@@ -791,6 +791,31 @@ mod tests {
 mod media_tests {
     use super::*;
     #[test]
+    fn pcm_tone_reaches_model_loading_without_using_avfoundation_conversion() {
+        let engine =
+            NativeEngine::new(Arc::new(crate::whisper_models_native::NativeModelTransport));
+        let directory = tempfile::tempdir().unwrap();
+        let model_path = directory.path().join("unprepared-model.bin");
+        std::fs::write(&model_path, b"not a model").unwrap();
+        let model = ModelChoice {
+            path: model_path,
+            settings: photosuite_application::transcription::Settings::new("tiny", "en").unwrap(),
+        };
+        let wave = directory.path().join("tone.wav");
+        crate::audio::test_tone(&wave, 1, 48_000, 440.);
+
+        let error = match engine.transcribe(&model, &wave, &AtomicBool::new(false), &|_| {}) {
+            Ok(_) => panic!("a non-silent PCM tone must reach model loading"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("Whisper-Modell fehlt oder wurde verändert"),
+            "{error}"
+        );
+        assert!(engine.cache.lock().unwrap().is_none());
+    }
+
+    #[test]
     fn silent_audio_and_video_without_audio_are_valid_empty_results_without_loading_a_model() {
         let engine =
             NativeEngine::new(Arc::new(crate::whisper_models_native::NativeModelTransport));
@@ -800,7 +825,7 @@ mod media_tests {
         };
         let directory = tempfile::tempdir().unwrap();
         let wave = directory.path().join("silence.wav");
-        crate::audio::test_wave(&wave, 1, false);
+        crate::audio::test_wave_at_rate(&wave, 1, false, 48_000);
         let audio = engine
             .transcribe(&model, &wave, &AtomicBool::new(false), &|_| {})
             .unwrap();

@@ -10,7 +10,14 @@ AVAssetExportSession *PSCommentReplacement(NSURL *base,double prefix,NSURL *segm
     CMTime cut=CMTimeMakeWithSeconds(fmin(prefix,duration),48000);
     if(prefix>0 && ![track insertTimeRange:CMTimeRangeMake(kCMTimeZero,cut) ofTrack:oldTrack atTime:kCMTimeZero error:error])return nil;
     if(![track insertTimeRange:CMTimeRangeMake(kCMTimeZero,next.duration) ofTrack:newTrack atTime:cut error:error])return nil;
-    AVAssetExportSession *exporter=[[AVAssetExportSession alloc] initWithAsset:mix presetName:AVAssetExportPresetAppleM4A];
+    AVAssetExportSession *exporter=nil;
+    @try {
+        exporter=[[AVAssetExportSession alloc] initWithAsset:mix presetName:AVAssetExportPresetAppleM4A];
+    } @catch (NSException *exception) {
+        if(error)*error=[NSError errorWithDomain:@"PhotoSuite.CommentEdit" code:1 userInfo:@{NSLocalizedDescriptionKey:exception.reason?:@"Audioexport konnte nicht vorbereitet werden"}];
+        return nil;
+    }
+    if(!exporter){if(error)*error=[NSError errorWithDomain:@"PhotoSuite.CommentEdit" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Audioexport wird von macOS nicht unterstützt"}];return nil;}
     exporter.outputURL=destination;exporter.outputFileType=AVFileTypeAppleM4A;
     if(recordedAt.length){AVMutableMetadataItem *date=[AVMutableMetadataItem metadataItem];date.keySpace=AVMetadataKeySpaceQuickTimeMetadata;date.key=AVMetadataQuickTimeMetadataKeyCreationDate;date.value=recordedAt;exporter.metadata=@[date];}
     return exporter;

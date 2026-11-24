@@ -14,6 +14,8 @@ fn frame_at(path: &Path, seconds: f64) -> Result<crate::ports::VideoFrame, Strin
             actual_seconds: *mut f64,
             bytes: *mut *mut u8,
             length: *mut usize,
+            error: *mut c_char,
+            error_capacity: usize,
         ) -> c_int;
         fn photosuite_free(bytes: *mut c_void);
     }
@@ -22,13 +24,21 @@ fn frame_at(path: &Path, seconds: f64) -> Result<crate::ports::VideoFrame, Strin
     let mut length = 0;
     // Native adapter returns a malloc allocation valid until explicitly freed.
     let mut actual = seconds;
+    let mut error = [0_i8; 512];
     let status = unsafe {
-        photosuite_video_frame(path.as_ptr(), seconds, &mut actual, &mut bytes, &mut length)
+        photosuite_video_frame(
+            path.as_ptr(),
+            seconds,
+            &mut actual,
+            &mut bytes,
+            &mut length,
+            error.as_mut_ptr(),
+            error.len(),
+        )
     };
     if status != 0 {
-        return Err(format!(
-            "Keine Videovorschau: Codec oder Datei nicht unterstützt ({status})"
-        ));
+        let message = unsafe { std::ffi::CStr::from_ptr(error.as_ptr()) }.to_string_lossy();
+        return Err(format!("Keine Videovorschau: {message} ({status})"));
     }
     let decoded = image::load_from_memory(unsafe { std::slice::from_raw_parts(bytes, length) });
     unsafe {

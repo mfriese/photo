@@ -16,7 +16,13 @@ int main(int argc,const char **argv) {
         if (argc != 2 || photosuite_video_play(argv[1]) != 0) return 1;
         NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:12];
         while (CMTimeGetSeconds(PSPlayback.item.currentTime) < 0.1 && [deadline timeIntervalSinceNow] > 0) { pump(0.1); }
-        if (PSPlayback.item.status != AVPlayerItemStatusReadyToPlay || CMTimeGetSeconds(PSPlayback.item.currentTime) < 0.1) return 2;
+        if (PSPlayback.item.status != AVPlayerItemStatusReadyToPlay || CMTimeGetSeconds(PSPlayback.item.currentTime) < 0.1) {
+            fprintf(stderr, "Native video did not start: status=%ld time=%.3f error=%s\n",
+                    (long)PSPlayback.item.status,
+                    CMTimeGetSeconds(PSPlayback.item.currentTime),
+                    PSPlayback.item.error.localizedDescription.UTF8String ?: "none");
+            return 2;
+        }
         [PSPlayback.playerView keyDown:key(49,@" ")];
         if (PSPlayback.player.rate != 0) return 3;
         [PSPlayback.playerView keyDown:key(49,@" ")];

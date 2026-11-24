@@ -67,6 +67,7 @@ impl Suite {
                 &mut self.known_media,
             );
             if updated {
+                self.invalidate_gallery_audio_filter();
                 self.transcription_seen = None;
                 self.tag_view.options_cache = None;
                 self.audio_header.draft = Default::default();

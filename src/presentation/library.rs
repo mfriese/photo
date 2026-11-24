@@ -6,6 +6,39 @@ pub(super) struct PlaceOptionsCache {
     group: Option<String>,
     rows: Vec<photosuite_application::place_filter::CountryOption>,
 }
+impl PlaceOptionsCache {
+    pub(super) fn label_for(
+        &self,
+        selection: &photosuite_application::place_filter::Selection,
+    ) -> Option<&str> {
+        use photosuite_application::place_filter::Selection;
+        match selection {
+            Selection::Country(code) => self
+                .rows
+                .iter()
+                .find(|country| &country.code == code)
+                .map(|country| country.name.as_str()),
+            Selection::Region { country, code } => self
+                .rows
+                .iter()
+                .find(|row| &row.code == country)
+                .and_then(|row| row.regions.iter().find(|region| &region.code == code))
+                .map(|region| region.name.as_str()),
+            Selection::Place(id) => self
+                .rows
+                .iter()
+                .flat_map(|country| {
+                    country
+                        .regions
+                        .iter()
+                        .flat_map(|region| &region.places)
+                        .chain(&country.places)
+                })
+                .find(|place| place.id == *id)
+                .map(|place| place.name.as_str()),
+        }
+    }
+}
 impl super::Suite {
     pub(super) fn library_sidebar(&mut self, ctx: &egui::Context) {
         if !self.show_library {

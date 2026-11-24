@@ -1649,27 +1649,70 @@ pub fn header_audio_group(_items: &[Media], group: Option<&str>) -> String {
         .map(|scope| scope.group())
         .unwrap_or_else(|| "all".into())
 }
+/// Build the gallery header's audio input from its visible photos. Diary recordings remain
+/// period-scoped; comments are included only when their referenced photo is visible.
+pub fn gallery_items_for_photos(
+    items: &[Media],
+    root: &Path,
+    visible_photos: &[Media],
+    comments: &crate::domain::comments::CommentCatalog,
+) -> Vec<Media> {
+    let comment_audio = comment_audio_for_photos(root, visible_photos, comments);
+
+    let mut result: Vec<_> = items
+        .iter()
+        .filter(|media| {
+            if !media.is_audio()
+                || crate::domain::diary::audio_kind(media)
+                    != Some(crate::domain::diary::AudioKind::Comments)
+            {
+                return true;
+            }
+            media
+                .path()
+                .strip_prefix(root)
+                .ok()
+                .and_then(|path| path.to_str())
+                .and_then(|path| crate::domain::tags::LibraryFile::new(path.to_owned()).ok())
+                .is_some_and(|path| comment_audio.contains(&path))
+        })
+        .cloned()
+        .collect();
+    result.extend(
+        visible_photos
+            .iter()
+            .filter(|media| media.is_photo())
+            .cloned(),
+    );
+    result
+}
+pub fn comment_audio_for_photos(
+    root: &Path,
+    visible_photos: &[Media],
+    comments: &crate::domain::comments::CommentCatalog,
+) -> std::collections::BTreeSet<crate::domain::tags::LibraryFile> {
+    visible_photos
+        .iter()
+        .filter(|media| media.is_photo())
+        .filter_map(|photo| {
+            photo
+                .path()
+                .strip_prefix(root)
+                .ok()
+                .and_then(|path| path.to_str())
+                .and_then(|path| crate::domain::tags::LibraryFile::new(path.to_owned()).ok())
+        })
+        .flat_map(|photo| {
+            comments
+                .for_photo(&photo)
+                .into_iter()
+                .map(|comment| comment.audio().clone())
+        })
+        .collect()
+}
 /// Names-only selection for the gallery header; all recordings of the year share one axis.
 pub fn gallery_audio<'a>(items: &'a [Media], group: &str) -> Option<&'a Media> {
-    let scope = playback_scope(group)?;
-    let month = group
-        .split(std::path::MAIN_SEPARATOR)
-        .nth(1)
-        .filter(|m| m.len() == 2 && m.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)));
-    items
-        .iter()
-        .filter(|media| media.is_audio() && scope.includes(media))
-        .min_by_key(|media| {
-            let date = crate::domain::capture_from_filename(media);
-            let matching =
-                month.is_none_or(|month| date.as_ref().is_some_and(|d| d.month() == month));
-            (
-                !matching,
-                date.map(|d| d.stamp().to_owned())
-                    .unwrap_or_else(|| "99999999_999999".into()),
-                media.path().to_owned(),
-            )
-        })
+    gallery_audio_filtered(items, Path::new(""), group, None)
 }
 /// A year/month selects all audio; an audio child keeps its category restriction.
 pub fn playback_scope(group: &str) -> Option<crate::domain::diary::AudioViewScope<'_>> {
@@ -1688,17 +1731,32 @@ pub fn gallery_year(group: &str) -> Option<&str> {
 pub struct GalleryAudio {
     members: std::collections::HashMap<PathBuf, (bool, Option<String>)>,
     key: Option<(PathBuf, String, usize)>,
+    visible_comment_audio: Option<std::collections::BTreeSet<crate::domain::tags::LibraryFile>>,
     timeline: Option<DiaryTimeline>,
     selected: Option<PathBuf>,
     prepared_version: Option<(u64, u64)>,
 }
 impl GalleryAudio {
     pub fn ensure(&mut self, items: &[Media], root: &Path, group: &str) -> bool {
+        self.ensure_filtered(items, root, group, None)
+    }
+    pub fn ensure_filtered(
+        &mut self,
+        items: &[Media],
+        root: &Path,
+        group: &str,
+        visible_comment_audio: Option<
+            &std::collections::BTreeSet<crate::domain::tags::LibraryFile>,
+        >,
+    ) -> bool {
         let key = (root.to_owned(), group.to_owned(), items.len());
-        if self.key.as_ref() == Some(&key) {
+        if self.key.as_ref() == Some(&key)
+            && self.visible_comment_audio.as_ref() == visible_comment_audio
+        {
             return false;
         }
         self.key = Some(key);
+        self.visible_comment_audio = visible_comment_audio.cloned();
         self.prepared_version = None;
         self.members.clear();
         self.timeline = None;
@@ -1706,10 +1764,27 @@ impl GalleryAudio {
         let Some(scope) = playback_scope(group) else {
             return true;
         };
-        self.selected = gallery_audio(items, group).map(|m| m.path().to_owned());
+        self.selected = gallery_audio_filtered(items, root, group, visible_comment_audio)
+            .map(|m| m.path().to_owned());
         let clips = items
             .iter()
-            .filter(|m| m.is_audio() && scope.includes(m))
+            .filter(|m| {
+                m.is_audio()
+                    && scope.includes(m)
+                    && (visible_comment_audio.is_none()
+                        || crate::domain::diary::audio_kind(m)
+                            != Some(crate::domain::diary::AudioKind::Comments)
+                        || m.path()
+                            .strip_prefix(root)
+                            .ok()
+                            .and_then(|path| path.to_str())
+                            .and_then(|path| {
+                                crate::domain::tags::LibraryFile::new(path.to_owned()).ok()
+                            })
+                            .is_some_and(|path| {
+                                visible_comment_audio.is_some_and(|visible| visible.contains(&path))
+                            }))
+            })
             .map(|media| {
                 self.members.insert(
                     media.path().to_owned(),
@@ -1777,9 +1852,112 @@ impl GalleryAudio {
     }
 }
 
+fn gallery_audio_filtered<'a>(
+    items: &'a [Media],
+    root: &Path,
+    group: &str,
+    visible_comment_audio: Option<&std::collections::BTreeSet<crate::domain::tags::LibraryFile>>,
+) -> Option<&'a Media> {
+    let scope = playback_scope(group)?;
+    let month = group
+        .split(std::path::MAIN_SEPARATOR)
+        .nth(1)
+        .filter(|m| m.len() == 2 && m.parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)));
+    items
+        .iter()
+        .filter(|media| {
+            media.is_audio()
+                && scope.includes(media)
+                && (visible_comment_audio.is_none()
+                    || crate::domain::diary::audio_kind(media)
+                        != Some(crate::domain::diary::AudioKind::Comments)
+                    || media
+                        .path()
+                        .strip_prefix(root)
+                        .ok()
+                        .and_then(|path| path.to_str())
+                        .and_then(|path| {
+                            crate::domain::tags::LibraryFile::new(path.to_owned()).ok()
+                        })
+                        .is_some_and(|path| {
+                            visible_comment_audio.is_some_and(|visible| visible.contains(&path))
+                        }))
+        })
+        .min_by_key(|media| {
+            let date = crate::domain::capture_from_filename(media);
+            let matching =
+                month.is_none_or(|month| date.as_ref().is_some_and(|date| date.month() == month));
+            (
+                !matching,
+                date.map(|date| date.stamp().to_owned())
+                    .unwrap_or_else(|| "99999999_999999".into()),
+                media.path().to_owned(),
+            )
+        })
+}
+
 #[cfg(test)]
 mod gallery_tests {
     use super::*;
+    #[test]
+    fn gallery_projection_keeps_diary_and_limits_comments_to_visible_photos() {
+        use crate::domain::{comments::Comment, tags::LibraryFile};
+
+        let root = Path::new("/library");
+        let photo_a = Media::from_path(root.join("2023/06/first.jpg"), "2023/06".into()).unwrap();
+        let photo_b = Media::from_path(root.join("2023/07/second.jpg"), "2023/07".into()).unwrap();
+        let diary = Media::from_audio_asset(
+            root.join("2023/audio/diary/aud_20230602_120000.m4a"),
+            "2023/audio/diary".into(),
+        )
+        .unwrap();
+        let mut comments = crate::domain::comments::CommentCatalog::default();
+        let comment_for = |id: &str, photo: &str, file: &str| {
+            Comment::new(
+                id.to_owned(),
+                LibraryFile::new(file.to_owned()).unwrap(),
+                LibraryFile::new(photo.to_owned()).unwrap(),
+            )
+            .unwrap()
+        };
+        let first_comment = comment_for(
+            "12345678-1234-1234-1234-123456789abc",
+            "2023/06/first.jpg",
+            "2023/audio/comments/com_20230603_120000.m4a",
+        );
+        let second_comment = comment_for(
+            "12345678-1234-1234-1234-123456789abd",
+            "2023/07/second.jpg",
+            "2023/audio/comments/com_20230703_120000.m4a",
+        );
+        comments.insert(first_comment.clone()).unwrap();
+        comments.insert(second_comment.clone()).unwrap();
+        let comment_media = |comment: &Comment| {
+            Media::from_audio_asset(
+                root.join(comment.audio().as_str()),
+                "2023/audio/comments".into(),
+            )
+            .unwrap()
+            .with_comment_recording(Some(comment))
+        };
+        let first_audio = comment_media(&first_comment);
+        let second_audio = comment_media(&second_comment);
+        let items = vec![diary.clone(), first_audio.clone(), second_audio.clone()];
+
+        let projected =
+            gallery_items_for_photos(&items, root, std::slice::from_ref(&photo_a), &comments);
+        let paths: std::collections::BTreeSet<_> = projected
+            .iter()
+            .map(|media| media.path().to_owned())
+            .collect();
+
+        assert!(paths.contains(diary.path()));
+        assert!(paths.contains(first_audio.path()));
+        assert!(!paths.contains(second_audio.path()));
+        assert!(paths.contains(photo_a.path()));
+        assert!(!paths.contains(photo_b.path()));
+    }
+
     #[test]
     fn monthly_scope_includes_only_its_month_and_ignores_other_years() {
         let items: Vec<_> = [

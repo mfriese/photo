@@ -1,10 +1,11 @@
 #include "photosuite.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 // Owned malloc buffer; Rust always releases it with photosuite_free.
-int photosuite_video_frame(const char *path, double seconds, double *actualSeconds, unsigned char **bytes, size_t *length) {
+int photosuite_video_frame(const char *path, double seconds, double *actualSeconds, unsigned char **bytes, size_t *length, char *errorMessage, size_t errorCapacity) {
     @autoreleasepool {
         *bytes = NULL; *length = 0;
         NSString *name = [[NSFileManager defaultManager] stringWithFileSystemRepresentation:path length:strlen(path)];
@@ -18,13 +19,22 @@ int photosuite_video_frame(const char *path, double seconds, double *actualSecon
         CMTime actualTime = kCMTimeInvalid;
         CGImageRef image = [generator copyCGImageAtTime:CMTimeMakeWithSeconds(seconds, 60000) actualTime:&actualTime error:&error];
         *actualSeconds = CMTimeGetSeconds(actualTime);
-        if (!image) return 1;
+        if (!image) {
+            snprintf(errorMessage,errorCapacity,"%s",error.localizedDescription.UTF8String ?: "AVFoundation konnte keinen Frame decodieren");
+            return 1;
+        }
         NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithCGImage:image];
         CGImageRelease(image);
         NSData *data = [bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-        if (!data || data.length == 0) return 2;
+        if (!data || data.length == 0) {
+            snprintf(errorMessage,errorCapacity,"Videoframe konnte nicht in PNG umgewandelt werden");
+            return 2;
+        }
         *bytes = malloc(data.length);
-        if (!*bytes) return 3;
+        if (!*bytes) {
+            snprintf(errorMessage,errorCapacity,"Nicht genug Speicher für Videoframe");
+            return 3;
+        }
         memcpy(*bytes, data.bytes, data.length); *length = data.length;
         return 0;
     }
